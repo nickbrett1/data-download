@@ -17,7 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "ruff>=0.4"
+    "ruff>=0.4",
+    # starlette's TestClient raises at import without it (starlette >= 1.10)
+    "httpx2>=2.16"
 ]
 
 [build-system]
