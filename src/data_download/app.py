@@ -18,7 +18,8 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import auth, errors
@@ -30,6 +31,7 @@ from .registry import Registry, load_registry
 log = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).with_name("templates")
+STATIC_DIR = Path(__file__).with_name("static")
 VIEW_NAMES = ("v_pending", "v_done", "v_stuck", "v_blocked")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -342,6 +344,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "generated_at": utcnow(),
                 "db_path": settings.db_path,
             },
+        )
+
+    # -- static & home-screen icons (public, no auth required) -------------
+
+    if STATIC_DIR.is_dir():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> FileResponse:
+        return FileResponse(STATIC_DIR / "favicon-32.png", media_type="image/png")
+
+    @app.get("/apple-touch-icon.png", include_in_schema=False)
+    @app.get("/apple-touch-icon-precomposed.png", include_in_schema=False)
+    async def apple_touch_icon() -> FileResponse:
+        return FileResponse(STATIC_DIR / "apple-touch-icon.png", media_type="image/png")
+
+    @app.get("/site.webmanifest", include_in_schema=False)
+    async def webmanifest() -> FileResponse:
+        return FileResponse(
+            STATIC_DIR / "site.webmanifest",
+            media_type="application/manifest+json",
         )
 
     return app

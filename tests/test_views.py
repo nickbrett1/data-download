@@ -184,3 +184,29 @@ def test_dashboard_requires_read_scope(client):
 
 def test_dashboard_is_get_only(client):
     assert client.post("/", headers=auth()).status_code == 405
+
+
+def test_icons_and_manifest_are_publicly_accessible(client):
+    """Browsers fetch icons without auth headers; these must return 200."""
+    for path in (
+        "/favicon.ico",
+        "/apple-touch-icon.png",
+        "/apple-touch-icon-precomposed.png",
+        "/site.webmanifest",
+        "/static/apple-touch-icon.png",
+        "/static/favicon.svg",
+        "/static/icon-192.png",
+        "/static/icon-512.png",
+    ):
+        res = client.get(path)
+        assert res.status_code == 200, f"{path} returned {res.status_code}"
+        assert len(res.content) > 0
+
+
+def test_dashboard_links_apple_touch_icon_and_manifest(client):
+    res = client.get("/?token=tok-read")
+    assert res.status_code == 200
+    assert 'rel="apple-touch-icon"' in res.text
+    assert 'apple-mobile-web-app-capable' in res.text
+    assert 'apple-mobile-web-app-title' in res.text
+    assert 'rel="manifest"' in res.text
