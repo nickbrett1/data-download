@@ -1,0 +1,82 @@
+# The one plan type phase 1 ships, and deliberately the honest one: the shape
+# that actually ran (all 13 G under /srv/datasets/databento carries batch
+# receipts with `customizations: {split_duration: day}`).
+#
+# This file is a phase-1 vocabulary commitment. Phase 2 reconciles the registry
+# against §3's closed step vocabulary (quote, resolve, submit, poll, download,
+# convert, verify) and settles §13 Q1 (symbology variants). Until then this
+# describes parameters only: no steps, no vendor calls, no symbology rules.
+name: databento_batch_download
+version: 1
+description: >-
+  A Databento batch job (batch.submit), split per day, downloaded with its
+  manifest, metadata and condition receipts.
+
+params_schema:
+  type: object
+  additionalProperties: false
+  required: [dataset, schema, symbols, stype_in, start, end]
+  properties:
+    dataset:
+      type: string
+      minLength: 1
+      pattern: "^[A-Z0-9][A-Z0-9._-]*$"
+      description: Vendor dataset code, e.g. GLBX.MDP3, EQUS.MINI, XNAS.ITCH.
+    schema:
+      type: string
+      minLength: 1
+      pattern: "^[a-z0-9][a-z0-9-]*$"
+      description: >-
+        Databento schema code, e.g. mbo, mbp-1, mbp-10, tbbo, trades,
+        ohlcv-1s. Not enumerated here on purpose: the legal set is the
+        vendor's, and §13 Q1 is still open.
+    symbols:
+      type: array
+      minItems: 1
+      items:
+        type: string
+        minLength: 1
+      description: >-
+        Symbol list, interpreted by stype_in. ALL_SYMBOLS requires
+        stype_in=raw_symbol (§11.1).
+    stype_in:
+      type: string
+      enum: [raw_symbol, parent, continuous, instrument_id]
+      description: >-
+        How `symbols` is read. Futures series use continuous with ES.c.0;
+        the parent ES means every expiry and prices orders of magnitude more.
+    start:
+      type: string
+      pattern: "^\\d{4}-\\d{2}-\\d{2}([T ]\\d{2}:\\d{2}(:\\d{2})?(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?)?$"
+      description: Absolute window start (ISO-8601). No open-ended windows.
+    end:
+      type: string
+      pattern: "^\\d{4}-\\d{2}-\\d{2}([T ]\\d{2}:\\d{2}(:\\d{2})?(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?)?$"
+      description: Absolute window end, exclusive (ISO-8601).
+    split_duration:
+      type: string
+      enum: [day]
+      default: day
+      description: Per-day splits — the convention the store already holds.
+    encoding:
+      type: string
+      enum: [dbn, csv, json]
+      default: dbn
+    compression:
+      type: string
+      enum: [zstd, none]
+      default: zstd
+
+verify:
+  required: true
+  on_failure: [commit_marked, quarantine]
+  meaning: >-
+    Compare the artifact against the vendor's own manifest: per-file sha256 and
+    row counts. A shortfall (the manifest agrees the data was never published)
+    may commit as landed_with_errors; a contradiction (the manifest claims what
+    the file lacks) or a broken verifier quarantines instead.
+
+resume: >-
+  job_id is the anchor. Record it before downloading: a completed batch job can
+  be refetched by id without paying again, whereas a streamed get_range has no
+  such handle.

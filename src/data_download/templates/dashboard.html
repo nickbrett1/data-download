@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>data-download — requests</title>
+  <style>
+    :root { color-scheme: light dark; --line:#8884; --muted:#888; --accent:#3b7ddd; }
+    * { box-sizing: border-box; }
+    body { font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+           margin: 0; padding: 2rem clamp(1rem, 4vw, 3rem); }
+    h1 { font-size: 1.35rem; margin: 0 0 .25rem; }
+    h2 { font-size: 1.05rem; margin: 0 0 .35rem; }
+    .sub, .note { color: var(--muted); font-size: .85rem; margin: 0 0 1rem; }
+    .grid { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(30rem, 1fr)); }
+    section { border: 1px solid var(--line); border-radius: .6rem; padding: 1rem 1.1rem; }
+    section.empty { opacity: .72; }
+    table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+    th { text-align: left; font-weight: 600; color: var(--muted); padding: .3rem .4rem;
+         border-bottom: 1px solid var(--line); }
+    td { padding: .3rem .4rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    tr:last-child td { border-bottom: 0; }
+    code { font-size: .8rem; }
+    .tag { display: inline-block; padding: 0 .4rem; border-radius: .3rem;
+           background: #8882; font-size: .75rem; }
+    .ok { color: #2f9e44; } .bad { color: #e03131; } .wait { color: var(--accent); }
+    .empty-msg { color: var(--muted); font-style: italic; margin: .25rem 0 0; }
+    footer { margin-top: 2rem; color: var(--muted); font-size: .78rem; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <h1>data-download</h1>
+  <p class="sub">
+    Read-only view of the request book. No approve button, no mutation — approval is a CLI verb.
+    Phase 1: nothing advances past <code>draft</code> or <code>blocked</code>.
+  </p>
+
+  {# v_stuck is exactly four breakage conditions, and nothing else:
+     1. approved_unclaimed — approved past the claim window, nobody picked it up
+     2. lease_expired      — claimant died mid-run
+     3. running_too_long   — valid lease, no progress for over 6h
+     4. repeat_failure     — one payload_hash has failed three times or more
+     `blocked` is NOT a stuck condition; it has its own view below. #}
+
+  <div class="grid">
+    <section class="{{ 'empty' if not views.v_pending else '' }}">
+      <h2><span class="wait">●</span> Waiting on me <span class="note">(v_pending)</span></h2>
+      <p class="note">Draft requests to be approved, and approved ones nobody has claimed.</p>
+      {% if views.v_pending %}
+      <table>
+        <thead><tr><th>request</th><th>state</th><th>type</th><th>estimate</th><th>age</th></tr></thead>
+        <tbody>
+        {% for r in views.v_pending %}
+          <tr>
+            <td><code>{{ r.id }}</code></td>
+            <td>{{ r.state }}{% if r.approved_unclaimed %} <span class="tag">unclaimed</span>{% endif %}</td>
+            <td>{{ r.plan_type or '—' }}</td>
+            <td>{{ '%.4f'|format(r.estimate_usd) if r.estimate_usd is not none else '—' }}</td>
+            <td>{{ r.age_seconds|age }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p class="empty-msg">Nothing is waiting.</p>{% endif %}
+    </section>
+
+    <section class="{{ 'empty' if not views.v_done else '' }}">
+      <h2><span class="ok">✔</span> Finished <span class="note">(v_done)</span></h2>
+      <p class="note">Terminal states. <span class="bad">errors</span> means landed but incomplete — read its <code>errors[]</code>.</p>
+      {% if views.v_done %}
+      <table>
+        <thead><tr><th>request</th><th>state</th><th>type</th><th>origin</th><th>finished</th></tr></thead>
+        <tbody>
+        {% for r in views.v_done %}
+          <tr>
+            <td><code>{{ r.id }}</code></td>
+            <td>{{ r.state }}{% if r.had_errors %} <span class="tag bad">errors</span>{% endif %}</td>
+            <td>{{ r.plan_type or '—' }}</td>
+            <td>{{ r.plan_origin or '—' }}</td>
+            <td>{{ r.updated_at }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p class="empty-msg">Nothing has finished yet.</p>{% endif %}
+    </section>
+
+    <section class="{{ 'empty' if not views.v_stuck else '' }}">
+      <h2><span class="bad">✖</span> Broken <span class="note">(v_stuck — four conditions only)</span></h2>
+      <p class="note">Every row here means a component is broken. Waiting on a plan is not here.</p>
+      {% if views.v_stuck %}
+      <table>
+        <thead><tr><th>request</th><th>condition</th><th>state</th><th>age</th><th>what it means</th></tr></thead>
+        <tbody>
+        {% for r in views.v_stuck %}
+          <tr>
+            <td><code>{{ r.request_id }}</code></td>
+            <td><span class="tag bad">{{ r.condition }}</span></td>
+            <td>{{ r.state }}</td>
+            <td>{{ r.age_seconds|age }}</td>
+            <td>{{ r.detail }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p class="empty-msg">Nothing is broken.</p>{% endif %}
+    </section>
+
+    <section class="{{ 'empty' if not views.v_blocked else '' }}">
+      <h2>⏸ Waiting for a plan <span class="note">(v_blocked)</span></h2>
+      <p class="note">Not breakage — a merge may clear these. Oldest first.</p>
+      {% if views.v_blocked %}
+      <table>
+        <thead><tr><th>request</th><th>reason</th><th>max usd</th><th>age</th><th>a merge can clear</th></tr></thead>
+        <tbody>
+        {% for r in views.v_blocked %}
+          <tr>
+            <td><code>{{ r.id }}</code></td>
+            <td>{{ r.blocked_reason }}</td>
+            <td>{{ r.max_usd if r.max_usd is not none else '—' }}</td>
+            <td>{{ r.age_seconds|age }}</td>
+            <td>{{ 'yes' if r.merge_can_clear else 'no — needs a human' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p class="empty-msg">Nothing is waiting on a plan.</p>{% endif %}
+    </section>
+  </div>
+
+  <footer>
+    <p>
+      Plan types may be filed:
+      {% for t in registry %}<code>{{ t.name }}</code> v{{ t.version }}{% if not loop.last %}, {% endif %}{% else %}none registered{% endfor %}.
+      Schemas come from <code>GET /v1/plan-types</code>.
+    </p>
+    <p>generated {{ generated_at }} · store <code>{{ db_path }}</code> · read-only, no authority</p>
+  </footer>
+</body>
+</html>

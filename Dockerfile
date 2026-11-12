@@ -34,4 +34,4 @@ COPY . .
 EXPOSE 8820
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s CMD curl -fsS http://127.0.0.1:8820/healthz || exit 1
-CMD ["python","-m","data_download","--transport","streamable-http","--host","0.0.0.0","--port","8820"]
+CMD ["python","-m","data_download","--host","0.0.0.0","--port","8820"]
