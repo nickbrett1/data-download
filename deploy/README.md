@@ -4,6 +4,12 @@
 
 # network mode=bridge, watchtower=false, homepage=true)
 
+# NOTE: watchtower was generated off, then switched on for the host on
+
+# 2026-11-12 via the scope=nick label — see §3. Re-running genproj will not
+
+# restore that; it is a host-side label.
+
 ## 1. Build & publish the image
 
 The repository's Buildkite pipeline (`.buildkite/pipeline.yml`) contains a
@@ -66,13 +72,27 @@ For non-Synology hosts: `docker compose up -d`.
 
 ## 3. Auto-updates with Watchtower (poll model)
 
-Watchtower on the NAS polls the registry and recreates the container when the
-image digest changes — no inbound ports from CI are required.
+Watchtower polls the registry and recreates the container when the image digest
+changes — no inbound ports from CI are required.
 
-- This project opts in via the `com.centurylinklabs.watchtower.enable=true` label
-  (included when `watchtower` is enabled).
-- **Public packages**: no credentials needed on the NAS.
-- **Private packages**: `docker login ghcr.io` on the NAS host once
+**Status: enabled** (owner decision, 2026-11-12; this reverses an earlier
+deliberate exclusion that was in place while the service was read-only).
+
+- On `ryzen`, the container joins `watchtower-nick` via
+  `com.centurylinklabs.watchtower.scope=nick`. That instance runs with
+  `WATCHTOWER_SCOPE=nick`, a 60 s poll, and `WATCHTOWER_CLEANUP=true`, and it
+  only considers containers carrying the same scope label — so the label is the
+  whole opt-in, and the `...watchtower.enable=true` form is not used here.
+- **Consequence, accepted:** a green build on `main` reaches the host
+  unattended within about a minute of the image changing. Tests and the linter
+  gate that, not a human.
+- Watchtower recreates the container from its existing config, so the
+  `homepage.*` labels, the mem limits and the `/srv/appdata/data-download`
+  volume all survive a roll.
+- Reconsider this before any phase that gives the service spending authority:
+  unattended roll-forward and unattended money are different risk classes.
+- **Public packages**: no credentials needed on the host.
+- **Private packages**: `docker login ghcr.io` on the host once
   (Watchtower uses the Docker daemon's credentials).
 
 ## 4. Rolling back a bad update
