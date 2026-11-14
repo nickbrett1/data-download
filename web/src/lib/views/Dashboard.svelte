@@ -116,11 +116,6 @@
     request: approval is a CLI verb with a scope this page cannot reach.
   </p>
 
-  <p class="notice accent">
-    Phase 1: nothing advances past <code>draft</code> or <code>blocked</code>.
-    Waiting on a plan is not breakage.
-  </p>
-
   {#if failure}
     <EmptyState cause="error" customMessage={failure} />
   {:else if !data}

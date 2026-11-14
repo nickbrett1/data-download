@@ -190,6 +190,20 @@ test.describe("the request book", () => {
     await expect(page.locator(".topbar")).toContainText("the request book");
   });
 
+  test("the page states no phase policy", async ({ page }) => {
+    // "Phase 1: nothing advances past draft or blocked. Waiting on a plan is
+    // not breakage." was a notice above the list. It explained the badge
+    // vocabulary rather than the data, and the badge already says "Waiting on a
+    // plan" on the row itself - so it was a paragraph of glossary on a page
+    // whose whole job is to be read at a glance.
+    await mock(page);
+    await page.goto("/");
+    await expect(page.locator(".tbl-row")).toHaveCount(5);
+    const body = await page.locator("body").innerText();
+    expect(body).not.toContain("Phase 1");
+    expect(body).not.toContain("not breakage");
+  });
+
   test("no console errors", async ({ page }) => {
     const errors = [];
     page.on(
