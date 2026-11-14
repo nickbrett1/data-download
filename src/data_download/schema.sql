@@ -176,3 +176,40 @@ SELECT id,
   FROM requests
  WHERE state = 'blocked'
  ORDER BY created_at ASC;
+
+-- One row per request, for the dashboard's single list.
+--
+-- The four views above answer four different questions, which is why they are
+-- shaped differently and cannot be UNIONed into one answer. But a reader
+-- landing on the page wants one list, not four, so this view is the union of
+-- *subjects* (every request) with the condition that makes it interesting
+-- attached as an attribute rather than used as a partition.
+--
+-- `stuck_condition` is MIN(condition) because the four conditions are mutually
+-- exclusive by state today (approved / running / running / failed); the GROUP
+-- BY is there so a future overlap cannot duplicate a row in the list.
+CREATE VIEW IF NOT EXISTS v_requests AS
+SELECT r.id,
+       r.rowid AS seq,
+       r.state,
+       r.plan_type,
+       r.plan_origin,
+       r.estimate_usd,
+       r.created_at,
+       r.updated_at,
+       r.blocked_reason,
+       CAST((julianday('now') - julianday(r.created_at)) * 86400 AS INTEGER) AS age_seconds,
+       CASE WHEN r.state = 'approved' THEN 1 ELSE 0 END AS approved_unclaimed,
+       CASE WHEN r.state = 'landed_with_errors' THEN 1 ELSE 0 END AS had_errors,
+       json_extract(r.intent_json, '$.max_usd') AS max_usd,
+       CASE WHEN r.blocked_reason = 'awaiting_plan' THEN 1 ELSE 0 END AS merge_can_clear,
+       s.condition AS stuck_condition,
+       s.detail AS stuck_detail
+  FROM requests r
+  LEFT JOIN (
+        SELECT request_id,
+               MIN(condition) AS condition,
+               MIN(detail) AS detail
+          FROM v_stuck
+         GROUP BY request_id
+       ) s ON s.request_id = r.id;

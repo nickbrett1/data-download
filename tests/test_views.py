@@ -163,17 +163,71 @@ def test_repeat_failure_does_not_fire_at_two(client, db_path):
     assert read_view(db_path, "v_stuck") == []
 
 
-def test_dashboard_renders_four_views_with_seeded_rows(client, db_path):
-    _seed_all(db_path)
+def test_dashboard_is_one_list_with_a_badge_per_row(client, db_path):
+    """Every request appears exactly once, whatever its state.
 
-    response = client.get("/?token=tok-read")
-    assert response.status_code == 200
-    html = response.text
-    for heading in ("v_pending", "v_done", "v_stuck", "v_blocked"):
-        assert heading in html
+    The page used to be four sections; it is now one list where the reason a
+    row matters is a badge. The four SQL views remain the semantic truth and
+    are asserted separately above - what this pins is that flattening them did
+    not drop a row on the floor.
+    """
+    _seed_all(db_path)
+    html = client.get("/?token=tok-read").text
+
+    for request_id in (
+        "seed_approved",
+        "seed_lease",
+        "seed_hung",
+        "seed_short",
+        "seed_draft",
+        "seed_blocked",
+    ):
+        assert request_id in html, f"{request_id} missing from the list"
+
+    # All four breakage conditions are labelled inline, not sectioned.
     for condition in ("approved_unclaimed", "lease_expired", "running_too_long", "repeat_failure"):
         assert condition in html
-    assert "seed_blocked" in html
+
+    # The blocked row says what it is waiting for, and that it is not breakage.
+    assert "Waiting on a plan" in html
+    assert "awaiting_plan" in html
+
+    # No four-section headings survive.
+    for gone in ("v_pending", "v_done", "v_stuck", "v_blocked"):
+        assert gone not in html
+
+
+def test_dashboard_filters_narrow_the_same_list(client, db_path):
+    _seed_all(db_path)
+    broken = client.get("/?token=tok-read&show=broken").text
+    assert "seed_lease" in broken
+    # An approved-but-unclaimed row is broken, not "to approve": breakage wins
+    # the badge, or it would read as work waiting on a human.
+    assert "seed_approved" in broken
+    assert "seed_blocked" not in broken
+    assert "seed_draft" not in broken
+
+    waiting = client.get("/?token=tok-read&show=waiting").text
+    assert "seed_blocked" in waiting
+    assert "seed_lease" not in waiting
+
+    todo = client.get("/?token=tok-read&show=todo").text
+    assert "seed_draft" in todo
+    assert "seed_approved" not in todo
+    assert "seed_short" not in todo
+
+
+def test_dashboard_unknown_filter_falls_back_to_all(client, db_path):
+    _seed_all(db_path)
+    html = client.get("/?token=tok-read&show=nonsense").text
+    assert "seed_draft" in html and "seed_blocked" in html
+
+
+def test_dashboard_filter_links_carry_the_token(client, db_path):
+    """A plain navigation cannot set an Authorization header."""
+    _seed_all(db_path)
+    html = client.get("/?token=tok-read").text
+    assert "show=broken&amp;token=tok-read" in html or "show=broken&token=tok-read" in html
 
 
 def test_dashboard_requires_read_scope(client):

@@ -121,12 +121,48 @@
       max-width: 60ch;
     }
 
-    .grid {
-      display: grid;
-      gap: 14px;
-      grid-template-columns: repeat(auto-fit, minmax(30rem, 1fr));
-      align-items: start;
+    /* ---------- filter strip (counts are the navigation) ---------- */
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0 0 12px;
     }
+
+    .filter {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      padding: 3px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-pill);
+      background: var(--bg-sunken);
+      color: var(--ink-muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .filter:hover {
+      background: var(--bg-hover);
+      color: var(--ink-dim);
+      text-decoration: none;
+    }
+
+    .filter .n {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    .filter.is-on {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .filter.is-on .n { color: var(--accent); }
+    .filter.is-zero { opacity: 0.55; }
 
     /* ---------- primitives ---------- */
     .micro, .section-title {
@@ -177,34 +213,6 @@
       min-width: 0;
     }
 
-    .card.empty { opacity: 0.78; }
-
-    .card-head {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-bottom: 2px;
-    }
-
-    .card-head h2 {
-      margin: 0;
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: -0.005em;
-      color: var(--ink);
-    }
-
-    .card-head .pill { margin-left: auto; }
-
-    .card-hint {
-      margin: 0 0 10px;
-      color: var(--ink-muted);
-      font-size: 12px;
-    }
-
-    .card-hint code { color: var(--mark); font-size: 11px; }
-
     /* ---------- rows (no tables: stratechery has none) ---------- */
     .rows {
       display: grid;
@@ -246,10 +254,10 @@
     .row .cell.detail { white-space: normal; color: var(--ink-muted); font-size: 12px; }
     .row.head .cell { color: var(--ink-faint); }
 
-    .rows-pending { --cols: minmax(9rem, 1.6fr) 6.5rem minmax(7rem, 1fr) 5.5rem 4.5rem; }
-    .rows-done    { --cols: minmax(9rem, 1.6fr) 6.5rem minmax(7rem, 1fr) 5rem 9rem; }
-    .rows-stuck   { --cols: minmax(9rem, 1.5fr) 8.5rem 5.5rem 4.5rem minmax(9rem, 1.5fr); }
-    .rows-blocked { --cols: minmax(9rem, 1.5fr) 7.5rem 5rem 4.5rem minmax(7rem, 1fr); }
+    .rows-all { --cols: minmax(9rem, 1.3fr) 7.5rem minmax(7rem, 1fr) 5.5rem 4.5rem minmax(10rem, 1.7fr); }
+
+    .row .cell.why { color: var(--ink-muted); }
+    .quiet { color: var(--ink-faint); }
 
     .empty-msg {
       margin: 8px 0 0;
@@ -295,145 +303,94 @@
   <main>
     <p class="lede">The request book</p>
     <p class="sub-lede">
-      Four views of every download request. No approve button, no mutation &mdash;
-      approval is a CLI verb with an <code>approve</code> scope this page cannot reach.
+      Every download request in one list, newest first. The badge on the right says
+      why a row is worth looking at &mdash; nothing else.
     </p>
 
     <div class="notice accent">
       Phase 1: nothing advances past <code>draft</code> or <code>blocked</code>.
-      A blocked intent is waiting on a plan, not broken.
+      Waiting on a plan is not breakage.
     </div>
 
-    {# v_stuck is exactly four breakage conditions, and nothing else:
-       1. approved_unclaimed — approved past the claim window, nobody picked it up
-       2. lease_expired      — claimant died mid-run
-       3. running_too_long   — valid lease, no progress for over 6h
-       4. repeat_failure     — one plan_hash has failed three times or more
-       `blocked` is NOT a stuck condition; it has its own view below. #}
+    {# Why one list rather than four sections: the four SQL views answer four
+       different questions, but a reader arrives with one ("what is going on?").
+       So the views stay as the semantic truth and the page flattens them into a
+       list, where the interesting condition is a badge instead of a partition.
+
+       v_stuck is exactly four breakage conditions, and nothing else:
+       1. approved_unclaimed - approved past the claim window, nobody picked it up
+       2. lease_expired      - claimant died mid-run
+       3. running_too_long   - valid lease, no progress for over 6h
+       4. repeat_failure     - one plan_hash has failed three times or more
+       `blocked` is NOT a stuck condition. #}
     {% macro state_pill(state) -%}
       {%- set tone = {'draft': '', 'approved': 'info', 'running': 'info',
                       'succeeded': 'ok', 'landed_with_errors': 'warn',
-                      'failed': 'bad', 'blocked': 'warn', 'cancelled': ''} -%}
+                      'failed': 'bad', 'blocked': 'warn'} -%}
       <span class="pill{{ (' ' ~ tone[state]) if tone.get(state) else '' }}">{{ state }}</span>
     {%- endmacro %}
+    {% macro filter_href(key) -%}?{% if key != 'all' %}show={{ key }}&{% endif %}{% if query_token %}token={{ query_token }}{% endif %}{%- endmacro %}
 
-    <div class="grid">
-      <section class="card{{ ' empty' if not views.v_pending else '' }}">
-        <div class="card-head">
-          <h2>Waiting on me</h2>
-          <span class="micro">v_pending</span>
-          <span class="pill">{{ views.v_pending|length }}</span>
-        </div>
-        <p class="card-hint">Draft requests to be approved, and approved ones nobody has claimed.</p>
-        {% if views.v_pending %}
-        <div class="rows rows-pending">
-          <div class="row head">
-            <span class="cell micro">request</span>
-            <span class="cell micro">state</span>
-            <span class="cell micro">type</span>
-            <span class="cell micro num">estimate</span>
-            <span class="cell micro num">age</span>
-          </div>
-          {% for r in views.v_pending %}
-          <div class="row">
-            <span class="cell id"><code title="{{ r.id }}">{{ r.id }}</code></span>
-            <span class="cell">{{ state_pill(r.state) }}{% if r.approved_unclaimed %} <span class="pill warn">unclaimed</span>{% endif %}</span>
-            <span class="cell">{{ r.plan_type or '—' }}</span>
-            <span class="cell num">{{ '$%.4f'|format(r.estimate_usd) if r.estimate_usd is not none else '—' }}</span>
-            <span class="cell num">{{ r.age_seconds|age }}</span>
-          </div>
-          {% endfor %}
-        </div>
-        {% else %}<p class="empty-msg">Nothing is waiting.</p>{% endif %}
-      </section>
+    <nav class="filters" aria-label="Filter requests">
+      <a class="filter{{ ' is-on' if showing == 'all' else '' }}" href="{{ filter_href('all') }}">
+        <span class="n">{{ total }}</span> All
+      </a>
+      {% for key in facet_order %}
+      {% set n = facets[key]|length %}
+      <a class="filter{{ ' is-on' if showing == key else '' }}{{ ' is-zero' if not n else '' }}"
+         href="{{ filter_href(key) }}">
+        <span class="n">{{ n }}</span> {{ facet_labels[key] }}
+      </a>
+      {% endfor %}
+      {% if facets.other %}
+      <a class="filter{{ ' is-on' if showing == 'other' else '' }}" href="{{ filter_href('other') }}">
+        <span class="n">{{ facets.other|length }}</span> Other
+      </a>
+      {% endif %}
+    </nav>
 
-      <section class="card{{ ' empty' if not views.v_done else '' }}">
-        <div class="card-head">
-          <h2>Finished</h2>
-          <span class="micro">v_done</span>
-          <span class="pill">{{ views.v_done|length }}</span>
+    <section class="card list">
+      {% if rows %}
+      <div class="rows rows-all">
+        <div class="row head">
+          <span class="cell micro">request</span>
+          <span class="cell micro">state</span>
+          <span class="cell micro">type</span>
+          <span class="cell micro num">estimate</span>
+          <span class="cell micro num">age</span>
+          <span class="cell micro">why it matters</span>
         </div>
-        <p class="card-hint">Terminal states. <span class="pill bad">errors</span> means landed but incomplete &mdash; read its <code>errors[]</code>.</p>
-        {% if views.v_done %}
-        <div class="rows rows-done">
-          <div class="row head">
-            <span class="cell micro">request</span>
-            <span class="cell micro">state</span>
-            <span class="cell micro">type</span>
-            <span class="cell micro">origin</span>
-            <span class="cell micro num">finished</span>
-          </div>
-          {% for r in views.v_done %}
-          <div class="row">
-            <span class="cell id"><code title="{{ r.id }}">{{ r.id }}</code></span>
-            <span class="cell">{{ state_pill(r.state) }}{% if r.had_errors %} <span class="pill bad">errors</span>{% endif %}</span>
-            <span class="cell">{{ r.plan_type or '—' }}</span>
-            <span class="cell">{{ r.plan_origin or '—' }}</span>
-            <span class="cell num mono">{{ r.updated_at }}</span>
-          </div>
-          {% endfor %}
+        {% for r in rows %}
+        <div class="row">
+          <span class="cell id"><code title="{{ r.id }}">{{ r.id }}</code></span>
+          <span class="cell">
+            {{ state_pill(r.state) }}
+          </span>
+          <span class="cell">{{ r.plan_type or '—' }}</span>
+          <span class="cell num">{{ '$%.4f'|format(r.estimate_usd) if r.estimate_usd is not none else '—' }}</span>
+          <span class="cell num">{{ r.age_seconds|age }}</span>
+          <span class="cell why">
+            {%- if r.facet == 'broken' -%}
+              <span class="pill bad" title="{{ r.stuck_detail }}">{{ r.stuck_condition }}</span>
+            {%- elif r.facet == 'waiting' -%}
+              <span class="pill warn">{{ r.blocked_reason }}{% if r.max_usd is not none %} · ${{ '%.0f'|format(r.max_usd) }}{% endif %}</span>
+            {%- elif r.facet == 'todo' -%}
+              <span class="pill info">{{ 'unclaimed' if r.approved_unclaimed else 'needs approval' }}</span>
+            {%- elif r.facet == 'done' and r.had_errors -%}
+              <span class="pill warn">landed with errors</span>
+            {%- else -%}
+              <span class="quiet">—</span>
+            {%- endif -%}
+          </span>
         </div>
-        {% else %}<p class="empty-msg">Nothing has finished yet.</p>{% endif %}
-      </section>
-
-      <section class="card{{ ' empty' if not views.v_stuck else '' }}">
-        <div class="card-head">
-          <h2>Broken</h2>
-          <span class="micro">v_stuck — four conditions only</span>
-          <span class="pill{{ ' bad' if views.v_stuck else '' }}">{{ views.v_stuck|length }}</span>
-        </div>
-        <p class="card-hint">Every row here means a component is broken. Waiting on a plan is not here.</p>
-        {% if views.v_stuck %}
-        <div class="rows rows-stuck">
-          <div class="row head">
-            <span class="cell micro">request</span>
-            <span class="cell micro">condition</span>
-            <span class="cell micro">state</span>
-            <span class="cell micro num">age</span>
-            <span class="cell micro">what it means</span>
-          </div>
-          {% for r in views.v_stuck %}
-          <div class="row">
-            <span class="cell id"><code title="{{ r.request_id }}">{{ r.request_id }}</code></span>
-            <span class="cell"><span class="pill bad">{{ r.condition }}</span></span>
-            <span class="cell">{{ state_pill(r.state) }}</span>
-            <span class="cell num">{{ r.age_seconds|age }}</span>
-            <span class="cell detail">{{ r.detail }}</span>
-          </div>
-          {% endfor %}
-        </div>
-        {% else %}<p class="empty-msg">Nothing is broken.</p>{% endif %}
-      </section>
-
-      <section class="card{{ ' empty' if not views.v_blocked else '' }}">
-        <div class="card-head">
-          <h2>Waiting for a plan</h2>
-          <span class="micro">v_blocked</span>
-          <span class="pill warn">{{ views.v_blocked|length }}</span>
-        </div>
-        <p class="card-hint">Not breakage &mdash; a merge may clear these. Oldest first.</p>
-        {% if views.v_blocked %}
-        <div class="rows rows-blocked">
-          <div class="row head">
-            <span class="cell micro">request</span>
-            <span class="cell micro">reason</span>
-            <span class="cell micro num">max usd</span>
-            <span class="cell micro num">age</span>
-            <span class="cell micro">a merge can clear</span>
-          </div>
-          {% for r in views.v_blocked %}
-          <div class="row">
-            <span class="cell id"><code title="{{ r.id }}">{{ r.id }}</code></span>
-            <span class="cell">{{ r.blocked_reason }}</span>
-            <span class="cell num">{{ '$%.2f'|format(r.max_usd) if r.max_usd is not none else '—' }}</span>
-            <span class="cell num">{{ r.age_seconds|age }}</span>
-            <span class="cell">{{ 'yes' if r.merge_can_clear else 'no — needs a human' }}</span>
-          </div>
-          {% endfor %}
-        </div>
-        {% else %}<p class="empty-msg">Nothing is waiting on a plan.</p>{% endif %}
-      </section>
-    </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty-msg">
+        {% if showing == 'all' %}No requests yet.{% else %}Nothing in this filter.{% endif %}
+      </p>
+      {% endif %}
+    </section>
 
     <div class="foot">
       <p>

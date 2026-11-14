@@ -34,6 +34,41 @@ TEMPLATES_DIR = Path(__file__).with_name("templates")
 STATIC_DIR = Path(__file__).with_name("static")
 VIEW_NAMES = ("v_pending", "v_done", "v_stuck", "v_blocked")
 
+# The dashboard is one list. These facets are how a row is *labelled*, not how
+# the page is laid out: a broken request and a finished one sit in the same
+# column, and the badge is what differs. Order is by what needs a human first.
+FACET_ORDER = ("broken", "waiting", "todo", "working", "done")
+FACET_LABELS = {
+    "broken": "Broken",
+    "waiting": "Waiting on a plan",
+    "todo": "To approve",
+    "working": "Running",
+    "done": "Finished",
+}
+TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
+
+
+def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
+    """Attach the one label that explains why this row is interesting.
+
+    Precedence matters and is deliberate: a stuck condition outranks the state
+    it is stuck in (`running` + `lease_expired` is *broken*, not *running*), and
+    `blocked` outranks nothing but is not breakage - it has its own label.
+    """
+    if row.get("stuck_condition"):
+        facet = "broken"
+    elif row.get("state") == "blocked":
+        facet = "waiting"
+    elif row.get("state") in ("draft", "approved"):
+        facet = "todo"
+    elif row.get("state") == "running":
+        facet = "working"
+    elif row.get("state") in TERMINAL_STATES:
+        facet = "done"
+    else:  # a state added later must still render, not vanish
+        facet = "other"
+    return {**row, "facet": facet, "facet_label": FACET_LABELS.get(facet, facet.title())}
+
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
@@ -334,12 +369,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # because a browser link cannot set an Authorization header.
         auth.require_scope(request, "read", allow_query_token=True)
         store = _store(request)
-        views = {name: await store.view(name) for name in VIEW_NAMES}
+
+        rows = [_with_facet(row) for row in await store.overview()]
+        keys = (*FACET_ORDER, "other")
+        facets = {key: [r for r in rows if r["facet"] == key] for key in keys}
+        wanted = request.query_params.get("show") or "all"
+        if wanted != "all" and wanted not in keys:
+            wanted = "all"
+        visible = rows if wanted == "all" else facets[wanted]
+
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
             context={
-                "views": views,
+                "rows": visible,
+                "total": len(rows),
+                "facets": facets,
+                "facet_labels": FACET_LABELS,
+                "facet_order": FACET_ORDER,
+                "showing": wanted,
+                # Preserved so filter links keep working when the page was
+                # opened with ?token=. A browser cannot set a header on a
+                # plain navigation.
+                "query_token": request.query_params.get("token") or "",
                 "registry": registry.all(),
                 "generated_at": utcnow(),
                 "db_path": settings.db_path,

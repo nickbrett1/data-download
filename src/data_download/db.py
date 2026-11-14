@@ -133,6 +133,20 @@ class Store:
         async with self.conn.execute(f"SELECT * FROM {name}") as cur:
             return [dict(r) for r in await cur.fetchall()]
 
+    async def overview(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """Every request once, newest first, with its attention flag attached.
+
+        The dashboard shows one list rather than four sections; this is that
+        list's source. `v_pending`/`v_done`/`v_stuck`/`v_blocked` remain the
+        semantic truth (each is still queried and tested on its own), they just
+        are not the page's layout any more.
+        """
+        async with self.conn.execute(
+            "SELECT * FROM v_requests ORDER BY created_at DESC, seq DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
     # -- write -------------------------------------------------------------
 
     async def insert_request(
