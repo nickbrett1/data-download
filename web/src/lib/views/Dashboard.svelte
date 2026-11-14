@@ -113,7 +113,6 @@
 <AppShell
   footer={false}
   title="data-download"
-  subtitle="the request book"
   nav={[
     { label: "Requests", href: withToken("/"), current: true },
     { label: "Plan types", href: withToken("/plan-types"), current: false },

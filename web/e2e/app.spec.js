@@ -185,9 +185,11 @@ test.describe("the request book", () => {
     await expect(
       page.locator('meta[name="apple-mobile-web-app-capable"]'),
     ).toHaveAttribute("content", "yes");
-    // and the wordmark is the page title, so a reader knows where they are
+    // The bar carries the product name and the tabs, and nothing else: the
+    // subtitle said "the request book" two lines above a heading that said the
+    // same thing. Where you are is the highlighted tab and the page title.
     await expect(page.locator(".topbar")).toContainText("data-download");
-    await expect(page.locator(".topbar")).toContainText("the request book");
+    await expect(page.locator(".topbar .titles .micro")).toHaveCount(0);
   });
 
   test("the intro says what the book is, not what it cannot do", async ({
