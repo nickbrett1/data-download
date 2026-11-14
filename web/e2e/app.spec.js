@@ -250,6 +250,64 @@ test.describe("plan types", () => {
     );
   });
 
+  // The Svelte port kept the header count and dropped the per-field marker, so
+  // the page said *how many* parameters were required but not *which*: a reader
+  // with three fields had to open the raw JSON to find out. The count is not a
+  // substitute for the tag, so both are asserted here.
+  async function expectRequiredMarkers(page, card) {
+    await expect(card.locator(".type-head .micro")).toHaveText(
+      "2 required · 1 optional",
+    );
+
+    const required = card.locator(".tbl-row").filter({ hasText: "dataset" });
+    // Visible, not merely present: the marker sits inline after the name
+    // because DataTable drops the header row under 600px, and a hidden tag
+    // would be the same regression in a quieter form.
+    await expect(required.locator(".req")).toBeVisible();
+    await expect(required.locator(".req")).toHaveText("required");
+
+    const optional = card.locator(".tbl-row").filter({ hasText: "symbols" });
+    await expect(optional.locator(".req")).toHaveCount(0);
+  }
+
+  test("each parameter says whether it is required", async ({ page }) => {
+    await mock(page);
+    await page.goto("/plan-types");
+
+    await expectRequiredMarkers(page, page.locator(".type-card").first());
+    // Property order stays the YAML's fill-in order: required first is a
+    // coincidence here (`dataset`, `start`), not a rule the page imposes.
+    await expect(
+      page.locator(".type-card").first().locator(".tbl-row .name code"),
+    ).toHaveText(["dataset", "start", "symbols"]);
+  });
+
+  test("the marker survives a phone, where the header row does not", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/plan-types");
+
+    const first = page.locator(".type-card").first();
+    // The reason the marker is inline and not a fifth column.
+    await expect(first.locator(".tbl-head")).toBeHidden();
+    await expectRequiredMarkers(page, first);
+
+    // DataTable truncates every cell (`.tbl-row :global(*)`), and the tag sits
+    // inside `.name`: an overflowing cell would clip it while `toBeVisible()`
+    // still passed, since clipping does not zero a bounding box.
+    const box = await first
+      .locator(".tbl-row")
+      .first()
+      .evaluate((row) => {
+        const name = row.querySelector(".name").getBoundingClientRect();
+        const tag = row.querySelector(".req").getBoundingClientRect();
+        return { nameRight: name.right, tagRight: tag.right };
+      });
+    expect(box.tagRight).toBeLessThanOrEqual(box.nameRight + 1);
+  });
+
   test("the prose a schema cannot say itself is still there", async ({
     page,
   }) => {

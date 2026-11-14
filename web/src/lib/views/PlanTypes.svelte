@@ -96,7 +96,11 @@
         {#if type.schema.fields.length}
           <DataTable {columns} items={type.schema.fields}>
             {#snippet row(field)}
-              <span class="name"><code>{field.name}</code></span>
+              <span class="name"
+                ><code>{field.name}</code>{#if field.required}<span class="req"
+                    >required</span
+                  >{/if}</span
+              >
               <span class="type"><code>{field.type}</code></span>
               <span class="cons">
                 {#if field.constraints.length}
@@ -183,6 +187,23 @@
     margin: 0 0 12px;
     color: var(--ink-dim);
     max-width: 78ch;
+  }
+
+  /* Required/optional is a property of a schema field, not a house primitive,
+     so the tag lives here rather than in the global app.css — the pre-port
+     Jinja page owned this rule too. An inline tag and not a column: DataTable drops the header
+     row under 600px, and a column with no label says nothing on a phone. */
+  .req {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-soft);
   }
 
   /* A definition list, not a widget: four labels and the prose that explains
