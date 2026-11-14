@@ -128,9 +128,6 @@
       <div class="type-head">
         <h2>{{ t.name }}</h2>
         <span class="pill">v{{ t.version }}</span>
-        <span class="pill{{ ' info' if t.schema.closed else '' }}">
-          {{ 'closed params' if t.schema.closed else 'open params' }}
-        </span>
         <span class="spacer"></span>
         <span class="micro">{{ t.schema.required_count }} required &middot; {{ t.schema.optional_count }} optional</span>
       </div>
@@ -162,6 +159,15 @@
       {% endif %}
 
       <dl class="kv">
+        <dt>extra fields</dt>
+        <dd>
+          {% if t.schema.closed %}
+            Rejected &mdash; only the parameters listed above may be sent, and anything
+            else fails validation before the request is created.
+          {% else %}
+            Accepted &mdash; parameters not listed above are passed through unvalidated.
+          {% endif %}
+        </dd>
         <dt>verify</dt>
         <dd>
           {% if t.verify.required %}Required.{% else %}Optional.{% endif %}

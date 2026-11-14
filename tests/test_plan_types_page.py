@@ -46,8 +46,10 @@ def test_plan_types_page_is_browsable_and_closed(client):
     html = client.get("/plan-types?token=tok-read").text
     # a jump link to each type
     assert 'href="#databento_batch_download"' in html
-    # additionalProperties: false is stated, because it is a real constraint
-    assert "closed params" in html
+    # `additionalProperties: false` is stated as what it means, not as jargon
+    assert "closed params" not in html
+    assert "extra fields" in html
+    assert "Rejected" in html
     # the raw schema is available but collapsed
     assert "<details>" in html
     assert "Draft 2020-12" in html
