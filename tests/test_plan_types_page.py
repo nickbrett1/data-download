@@ -98,3 +98,13 @@ def test_render_time_appears_once_in_the_foot_not_the_header(client):
         html = client.get(path).text
         assert html.count("generated ") == 1, path
         assert html.index("generated ") > html.index("<main>"), path
+
+
+def test_brand_carries_the_app_mark(client):
+    """The home-screen icon's mark, inline, so it needs no extra request."""
+    for path in ("/?token=tok-read", "/plan-types?token=tok-read"):
+        html = client.get(path).text
+        assert 'class="mark"' in html, path
+        assert 'fill="currentColor"' in html, path
+        # it lives in the header, before the tabs
+        assert html.index('class="mark"') < html.index('class="tabs"'), path

@@ -2,7 +2,16 @@
    "requests" or "plans". Links carry ?token= because a plain navigation cannot
    set an Authorization header. #}
   <header class="top">
-    <a class="brand" href="/{% if query_token %}?token={{ query_token }}{% endif %}">data-download</a>
+    <a class="brand" href="/{% if query_token %}?token={{ query_token }}{% endif %}">
+      {# The same mark as the home-screen icon, inline so it costs no request
+         and takes the accent from CSS rather than baking the colour in. #}
+      <svg class="mark" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
+        <rect x="234" y="107" width="44" height="196" rx="22" fill="currentColor"/>
+        <path d="M162 280 L350 280 L256 371 Z" fill="currentColor"/>
+        <rect x="127" y="405" width="258" height="38" rx="19" fill="currentColor"/>
+      </svg>
+      <span>data-download</span>
+    </a>
     <nav class="tabs" aria-label="Sections">
       <a class="tab{{ ' on' if active == 'requests' else '' }}"
          href="/{% if query_token %}?token={{ query_token }}{% endif %}"

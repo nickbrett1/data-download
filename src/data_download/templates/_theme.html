@@ -75,10 +75,20 @@
     }
 
     .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
       font-size: 13px;
       font-weight: 600;
       letter-spacing: 0.01em;
       color: var(--ink);
+    }
+
+    .brand .mark {
+      width: 17px;
+      height: 17px;
+      flex: none;
+      color: var(--accent);
     }
 
     a.brand { color: var(--ink); }
