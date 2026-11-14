@@ -12,6 +12,7 @@
    * around it (the definition list, the raw schema in a <details>) is not a
    * widget and stays here.
    */
+  import AppMark from "$lib/components/AppMark.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DataTable from "$lib/components/nb/DataTable.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
@@ -52,6 +53,10 @@
     { label: "Plan types", href: withToken("/plan-types"), current: true },
   ]}
 >
+  {#snippet mark()}
+    <AppMark />
+  {/snippet}
+
   <p class="lede">Plan types</p>
   <p class="sub-lede">
     The closed set of shapes a request may be filed as. Definitions live in git
@@ -114,35 +119,6 @@
           </DataTable>
         {/if}
 
-        <dl class="kv">
-          <dt>extra fields</dt>
-          <dd>
-            {#if type.schema.closed}
-              Rejected — only the parameters listed above may be sent, and
-              anything else fails validation before the request is created.
-            {:else}
-              Accepted — parameters not listed above are passed through
-              unvalidated.
-            {/if}
-          </dd>
-          <dt>verify</dt>
-          <dd>
-            {type.verify.required ? "Required." : "Optional."}
-            On failure:
-            {#each type.on_failure as verb, index (verb)}<code>{verb}</code
-              >{#if index < type.on_failure.length - 1},
-              {/if}{/each}
-            {#if type.on_failure.length === 0}nothing permitted{/if}.
-            {#if type.verify.meaning}{type.verify.meaning}{/if}
-          </dd>
-          {#if type.resume}
-            <dt>resume</dt>
-            <dd>{type.resume}</dd>
-          {/if}
-          <dt>source</dt>
-          <dd><code>{type.source}</code></dd>
-        </dl>
-
         <details>
           <summary>Raw JSON schema</summary>
           <pre>{type.schema.raw}</pre>
@@ -200,38 +176,6 @@
     background: var(--accent-soft);
   }
 
-  /* A definition list, not a widget: four labels and the prose that explains
-     them. It sits under the table because the table is the part a reader scans. */
-  .kv {
-    display: grid;
-    grid-template-columns: 6.5rem minmax(0, 1fr);
-    gap: 6px 12px;
-    margin: 12px 0 0;
-    padding-top: 10px;
-    border-top: 1px solid var(--line);
-  }
-
-  .kv dt {
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--ink-muted);
-    padding-top: 1px;
-  }
-
-  .kv dd {
-    margin: 0;
-    color: var(--ink-dim);
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .kv dd code {
-    color: var(--mark);
-    font-size: 11px;
-  }
-
   details {
     margin-top: 10px;
   }
@@ -286,12 +230,5 @@
     background: var(--bg-hover);
     color: var(--accent);
     text-decoration: none;
-  }
-
-  @media (max-width: 820px) {
-    .kv {
-      grid-template-columns: 1fr;
-      gap: 2px;
-    }
   }
 </style>

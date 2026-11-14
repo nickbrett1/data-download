@@ -108,6 +108,22 @@ for (const row of dashboard.rows) {
   dashboard.facets[row.facet].push(row);
 }
 
+// The book before anything has been filed: the state the live service is in on
+// a fresh install, and the one with the least to say.
+export const emptyBook = {
+  ...dashboard,
+  rows: [],
+  total: 0,
+  facets: {
+    broken: [],
+    waiting: [],
+    todo: [],
+    working: [],
+    done: [],
+    other: [],
+  },
+};
+
 export const planTypes = {
   types: [
     {
@@ -116,17 +132,9 @@ export const planTypes = {
       anchor: "databento_batch_download",
       description:
         "One batch download from Databento, priced before it is approved.",
-      source: "plan_types/databento_batch_download.yaml",
-      resume: "Resume from the last landed batch.",
-      on_failure: ["retry", "mark_failed"],
-      verify: {
-        required: true,
-        meaning: "Checks the vendor's manifest against the landed files.",
-      },
       schema: {
         required_count: 2,
         optional_count: 1,
-        closed: true,
         raw: '{\n  "$schema": "https://json-schema.org/draft/2020-12/schema"\n}',
         fields: [
           {
@@ -158,14 +166,9 @@ export const planTypes = {
       version: 1,
       anchor: "http_fetch",
       description: "A single URL, fetched once.",
-      source: "plan_types/http_fetch.yaml",
-      resume: null,
-      on_failure: [],
-      verify: { required: false, meaning: "" },
       schema: {
         required_count: 1,
         optional_count: 0,
-        closed: false,
         raw: "{}",
         fields: [
           {

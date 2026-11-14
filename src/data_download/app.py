@@ -151,18 +151,27 @@ def _schema_view(schema: dict[str, Any]) -> dict[str, Any]:
         "fields": fields,
         "required_count": len(required),
         "optional_count": max(len(fields) - len(required), 0),
-        "closed": schema.get("additionalProperties") is False,
         "raw": json.dumps(schema, indent=2, sort_keys=False),
     }
 
 
 def _plan_type_view(entry: Any) -> dict[str, Any]:
-    full = entry.full_entry()
+    """The page's view of one plan type: a card, its parameter rows, its schema.
+
+    Not `full_entry()` and not `index_entry()` either. The full entry carries
+    the verify/resume prose, the failure verbs and the file path, which the
+    page no longer draws - a reader of the page gets the fields and the raw
+    schema, and a caller who wants the semantics asks `GET
+    /v1/plan-types/{type}`, which is unchanged. A view-model is the page's
+    shape; the moment it is the registry's shape it has to be kept in step
+    with a page that does not read half of it.
+    """
     return {
-        **full,
+        "name": entry.name,
+        "version": entry.version,
+        "description": entry.description,
         "anchor": entry.name,
-        "schema": _schema_view(full.get("params_schema") or {}),
-        "on_failure": sorted(entry.on_failure_allowed),
+        "schema": _schema_view(entry.params_schema or {}),
     }
 
 

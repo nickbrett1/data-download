@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { dashboard, planTypes } from "./fixtures.js";
+import { dashboard, emptyBook, planTypes } from "./fixtures.js";
 
 // Resource-type routing, not a URL glob: `**/stats` would also match the
 // document navigation and hand the browser JSON instead of the app.
@@ -192,6 +192,42 @@ test.describe("the request book", () => {
     await expect(page.locator(".topbar .titles .micro")).toHaveCount(0);
   });
 
+  test("the app mark sits at the left of the bar, before the name", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/");
+
+    const mark = page.locator(".topbar .mark svg");
+    await expect(mark).toBeVisible();
+    await expect(mark).toHaveAttribute("aria-hidden", "true");
+
+    // Before the wordmark, and on the same optical line: a 22px mark with the
+    // 13px name to its right, not a badge stranded on top of the bar.
+    const boxes = await page.evaluate(() => {
+      const mark = document
+        .querySelector(".topbar .mark")
+        .getBoundingClientRect();
+      const name = document
+        .querySelector(".topbar .wordmark")
+        .getBoundingClientRect();
+      const svg = getComputedStyle(document.querySelector(".topbar .mark svg"));
+      return {
+        markLeft: mark.left,
+        markHeight: mark.height,
+        nameLeft: name.left,
+        markMid: mark.top + mark.height / 2,
+        nameMid: name.top + name.height / 2,
+        colour: svg.color,
+      };
+    });
+    expect(boxes.markLeft).toBeLessThan(boxes.nameLeft);
+    expect(boxes.markHeight).toBeCloseTo(22, 0);
+    expect(Math.abs(boxes.markMid - boxes.nameMid)).toBeLessThan(4);
+    // The accent, not a baked hex: it follows the theme.
+    expect(boxes.colour).toBe("rgb(125, 211, 252)");
+  });
+
   test("the intro says what the book is, not what it cannot do", async ({
     page,
   }) => {
@@ -214,6 +250,26 @@ test.describe("the request book", () => {
     // rows was most of the page. The title says what the page is, the badge
     // says why a row matters, and the filter strip says what is in the book.
     await expect(page.locator(".sub-lede")).toHaveCount(0);
+  });
+
+  test("an empty book says it once", async ({ page }) => {
+    // It used to say it three times: the block's "zero results" label, "No
+    // requests yet.", and the block's stock hint - under a filter strip of six
+    // zeroes. One sentence, and the only one the stock hint could not say:
+    // nothing on this page puts a request in the book.
+    await mock(page, { requests: emptyBook });
+    await page.goto("/");
+
+    await expect(page.locator(".empty-book")).toHaveText(
+      /^No requests yet — a request is filed from the CLI, not from this page\.$/,
+    );
+    const body = await page.locator("body").innerText();
+    expect(body.toLowerCase()).not.toContain("zero results");
+    expect(body).not.toContain("No items have been added");
+    expect(body.match(/No requests yet/g)).toHaveLength(1);
+
+    // Nothing to narrow, so no strip of zeroes above the sentence.
+    await expect(page.locator(".filter-panel")).toHaveCount(0);
   });
 
   test("no console errors", async ({ page }) => {
@@ -334,28 +390,33 @@ test.describe("plan types", () => {
     expect(box.tagRight).toBeLessThanOrEqual(box.nameRight + 1);
   });
 
-  test("the prose a schema cannot say itself is still there", async ({
+  test("the card is the table and the raw schema, and no glossary under it", async ({
     page,
   }) => {
+    // A definition list used to sit under each table: extra fields, verify,
+    // resume, source. Four labels of prose about a schema, on a page whose job
+    // is to answer "which fields does this plan take?". It went, and the card
+    // is now the description, the parameter rows, and the collapsed schema -
+    // the last of which is the document itself, so nothing is lost.
     await mock(page);
     await page.goto("/plan-types");
 
-    const first = page.locator(".type-card").first();
-    await expect(first.locator(".kv")).toContainText("Rejected");
-    await expect(first.locator(".kv")).toContainText("retry");
-    await expect(first.locator(".kv")).toContainText(
-      "Resume from the last landed batch.",
-    );
-    await expect(first.locator("details pre")).toContainText("draft/2020-12");
+    await expect(page.locator(".kv")).toHaveCount(0);
+    const body = await page.locator("body").innerText();
+    for (const gone of [
+      "extra fields",
+      "verify",
+      "resume",
+      "Rejected",
+      "Accepted",
+    ]) {
+      expect(body.toLowerCase()).not.toContain(gone.toLowerCase());
+    }
 
-    // `closed: false` is the other branch, and it must not read as rejection.
-    await expect(
-      page.locator(".type-card").nth(1).locator(".kv"),
-    ).toContainText("Accepted");
-    // No on_failure verbs is "nothing permitted", not an empty list.
-    await expect(
-      page.locator(".type-card").nth(1).locator(".kv"),
-    ).toContainText("nothing permitted");
+    const first = page.locator(".type-card").first();
+    await expect(first.locator(".tbl-row")).toHaveCount(3);
+    // The raw schema still declares its dialect, so a copy-paste has the rules.
+    await expect(first.locator("details pre")).toContainText("draft/2020-12");
   });
 
   test("nothing on the page can change the registry", async ({ page }) => {

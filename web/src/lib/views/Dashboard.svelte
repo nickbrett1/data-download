@@ -13,6 +13,7 @@
    * either: a reader who came to look at the book does not need to be told what
    * the book cannot do.
    */
+  import AppMark from "$lib/components/AppMark.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DataTable from "$lib/components/nb/DataTable.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
@@ -118,6 +119,10 @@
     { label: "Plan types", href: withToken("/plan-types"), current: false },
   ]}
 >
+  {#snippet mark()}
+    <AppMark />
+  {/snippet}
+
   <p class="lede">The request book</p>
 
   {#if failure}
@@ -125,12 +130,17 @@
   {:else if !data}
     <p class="hint">Loading the book…</p>
   {:else}
-    <FilterPanel
-      {facets}
-      {selected}
-      onchange={(next) => setShow((next.show ?? [])[0] ?? "all")}
-      onclear={() => setShow("all")}
-    />
+    {#if data.total}
+      <!-- A filter strip is a way to narrow a list. Over an empty book it is
+           six zeroes that cannot be clicked into anything useful, so it waits
+           until there is something to narrow. -->
+      <FilterPanel
+        {facets}
+        {selected}
+        onchange={(next) => setShow((next.show ?? [])[0] ?? "all")}
+        onclear={() => setShow("all")}
+      />
+    {/if}
 
     {#if rows.length}
       <DataTable
@@ -168,14 +178,28 @@
           </span>
         {/snippet}
       </DataTable>
+    {:else if show === "all"}
+      <!-- An empty book used to say it three times: the block's "zero results"
+           label, ours "No requests yet.", and the block's stock hint. There is
+           one sentence worth saying here, and it is the one the stock hint
+           cannot: nothing on this page puts a request in the book. -->
+      <p class="empty-book">
+        No requests yet — a request is filed from the CLI, not from this page.
+      </p>
     {:else}
-      <!-- Let the block say it: "No requests yet" is a different sentence from
-           "no matches for active filters", and it already knows which is which. -->
-      <EmptyState
-        cause={show === "all" ? "empty" : "filters"}
-        customMessage={show === "all" ? "No requests yet." : ""}
-        onclear={() => setShow("all")}
-      />
+      <!-- Under a filter the block earns its place: it offers the way out. -->
+      <EmptyState cause="filters" onclear={() => setShow("all")} />
     {/if}
   {/if}
 </AppShell>
+
+<style>
+  /* The one line an empty book gets. Not a card: there is no state to
+     distinguish, no action to offer, and the filter strip above it is already
+     absent. */
+  .empty-book {
+    margin: 18px 0 0;
+    color: var(--ink-muted);
+    font-size: 13px;
+  }
+</style>

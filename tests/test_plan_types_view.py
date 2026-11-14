@@ -65,9 +65,18 @@ def test_a_type_carries_its_schema_field_by_field(client):
     assert "GLBX.MDP3" in text
     assert "No open-ended windows" in text
 
-    # verify/resume semantics are on the page, not only in the YAML
-    assert "commit_marked" in text and "quarantine" in text
-    assert "job_id is the anchor" in text
+    # The verify/resume prose and the failure verbs left this view with the
+    # definition list they used to fill. They are not gone - a filer reads them
+    # on GET /v1/plan-types/{type}, which is the surface that has to say what a
+    # failure means - but the page draws fields and the raw schema now, so the
+    # view-model carries exactly that.
+    for gone in ("commit_marked", "quarantine", "job_id is the anchor"):
+        assert gone not in text, f"{gone} is back in the page's view-model"
+    detail = client.get(
+        "/v1/plan-types/databento_batch_download", headers=auth()
+    ).json()
+    assert set(detail["verify"]["on_failure"]) == {"commit_marked", "quarantine"}
+    assert "job_id is the anchor" in detail["resume"]
 
 
 def test_a_type_is_anchored_and_closed(client):
@@ -76,15 +85,13 @@ def test_a_type_is_anchored_and_closed(client):
 
     # a jump target per type, so a dashboard row can link straight to it
     assert first["anchor"] == first["name"]
-    # `additionalProperties: false` is stated as what it means, not as jargon
-    assert first["schema"]["closed"] is True
-    # the raw schema is available (the page collapses it in a <details>)
-    assert (
-        "properties" in json.loads(first["schema"]["raw"])
-        or "closed" in first["schema"]["raw"]
-    )
-    # the file a reader would open to change it
-    assert first["source"].endswith(".yaml")
+    # The page shows the schema itself, so closedness is read from the document
+    # rather than restated as a flag the page had to be taught to explain.
+    raw = json.loads(first["schema"]["raw"])
+    assert raw["additionalProperties"] is False
+    assert "properties" in raw
+    # The source path was on the page's definition list; it is on the API.
+    assert "source" not in first
 
 
 def test_the_schema_declares_its_own_dialect(client):
