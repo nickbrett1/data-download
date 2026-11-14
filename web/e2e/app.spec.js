@@ -260,8 +260,11 @@ test.describe("the request book", () => {
     await mock(page, { requests: emptyBook });
     await page.goto("/");
 
+    // The door is the API, not a CLI: this service ships no CLI binary, and the
+    // first version of this sentence said "filed from the CLI", which was an
+    // invention. `POST /v1/requests` is what actually creates a row.
     await expect(page.locator(".empty-book")).toHaveText(
-      /^No requests yet — a request is filed from the CLI, not from this page\.$/,
+      /^No requests yet — requests arrive through the API \(POST \/v1\/requests\), not from this page\.$/,
     );
     const body = await page.locator("body").innerText();
     expect(body.toLowerCase()).not.toContain("zero results");

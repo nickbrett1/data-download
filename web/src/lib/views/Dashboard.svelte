@@ -7,11 +7,11 @@
    * So the views stay the semantic truth on the server and this page flattens
    * them, where the interesting condition is a badge instead of a partition.
    *
-   * Nothing here can approve or change a request: approval is a CLI verb with a
-   * scope this page cannot reach, and the token in the URL is `read` only. That
-   * fact shapes the page -- there is no button, and no line of prose saying so
-   * either: a reader who came to look at the book does not need to be told what
-   * the book cannot do.
+   * Nothing here can approve or change a request: approval has no endpoint and
+   * no scope these pages can reach, and the token in the URL is `read` only.
+   * That fact shapes the page -- there is no button, and no line of prose
+   * saying so either: a reader who came to look at the book does not need to be
+   * told what the book cannot do.
    */
   import AppMark from "$lib/components/AppMark.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
@@ -182,9 +182,13 @@
       <!-- An empty book used to say it three times: the block's "zero results"
            label, ours "No requests yet.", and the block's stock hint. There is
            one sentence worth saying here, and it is the one the stock hint
-           cannot: nothing on this page puts a request in the book. -->
+           cannot: which door a request actually comes through. There is no CLI
+           in this service - `POST /v1/requests` is the door, and a reader
+           staring at an empty book is the one person who needs to know it. -->
       <p class="empty-book">
-        No requests yet — a request is filed from the CLI, not from this page.
+        No requests yet — requests arrive through the API (<code
+          >POST /v1/requests</code
+        >), not from this page.
       </p>
     {:else}
       <!-- Under a filter the block earns its place: it offers the way out. -->
