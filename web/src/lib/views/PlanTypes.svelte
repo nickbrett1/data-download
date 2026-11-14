@@ -46,18 +46,6 @@
     { label: "Plan types", href: withToken("/plan-types"), current: true },
   ]}
 >
-  {#snippet footer()}
-    {#if data}
-      <p>
-        Machine-readable: <code>GET /v1/plan-types</code> (index) and
-        <code>GET /v1/plan-types/&#123;type&#125;</code> (one schema).
-      </p>
-      <p class="muted">
-        generated {data.generated_at} · read-only, no authority
-      </p>
-    {/if}
-  {/snippet}
-
   <p class="lede">Plan types</p>
   <p class="sub-lede">
     The closed set of shapes a request may be filed as. Definitions live in git

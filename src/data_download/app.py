@@ -473,18 +473,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "facet_order": list(FACET_ORDER),
             "facet_labels": FACET_LABELS,
             "showing": "all",
-            "registry_count": len(registry.all()),
-            "generated_at": utcnow(),
-            "db_path": str(settings.db_path),
         }
 
     @app.get("/ui/plan-types.json")
     async def plan_types_json(request: Request) -> dict[str, Any]:
         auth.require_scope(request, "read", allow_query_token=True)
-        return {
-            "types": [_plan_type_view(entry) for entry in registry.all()],
-            "generated_at": utcnow(),
-        }
+        return {"types": [_plan_type_view(entry) for entry in registry.all()]}
 
     def _index() -> FileResponse:
         index = WEB_DIST_DIR / "index.html"

@@ -100,9 +100,6 @@ export const dashboard = {
   facet_order: ["broken", "waiting", "todo", "working", "done"],
   facet_labels: {},
   showing: "all",
-  registry_count: 3,
-  generated_at: "2026-11-14 15:30:00",
-  db_path: "/data/data-download.sqlite",
 };
 
 // The counts are derived rather than hand-written: a fixture whose facet counts
@@ -182,5 +179,4 @@ export const planTypes = {
       },
     },
   ],
-  generated_at: "2026-11-14 15:30:00",
 };

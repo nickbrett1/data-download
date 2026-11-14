@@ -109,20 +109,6 @@
     { label: "Plan types", href: withToken("/plan-types"), current: false },
   ]}
 >
-  {#snippet footer()}
-    {#if data}
-      <p>
-        Plan types: {data.registry_count} registered · browse them in
-        <a href={withToken("/plan-types")}>Plan types</a> · machine-readable at
-        <code>GET /v1/plan-types</code>.
-      </p>
-      <p class="muted">
-        generated {data.generated_at} · store <code>{data.db_path}</code> · read-only,
-        no authority
-      </p>
-    {/if}
-  {/snippet}
-
   <p class="lede">The request book</p>
   <p class="sub-lede">
     Every download request in one list, newest first. The badge on the right

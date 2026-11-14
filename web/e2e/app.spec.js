@@ -346,7 +346,7 @@ test.describe("plan types", () => {
     page,
   }) => {
     await mock(page, {
-      types: { types: [], generated_at: "2026-11-14 15:30:00" },
+      types: { types: [] },
     });
     await page.goto("/plan-types");
     await expect(page.locator(".empty-state")).toContainText(
@@ -469,4 +469,27 @@ test.describe("the shell on a phone", () => {
     await expect(page.locator(".type-card")).toHaveCount(2);
     await expectSafeAreaDoesNotCoverLede(page);
   });
+});
+
+test.describe("the page ends where the content ends", () => {
+  // The footer used to hold a generated-at stamp, the store path, and a link
+  // to the other tab. The link duplicated the nav directly above it, the
+  // timestamp always read "now" on a page that is never cached, and the path
+  // is the host's business. A page that is one list should stop after the list.
+  for (const path of ["/", "/plan-types"]) {
+    test(`${path} has no footer and no server trivia`, async ({ page }) => {
+      await mock(page);
+      await page.goto(path);
+
+      await expect(page.locator("footer")).toHaveCount(0);
+      const body = await page.locator("body").innerText();
+      expect(body).not.toContain("generated");
+      expect(body).not.toContain("read-only, no authority");
+      expect(body).not.toContain("data-download.sqlite");
+
+      // The navigation exists once, in the bar.
+      await expect(page.locator(".main-nav")).toHaveCount(1);
+      await expect(page.locator(".main-nav a")).toHaveCount(2);
+    });
+  }
 });

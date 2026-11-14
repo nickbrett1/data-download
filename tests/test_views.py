@@ -273,6 +273,25 @@ def test_a_row_needs_a_human_in_the_order_the_ui_labels_it(client, db_path):
     assert book["facet_order"][-1] == "done"
 
 
+def test_the_view_carries_no_server_trivia(client, db_path):
+    """The page renders a request book and nothing else.
+
+    `generated_at`, `db_path` and `registry_count` existed only to fill the
+    footer, and the footer is gone: a timestamp on a page that is never cached
+    always says "now", the store path is the host's business rather than the
+    reader's, and the registry count repeated what the other tab already shows.
+    A field nothing renders is a field that silently rots, so they are not
+    sent either.
+    """
+    _seed_all(db_path)
+    book = _book(client)
+    for gone in ("generated_at", "db_path", "registry_count"):
+        assert gone not in book, f"{gone} is back in the view-model"
+
+    types = client.get("/ui/plan-types.json?token=tok-read").json()
+    assert "generated_at" not in types
+
+
 def test_the_view_accepts_a_query_token(client, db_path):
     """A browser cannot set an Authorization header on a plain navigation, so
     the token has to be accepted in the URL - on the view as well as the page."""

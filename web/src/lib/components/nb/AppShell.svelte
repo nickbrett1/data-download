@@ -4,7 +4,10 @@
    *
    * Replaces the bespoke top bars in stratechery-search, deepseek-balance and
    * data-download. Sticky header with a backdrop blur, wordmark + micro subtitle,
-   * back pill for non-root views, 68rem main, and a footer strip.
+   * back pill for non-root views, and a 68rem main. There is no footer unless
+   * the caller hands one in: a strip that said nothing but the design system's
+   * name was furniture on every page, and a strip repeating the navigation the
+   * bar already carries is a second way to do the one thing.
    *
    * Two slots, added in 1.4.0 because the three consumers all needed them and
    * all three had to bypass the block to get them:
@@ -103,15 +106,13 @@
     {@render children?.()}
   </main>
 
-  <footer class="footer">
-    <div class="footer-inner">
-      {#if footer}
+  {#if footer}
+    <footer class="footer">
+      <div class="footer-inner">
         {@render footer()}
-      {:else}
-        <span class="micro">house design system · @nb</span>
-      {/if}
-    </div>
-  </footer>
+      </div>
+    </footer>
+  {/if}
 </div>
 
 <style>
