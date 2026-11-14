@@ -30,7 +30,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-data_download = ["schema.sql", "templates/*.html", "static/*"]
+data_download = ["schema.sql", "web/index.html", "web/assets/*", "static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

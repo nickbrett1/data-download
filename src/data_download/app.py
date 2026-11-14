@@ -16,11 +16,10 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from . import auth, errors
 from .config import Settings, load_settings
@@ -30,8 +29,16 @@ from .registry import Registry, load_registry
 
 log = logging.getLogger(__name__)
 
-TEMPLATES_DIR = Path(__file__).with_name("templates")
 STATIC_DIR = Path(__file__).with_name("static")
+
+# The built frontend (web/dist, copied next to this module by the image). Vite
+# emits `index.html` plus `assets/`, and FastAPI serves both -- the routes, the
+# auth and the read-model stay here, and the view is just a file. There is no
+# second server: SvelteKit would have duplicated every one of those, and a node
+# process in production to do it.
+WEB_DIST_DIR = Path(
+    os.environ.get("DATA_DOWNLOAD_WEB_DIR") or Path(__file__).with_name("web")
+)
 VIEW_NAMES = ("v_pending", "v_done", "v_stuck", "v_blocked")
 
 # The dashboard is one list. These facets are how a row is *labelled*, not how
@@ -73,7 +80,11 @@ def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
         facet = "done"
     else:  # a state added later must still render, not vanish
         facet = "other"
-    return {**row, "facet": facet, "facet_label": FACET_LABELS.get(facet, facet.title())}
+    return {
+        **row,
+        "facet": facet,
+        "facet_label": FACET_LABELS.get(facet, facet.title()),
+    }
 
 
 def _type_label(spec: dict[str, Any]) -> str:
@@ -154,30 +165,13 @@ def _plan_type_view(entry: Any) -> dict[str, Any]:
         "on_failure": sorted(entry.on_failure_allowed),
     }
 
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-
-
-def _humanise_age(seconds: Any) -> str:
-    try:
-        total = int(seconds)
-    except (TypeError, ValueError):
-        return "-"
-    if total < 60:
-        return f"{total}s"
-    if total < 3600:
-        return f"{total // 60}m"
-    if total < 86400:
-        return f"{total // 3600}h {(total % 3600) // 60}m"
-    return f"{total // 86400}d {(total % 86400) // 3600}h"
-
-
-templates.env.filters["age"] = _humanise_age
-
 
 def _store(request: Request) -> Store:
     store = getattr(request.app.state, "store", None)
     if store is None or request.app.state.store_error:
-        raise errors.store_unavailable(request.app.state.store_error or "store is not connected")
+        raise errors.store_unavailable(
+            request.app.state.store_error or "store is not connected"
+        )
     return store
 
 
@@ -264,14 +258,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(status_code=exc.status, content=exc.envelope())
 
     @app.exception_handler(RequestValidationError)
-    async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+    async def _validation_error(
+        _: Request, exc: RequestValidationError
+    ) -> JSONResponse:
         detail = "; ".join(
             f"{'.'.join(str(p) for p in err.get('loc', []))}: {err.get('msg', '')}"
             for err in exc.errors()
         )
         return JSONResponse(
             status_code=400,
-            content={"error": {"code": errors.INVALID_BODY, "message": detail or "invalid query"}},
+            content={
+                "error": {
+                    "code": errors.INVALID_BODY,
+                    "message": detail or "invalid query",
+                }
+            },
         )
 
     # -- liveness ----------------------------------------------------------
@@ -409,7 +410,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise errors.not_found(f"no request with id {request_id!r}")
         # Long poll on the read only, never on a mutation (§7.9.5).
         if wait:
-            row = await store.wait_for_state_change(request_id, row["state"], wait) or row
+            row = (
+                await store.wait_for_state_change(request_id, row["state"], wait) or row
+            )
         return _request_payload(row)
 
     @app.get("/v1/requests/{request_id}/events")
@@ -427,7 +430,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "ts": e["ts"],
                     "actor_kind": e["actor_kind"],
                     "event": e["event"],
-                    "detail": json.loads(e["detail_json"]) if e["detail_json"] else None,
+                    "detail": json.loads(e["detail_json"])
+                    if e["detail_json"]
+                    else None,
                 }
                 for e in events
             ]
@@ -448,44 +453,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # -- dashboard ---------------------------------------------------------
 
+    # -- the frontend ------------------------------------------------------
+    #
+    # Two HTML routes became one built file plus two view-models. What stays
+    # exactly where it was: the token, the scopes, the SQL views, the facet
+    # precedence, the plan-type registry, and `/v1/*` -- the API the CLI and the
+    # agents already call. What moved into the browser: `$%.4f`, "1h 04m", and
+    # the badge colour. That split is the whole argument for keeping FastAPI.
+
+    @app.get("/ui/dashboard.json")
+    async def dashboard_json(request: Request) -> dict[str, Any]:
+        auth.require_scope(request, "read", allow_query_token=True)
+        rows = [_with_facet(row) for row in await _store(request).overview()]
+        keys = (*FACET_ORDER, "other")
+        return {
+            "rows": rows,
+            "total": len(rows),
+            "facets": {key: [r for r in rows if r["facet"] == key] for key in keys},
+            "facet_order": list(FACET_ORDER),
+            "facet_labels": FACET_LABELS,
+            "showing": "all",
+            "registry_count": len(registry.all()),
+            "generated_at": utcnow(),
+            "db_path": str(settings.db_path),
+        }
+
+    @app.get("/ui/plan-types.json")
+    async def plan_types_json(request: Request) -> dict[str, Any]:
+        auth.require_scope(request, "read", allow_query_token=True)
+        return {
+            "types": [_plan_type_view(entry) for entry in registry.all()],
+            "generated_at": utcnow(),
+        }
+
+    def _index() -> FileResponse:
+        index = WEB_DIST_DIR / "index.html"
+        if not index.is_file():
+            # A 500 in the shape of a sentence: the usual cause is running the
+            # service from a checkout that has not had `npm run build` in web/.
+            raise HTTPException(
+                status_code=503,
+                detail=f"the frontend is not built: {index} is missing (run `npm run build` in web/)",
+            )
+        return FileResponse(index, media_type="text/html", headers=NO_STORE)
+
     @app.get("/", response_class=HTMLResponse)
-    async def dashboard(request: Request) -> HTMLResponse:
+    async def dashboard(request: Request) -> FileResponse:
         # `read` scope, GET only, no form that mutates. The query token exists
         # because a browser link cannot set an Authorization header.
         auth.require_scope(request, "read", allow_query_token=True)
-        store = _store(request)
-
-        rows = [_with_facet(row) for row in await store.overview()]
-        keys = (*FACET_ORDER, "other")
-        facets = {key: [r for r in rows if r["facet"] == key] for key in keys}
-        wanted = request.query_params.get("show") or "all"
-        if wanted != "all" and wanted not in keys:
-            wanted = "all"
-        visible = rows if wanted == "all" else facets[wanted]
-
-        return templates.TemplateResponse(
-            request=request,
-            name="dashboard.html",
-            headers=NO_STORE,
-            context={
-                "rows": visible,
-                "total": len(rows),
-                "facets": facets,
-                "facet_labels": FACET_LABELS,
-                "facet_order": FACET_ORDER,
-                "showing": wanted,
-                # Preserved so filter links keep working when the page was
-                # opened with ?token=. A browser cannot set a header on a
-                # plain navigation.
-                "query_token": request.query_params.get("token") or "",
-                "registry": registry.all(),
-                "generated_at": utcnow(),
-                "db_path": settings.db_path,
-            },
-        )
+        return _index()
 
     @app.get("/plan-types", response_class=HTMLResponse)
-    async def plan_types_page(request: Request) -> HTMLResponse:
+    async def plan_types_page(request: Request) -> FileResponse:
         """The browse view for the registry: what may be filed, and as what.
 
         Read scope only. The same data is on `GET /v1/plan-types` for machines;
@@ -493,21 +513,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require reading raw JSON in a terminal.
         """
         auth.require_scope(request, "read", allow_query_token=True)
-        return templates.TemplateResponse(
-            request=request,
-            name="plan_types.html",
-            headers=NO_STORE,
-            context={
-                "types": [_plan_type_view(entry) for entry in registry.all()],
-                "query_token": request.query_params.get("token") or "",
-                "generated_at": utcnow(),
-            },
-        )
+        return _index()
 
     # -- static & home-screen icons (public, no auth required) -------------
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # The bundle's own files. Public on purpose: hashed filenames under an
+    # authenticated HTML page are not a secret, and a check here would only mean
+    # a browser with an expired token renders an unstyled page.
+    if (WEB_DIST_DIR / "assets").is_dir():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(WEB_DIST_DIR / "assets")),
+            name="assets",
+        )
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> FileResponse:
@@ -529,7 +550,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 def serve(host: str, port: int) -> None:
-    uvicorn.run(create_app(), host=host, port=port, log_level=os.environ.get("LOG_LEVEL", "info"))
+    uvicorn.run(
+        create_app(),
+        host=host,
+        port=port,
+        log_level=os.environ.get("LOG_LEVEL", "info"),
+    )
 
 
 app = create_app()

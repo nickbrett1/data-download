@@ -36,6 +36,27 @@ steps:
       - ruff check src tests
       - pytest -q
 
+  - label: ":svelte: Build and test (frontend)"
+    key: web
+    agents:
+      queue: mac-studio-linux
+    plugins:
+      - docker#v5.13.0:
+          # The browsers ship in this image, at /ms-playwright. Pinning the tag
+          # to the @playwright/test version keeps the two in lockstep: a newer
+          # browser than the library is a flaky suite, not a fast one.
+          image: "mcr.microsoft.com/playwright:v1.65.0-noble"
+          platform: linux/arm64
+          workdir: /workdir
+    commands:
+      - cd web
+      - npm ci --no-audit --no-fund
+      - npm run lint
+      - npm run build
+      # The suite mocks /ui/*.json: pytest owns the server contract, this owns
+      # the render, so it needs neither Python nor a database.
+      - npx playwright test
+
   - label: ":male-doctor: Smoke test image (starts and serves HTTP)"
     key: docker_smoke
     depends_on:

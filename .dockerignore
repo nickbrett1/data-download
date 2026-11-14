@@ -1,18 +1,7 @@
-node_modules
-.git
-.gitignore
-.env
-.env.*
-*.log
-dist
-build
-coverage
-.svelte-kit
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
 .venv
-__pycache__
-*.pyc
-*.pyo
-.DS_Store
-# Workspace tooling, not part of the image: the devcontainer's Dockerfile,
-# .zshrc/.p10k.zsh and setup scripts are host-side and only bloat `COPY . .`.
-.devcontainer
+.git
+.e2e

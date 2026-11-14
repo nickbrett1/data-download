@@ -36,6 +36,42 @@ This project includes the following capabilities:
    pytest -v
    ```
 
+4. Build the frontend (the HTML routes serve it; without it they answer 503
+   with the command to run):
+
+   ```bash
+   cd web && npm ci && npm run build && npx playwright test
+   ```
+
+## The frontend, and why FastAPI is still here
+
+`src/data_download/` owns the model; `web/` owns the view. The split is
+deliberate, because the two sides have different kinds of truth in them:
+
+| stays in FastAPI | why it cannot move |
+| --- | --- |
+| the SQLite store | it is the only writer |
+| `v_pending` / `v_done` / `v_stuck` / `v_blocked` | the views *are* the read-model; a page is a projection of them |
+| token auth and the `read` scope | approval has no endpoint **and** no scope these pages can reach |
+| `/v1/*` | the CLI and the agents already call it; moving it would break them |
+| `_with_facet` precedence | "`running` + `lease_expired` is broken, not running" is a domain rule, not a colour |
+| the plan-type registry | loaded from `plan_types/*.yaml` at startup |
+
+What moved into the browser is what only a browser needs: `$0.0412` instead of
+a float, `1h 4m` instead of seconds, and which pill tone a state gets.
+
+So there is no SvelteKit server. `web/` is Vite + Svelte 5, it builds to static
+files, and FastAPI serves them: `/` and `/plan-types` return the built
+`index.html`, `/assets/*` is mounted from the bundle, and the app picks its view
+from `location.pathname`. `/ui/dashboard.json` and `/ui/plan-types.json` carry
+exactly the context the Jinja templates used to be handed. The image builds the
+frontend in a `node` stage and the runtime is still plain python — no node, no
+second server, and `/v1/*` never moved.
+
+That is also how the tests divide: `pytest` owns the contract (which row gets
+which facet, what a plan type says a parameter demands), and `web/e2e/` owns the
+render, mocking `/ui/*.json` so it needs neither Python nor a database.
+
 ## Secret scanning
 
 Every commit is scanned for credentials by `gitleaks`, and CI scans the

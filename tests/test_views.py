@@ -156,11 +156,27 @@ def test_repeat_failure_does_not_fire_at_two(client, db_path):
     seed(
         db_path,
         [
-            {"id": "two_1", "state": "failed", "plan_json": PLAN_JSON, "plan_hash": "h2"},
-            {"id": "two_2", "state": "failed", "plan_json": PLAN_JSON, "plan_hash": "h2"},
+            {
+                "id": "two_1",
+                "state": "failed",
+                "plan_json": PLAN_JSON,
+                "plan_hash": "h2",
+            },
+            {
+                "id": "two_2",
+                "state": "failed",
+                "plan_json": PLAN_JSON,
+                "plan_hash": "h2",
+            },
         ],
     )
     assert read_view(db_path, "v_stuck") == []
+
+
+def _book(client) -> dict:
+    res = client.get("/ui/dashboard.json?token=tok-read")
+    assert res.status_code == 200
+    return res.json()
 
 
 def test_dashboard_is_one_list_with_a_badge_per_row(client, db_path):
@@ -170,10 +186,16 @@ def test_dashboard_is_one_list_with_a_badge_per_row(client, db_path):
     row matters is a badge. The four SQL views remain the semantic truth and
     are asserted separately above - what this pins is that flattening them did
     not drop a row on the floor.
+
+    This is the *view-model*, not the markup. The page that draws it is
+    e2e/app.spec.js; what has to be true of the data is here, because the
+    precedence below is the read-model's opinion and not a rendering choice.
     """
     _seed_all(db_path)
-    html = client.get("/?token=tok-read").text
+    book = _book(client)
+    ids = [row["id"] for row in book["rows"]]
 
+    assert sorted(ids) == sorted(set(ids)), "a row appeared twice"
     for request_id in (
         "seed_approved",
         "seed_lease",
@@ -182,52 +204,104 @@ def test_dashboard_is_one_list_with_a_badge_per_row(client, db_path):
         "seed_draft",
         "seed_blocked",
     ):
-        assert request_id in html, f"{request_id} missing from the list"
+        assert request_id in ids, f"{request_id} missing from the list"
+
+    by_id = {row["id"]: row for row in book["rows"]}
 
     # All four breakage conditions are labelled inline, not sectioned.
-    for condition in ("approved_unclaimed", "lease_expired", "running_too_long", "repeat_failure"):
-        assert condition in html
+    for request_id, condition in (
+        ("seed_lease", "lease_expired"),
+        ("seed_hung", "running_too_long"),
+        ("seed_approved", "approved_unclaimed"),
+    ):
+        assert by_id[request_id]["stuck_condition"] == condition
+        assert by_id[request_id]["facet"] == "broken"
+    # `repeat_failure` fires on the plan hash, not on a row, so it is one
+    # condition over three rows.
+    repeats = [
+        row for row in book["rows"] if row["stuck_condition"] == "repeat_failure"
+    ]
+    assert repeats, "the three-failure plan hash is not labelled"
+    assert all(row["facet"] == "broken" for row in repeats)
+
+    # A row that merely landed badly is not breakage.
+    assert by_id["seed_short"]["facet"] == "done"
+    assert by_id["seed_short"]["had_errors"]  # sqlite gives 1, not True
 
     # The blocked row says what it is waiting for, and that it is not breakage.
-    assert "Waiting on a plan" in html
-    assert "awaiting_plan" in html
+    assert by_id["seed_blocked"]["facet"] == "waiting"
+    assert by_id["seed_blocked"]["blocked_reason"] == "awaiting_plan"
+    assert by_id["seed_blocked"]["facet_label"] == "Waiting on a plan"
 
-    # No four-section headings survive.
-    for gone in ("v_pending", "v_done", "v_stuck", "v_blocked"):
-        assert gone not in html
+    # No four-section names survive in the view.
+    assert not {row["facet"] for row in book["rows"]} & {
+        "v_pending",
+        "v_done",
+        "v_stuck",
+        "v_blocked",
+    }
+    assert book["total"] == len(book["rows"])
 
 
-def test_dashboard_filters_narrow_the_same_list(client, db_path):
+def test_the_facet_index_partitions_the_rows(client, db_path):
+    """The page filters in the browser, so the index has to be exhaustive: a
+    row in no bucket is a row that vanishes when any filter is on."""
     _seed_all(db_path)
-    broken = client.get("/?token=tok-read&show=broken").text
-    assert "seed_lease" in broken
-    # An approved-but-unclaimed row is broken, not "to approve": breakage wins
-    # the badge, or it would read as work waiting on a human.
-    assert "seed_approved" in broken
-    assert "seed_blocked" not in broken
-    assert "seed_draft" not in broken
+    book = _book(client)
 
-    waiting = client.get("/?token=tok-read&show=waiting").text
-    assert "seed_blocked" in waiting
-    assert "seed_lease" not in waiting
+    bucketed = [row["id"] for bucket in book["facets"].values() for row in bucket]
+    assert sorted(bucketed) == sorted(row["id"] for row in book["rows"])
 
-    todo = client.get("/?token=tok-read&show=todo").text
-    assert "seed_draft" in todo
-    assert "seed_approved" not in todo
-    assert "seed_short" not in todo
+    broken = {row["id"] for row in book["facets"]["broken"]}
+    assert {"seed_lease", "seed_approved"} <= broken
+    assert "seed_blocked" not in broken and "seed_draft" not in broken
+
+    waiting = {row["id"] for row in book["facets"]["waiting"]}
+    assert waiting == {"seed_blocked"}
+
+    todo = {row["id"] for row in book["facets"]["todo"]}
+    assert todo == {"seed_draft"}
 
 
-def test_dashboard_unknown_filter_falls_back_to_all(client, db_path):
+def test_a_row_needs_a_human_in_the_order_the_ui_labels_it(client, db_path):
+    """Breakage outranks the state it happens in: an approved-but-unclaimed
+    request is broken, not "to approve", or it reads as work waiting on a
+    human rather than as a request nobody picked up."""
     _seed_all(db_path)
-    html = client.get("/?token=tok-read&show=nonsense").text
-    assert "seed_draft" in html and "seed_blocked" in html
+    book = _book(client)
+    assert book["facet_order"][0] == "broken"
+    assert book["facet_order"][-1] == "done"
 
 
-def test_dashboard_filter_links_carry_the_token(client, db_path):
-    """A plain navigation cannot set an Authorization header."""
+def test_the_view_accepts_a_query_token(client, db_path):
+    """A browser cannot set an Authorization header on a plain navigation, so
+    the token has to be accepted in the URL - on the view as well as the page."""
     _seed_all(db_path)
-    html = client.get("/?token=tok-read").text
-    assert "show=broken&amp;token=tok-read" in html or "show=broken&token=tok-read" in html
+    assert client.get("/ui/dashboard.json").status_code == 401
+    assert client.get("/ui/dashboard.json?token=nonsense").status_code == 401
+    assert client.get("/ui/dashboard.json?token=tok-read").status_code == 200
+    assert client.get("/ui/dashboard.json", headers=auth()).status_code == 200
+
+
+def test_the_page_is_the_built_bundle(client, db_path, tmp_path, monkeypatch):
+    """The HTML route serves a file, not a template. If the bundle is missing
+    the failure has to say so; a blank page would look like an empty book."""
+    from data_download import app as app_module
+
+    built = tmp_path / "web"
+    (built / "assets").mkdir(parents=True)
+    (built / "index.html").write_text("<html><body>built</body></html>")
+    monkeypatch.setattr(app_module, "WEB_DIST_DIR", built)
+
+    res = client.get("/?token=tok-read")
+    assert res.status_code == 200
+    assert "built" in res.text
+    assert "no-store" in res.headers.get("cache-control", "")
+
+    monkeypatch.setattr(app_module, "WEB_DIST_DIR", tmp_path / "absent")
+    res = client.get("/?token=tok-read")
+    assert res.status_code == 503
+    assert "npm run build" in res.json()["detail"]
 
 
 def test_dashboard_requires_read_scope(client):
@@ -255,12 +329,3 @@ def test_icons_and_manifest_are_publicly_accessible(client):
         res = client.get(path)
         assert res.status_code == 200, f"{path} returned {res.status_code}"
         assert len(res.content) > 0
-
-
-def test_dashboard_links_apple_touch_icon_and_manifest(client):
-    res = client.get("/?token=tok-read")
-    assert res.status_code == 200
-    assert 'rel="apple-touch-icon"' in res.text
-    assert 'apple-mobile-web-app-capable' in res.text
-    assert 'apple-mobile-web-app-title' in res.text
-    assert 'rel="manifest"' in res.text
