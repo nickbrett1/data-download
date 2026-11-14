@@ -341,6 +341,41 @@ test.describe("the shell on a phone", () => {
     expect(overflow).toBeLessThanOrEqual(0);
   }
 
+  // Chromium reports `env(safe-area-inset-top)` as 0 on every machine without a
+  // notch, so the inset is injected where the shell reads it: a custom property
+  // on the document element. 47px is the value a notched iPhone reports. With
+  // the sticky bar at `top: var(--safe-top)` (1.10.0) the bar is painted 47px
+  // lower while its flow box stays put, covering the intro completely: the
+  // bar's bottom lands *below* the lede's top. `padding-top` (1.10.1) grows
+  // the bar instead, so the flow moves with it. Both facts are measured below
+  // rather than deduced from a screenshot.
+  async function expectSafeAreaDoesNotCoverLede(page) {
+    await expect(page.locator(".lede")).toBeVisible();
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty("--safe-top", "47px");
+      window.scrollTo(0, 0);
+    });
+
+    const measured = await page.evaluate(() => {
+      const bar = document.querySelector(".topbar").getBoundingClientRect();
+      const ledeEl = document.querySelector(".lede");
+      const lede = ledeEl.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        lede.left + lede.width / 2,
+        lede.top + lede.height / 2,
+      );
+      return {
+        barBottom: bar.bottom,
+        ledeTop: lede.top,
+        ledeHit: Boolean(hit?.closest(".lede")),
+      };
+    });
+
+    expect(measured.ledeTop).toBeGreaterThanOrEqual(measured.barBottom);
+    expect(measured.ledeHit).toBe(true);
+    await expectNoHorizontalScroll(page);
+  }
+
   test("the request book shows both views and a typed intro", async ({
     page,
   }) => {
@@ -359,5 +394,21 @@ test.describe("the shell on a phone", () => {
     await expectTabs(page, "Plan types");
     await expectLede(page, "Plan types");
     await expectNoHorizontalScroll(page);
+  });
+
+  test("on a notched home screen the bar does not eat the intro", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/");
+    await expect(page.locator(".tbl-row")).toHaveCount(5);
+    await expectSafeAreaDoesNotCoverLede(page);
+  });
+
+  test("the plan-types intro also clears a notched bar", async ({ page }) => {
+    await mock(page);
+    await page.goto("/plan-types");
+    await expect(page.locator(".type-card")).toHaveCount(2);
+    await expectSafeAreaDoesNotCoverLede(page);
   });
 });

@@ -117,6 +117,10 @@
 <style>
   .shell {
     min-height: 100vh;
+    /* The dynamic viewport height, where it exists: on iOS a `100vh` page is
+       taller than the visible area while the toolbar is showing, so the footer
+       sits below the fold and a never-scrolls page still scrolls. */
+    min-height: 100dvh;
     display: flex;
     flex-direction: column;
     background: var(--bg);
@@ -125,9 +129,16 @@
 
   .topbar {
     position: sticky;
-    /* Not 0: on an iPhone home screen the status bar is drawn over the page, and
-       a bar pinned at 0 slides under the clock. */
-    top: var(--safe-top, 0px);
+    /* `top: 0`, and the notch inset as *padding* -- not as the sticky offset.
+       A sticky element with `top: 47px` is painted 47px lower while its flow
+       box stays where it was, so it covers the first 47px of the page. On a
+       notched iPhone that is the page's own title, and it is not a little
+       clipped: it is entirely behind the bar (measured: bar 47-102, lede
+       79-101, elementFromPoint at the lede returned .topbar-inner). Padding
+       grows the bar instead, so the flow moves with it, and the bar's own
+       background covers the status-bar band. */
+    top: 0;
+    padding-top: var(--safe-top, 0px);
     z-index: 20;
     /* Derived from the ground token, not a literal: the bar is the page
        colour at 88%, which is what makes the blur read as glass. */
