@@ -74,11 +74,17 @@
       customMessage="No plan types are registered — every submission will be rejected."
     />
   {:else}
-    <nav class="toc" aria-label="Plan types">
-      {#each data.types as type (type.name)}
-        <a href="#{type.anchor}">{type.name}</a>
-      {/each}
-    </nav>
+    {#if data.types.length > 1}
+      <!-- A table of contents for one entry is not a contents: clicking it
+           scrolled the page by a few pixels and lit the chip under the cursor,
+           which reads as a broken link rather than as navigation. Kept for the
+           day the registry holds more than one shape. -->
+      <nav class="toc" aria-label="Plan types">
+        {#each data.types as type (type.name)}
+          <a href="#{type.anchor}">{type.name}</a>
+        {/each}
+      </nav>
+    {/if}
 
     {#each data.types as type (type.name)}
       <section class="card type-card" id={type.anchor}>
@@ -130,7 +136,14 @@
 
 <style>
   .type-card {
+    /* .card is a surface, not a box with room in it: without this the h2 sits
+       on the border. */
+    padding: 14px 16px 12px;
     margin: 0 0 14px;
+    /* A dashboard row links straight to /plan-types#<type>. The bar is sticky,
+       so without this the card's own heading lands underneath it and the jump
+       looks like it went one row too far. */
+    scroll-margin-top: 72px;
   }
 
   .type-head {
