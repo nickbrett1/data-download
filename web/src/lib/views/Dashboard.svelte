@@ -8,7 +8,10 @@
    * them, where the interesting condition is a badge instead of a partition.
    *
    * Nothing here can approve or change a request: approval is a CLI verb with a
-   * scope this page cannot reach, and the token in the URL is `read` only.
+   * scope this page cannot reach, and the token in the URL is `read` only. That
+   * fact shapes the page -- there is no button, and no line of prose saying so
+   * either: a reader who came to look at the book does not need to be told what
+   * the book cannot do.
    */
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DataTable from "$lib/components/nb/DataTable.svelte";
@@ -119,8 +122,7 @@
   <p class="lede">The request book</p>
   <p class="sub-lede">
     Every download request in one list, newest first. The badge on the right
-    says why a row is worth looking at. Nothing here can approve or change a
-    request: approval is a CLI verb with a scope this page cannot reach.
+    says why a row is worth looking at.
   </p>
 
   {#if failure}

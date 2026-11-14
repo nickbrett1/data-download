@@ -190,18 +190,23 @@ test.describe("the request book", () => {
     await expect(page.locator(".topbar")).toContainText("the request book");
   });
 
-  test("the page states no phase policy", async ({ page }) => {
-    // "Phase 1: nothing advances past draft or blocked. Waiting on a plan is
-    // not breakage." was a notice above the list. It explained the badge
-    // vocabulary rather than the data, and the badge already says "Waiting on a
-    // plan" on the row itself - so it was a paragraph of glossary on a page
-    // whose whole job is to be read at a glance.
+  test("the intro says what the book is, not what it cannot do", async ({
+    page,
+  }) => {
+    // Two sentences were removed from above the list. "Phase 1: nothing
+    // advances past draft or blocked. Waiting on a plan is not breakage."
+    // explained the badge vocabulary, which the badge already speaks on the
+    // row itself. "Nothing here can approve or change a request" described an
+    // absence: the proof of it is that there is no button, and a reader who
+    // came to look at the book was being told what the book is not.
     await mock(page);
     await page.goto("/");
     await expect(page.locator(".tbl-row")).toHaveCount(5);
     const body = await page.locator("body").innerText();
     expect(body).not.toContain("Phase 1");
     expect(body).not.toContain("not breakage");
+    expect(body).not.toContain("approval is a CLI");
+    expect(body).not.toContain("cannot reach");
   });
 
   test("no console errors", async ({ page }) => {
