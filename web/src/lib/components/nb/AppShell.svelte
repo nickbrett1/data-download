@@ -4,10 +4,7 @@
    *
    * Replaces the bespoke top bars in stratechery-search, deepseek-balance and
    * data-download. Sticky header with a backdrop blur, wordmark + micro subtitle,
-   * back pill for non-root views, and a 68rem main. There is no footer unless
-   * the caller hands one in: a strip that said nothing but the design system's
-   * name was furniture on every page, and a strip repeating the navigation the
-   * bar already carries is a second way to do the one thing.
+   * back pill for non-root views, 68rem main, and a footer strip.
    *
    * Two slots, added in 1.4.0 because the three consumers all needed them and
    * all three had to bypass the block to get them:
@@ -37,6 +34,28 @@
    *                every consumer stops re-inventing it. `current` is the
    *                caller's truth (it knows its router); the block never
    *                guesses from the URL.
+   *   `embedded` -- true when the shell is not a page: a Homepage dashboard
+   *                card iframed into someone else's layout (1.11.0). A card is
+   *                not a viewport, so the shell must not claim one -- and this
+   *                is not cosmetic. `min-height: 100dvh` makes `<body>` at
+   *                least as tall as the iframe, so a widget that reports its
+   *                height to its parent measures the *viewport* instead of its
+   *                content, and every poll can only ever call itself bigger.
+   *                That is the exact feedback loop deepseek-balance fixed in
+   *                2026-09 and re-created by adopting this block. Embedded also
+   *                drops the default house footer (a card has no room for
+   *                chrome and the parent owns the surroundings); an explicit
+   *                `footer` snippet still renders, because then the consumer
+   *                asked for it.
+   *   `footer`  -- three states, not two (1.12.0). Omitted: the house strip on
+   *                a page, nothing in a card. A snippet: the caller's own strip.
+   *                `false`: no footer at all, on a page. data-download wanted
+   *                that -- "the page ends where the content ends" is asserted by
+   *                its own tests -- and its only options were to fork the block
+   *                (which is what it did, invisibly, until a diff found it) or
+   *                to have `embedded`'s rules applied to a page, losing the
+   *                min-height that a page needs. A system whose answer to "not
+   *                this one thing" is "fork it" gets forked.
    *
    * The bar and the main column also honour the safe-area insets on a phone, so
    * an app added to a home screen does not put its nav under the clock.
@@ -51,6 +70,7 @@
     statusTone = "ok",
     nav = [],
     navLabel = "Sections",
+    embedded = false,
     children,
     mark,
     actions,
@@ -59,7 +79,7 @@
   } = $props();
 </script>
 
-<div class="shell">
+<div class="shell" class:embedded>
   <header class="topbar" class:has-nav={nav?.length}>
     <div class="topbar-inner">
       <div class="brand">
@@ -106,10 +126,18 @@
     {@render children?.()}
   </main>
 
-  {#if footer}
+  {#if footer === false}
+    <!-- explicitly no footer: see the `footer` note above -->
+  {:else if footer}
     <footer class="footer">
       <div class="footer-inner">
         {@render footer()}
+      </div>
+    </footer>
+  {:else if !embedded}
+    <footer class="footer">
+      <div class="footer-inner">
+        <span class="micro">house design system · @nb</span>
       </div>
     </footer>
   {/if}
@@ -126,6 +154,16 @@
     flex-direction: column;
     background: var(--bg);
     color: var(--ink);
+  }
+
+  /* Embedded: a dashboard card in someone else's iframe, not a page. It must
+     not claim a viewport -- `min-height: 100dvh` here would make <body> at
+     least as tall as the iframe, so a widget that reports its own height to
+     the parent (Homepage's `homepage-iframe-resize`) would measure the frame
+     instead of its content and ask to grow on every poll. The shell is then
+     exactly as tall as what it contains. */
+  .shell.embedded {
+    min-height: 0;
   }
 
   .topbar {

@@ -38,7 +38,14 @@
   ];
 </script>
 
+<!--
+  `footer={false}`: this page ends where its content ends. The house strip is
+  app-shell's default, and this app's own tests assert there is none -- which
+  used to be true only because the block had been edited in place after it was
+  installed. It is a supported state since 1.12.0.
+-->
 <AppShell
+  footer={false}
   title="data-download"
   subtitle="plan types"
   nav={[
