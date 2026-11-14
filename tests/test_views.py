@@ -13,7 +13,7 @@ import sqlite3
 from datetime import timedelta
 from pathlib import Path
 
-from conftest import auth, iso, seed
+from conftest import INTENT_BODY, auth, iso, seed
 
 PLAN_JSON = json.dumps({"kind": "plan"}, sort_keys=True)
 
@@ -348,3 +348,102 @@ def test_icons_and_manifest_are_publicly_accessible(client):
         res = client.get(path)
         assert res.status_code == 200, f"{path} returned {res.status_code}"
         assert len(res.content) > 0
+
+
+# -- the request book as a list of names, and the page behind a row -----------
+
+
+def test_a_row_leads_with_the_subject_and_keeps_the_key(client, db_path):
+    """`#seq` and what was asked for, not 32 hex characters.
+
+    The id is a key: opaque on purpose, because it has to be collision-free and
+    stable forever. That is exactly what makes it unfit to be the first thing a
+    reader sees, so the row carries a label too -- derived server-side, because
+    "what is this request" is the read-model's opinion, not a rendering choice.
+    """
+    seed(
+        db_path,
+        [
+            {
+                "id": "req_0123456789abcdef0123456789abcdef",
+                "state": "blocked",
+                "body_kind": "intent",
+                "plan_type": None,
+                "plan_json": None,
+                "estimate_usd": None,
+                "plan_origin": None,
+                "blocked_reason": "awaiting_plan",
+                "params_json": json.dumps(
+                    {
+                        "dataset": "XNAS.ITCH",
+                        "schema": "mbo",
+                        "window": {"start": "2026-09-01", "end": "2026-09-02"},
+                    }
+                ),
+                "intent_json": json.dumps({"max_usd": 120}),
+                "why": "one September day of MBO for XNAS",
+            }
+        ],
+    )
+
+    row = _book(client)["rows"][0]
+    assert row["label"] == "XNAS.ITCH · mbo · 2026-09-01→2026-09-02"
+    assert row["short_id"] == "01234567", "the key is still there, abbreviated"
+    assert row["id"] == "req_0123456789abcdef0123456789abcdef"
+    assert row["why"] == "one September day of MBO for XNAS"
+    assert "params_json" not in row, "the raw column is not the page's business"
+
+
+def test_a_plan_row_is_labelled_by_its_type(client, db_path):
+    seed(db_path, [{"id": "req_plan", "state": "draft"}])
+    row = _book(client)["rows"][0]
+    assert row["label"] == "databento_batch_download"
+    assert row["short_id"] == "plan"
+
+
+def _detail(client, request_id, token="tok-read"):
+    return client.get(f"/ui/request/{request_id}.json?token={token}")
+
+
+def test_the_detail_view_carries_what_the_list_drops(client):
+    """The list is keys and badges; this is the why, the body, and the trail."""
+    filed = client.post("/v1/requests", json=INTENT_BODY, headers=auth()).json()
+    request_id = filed["request_id"]
+
+    detail = _detail(client, request_id)
+    assert detail.status_code == 200
+    body = detail.json()
+
+    assert body["id"] == request_id
+    assert body["facet"] == "waiting"
+    assert body["label"].startswith("OPRA.PILLAR · trades")
+    assert body["payload"]["why"] == INTENT_BODY["why"]
+    assert body["payload"]["max_usd"] == 120
+    assert body["payload"]["intent"]["intent"]["dataset"] == "OPRA.PILLAR"
+    assert body["payload"]["plan"] is None
+    assert [e["event"] for e in body["events"]] == ["submitted"]
+    assert body["events"][0]["actor_kind"] == "submitter"
+
+
+def test_the_detail_view_agrees_with_the_list_it_was_reached_from(client):
+    """Same age, same facet, same condition -- two answers to "why is this row
+    interesting" is the drift §7.8 warns about."""
+    filed = client.post("/v1/requests", json=INTENT_BODY, headers=auth()).json()
+    row = _book(client)["rows"][0]
+    detail = _detail(client, filed["request_id"]).json()
+    assert (detail["facet"], detail["blocked_reason"]) == (
+        row["facet"],
+        row["blocked_reason"],
+    )
+    assert abs(detail["age_seconds"] - row["age_seconds"]) <= 2
+
+
+def test_the_detail_view_is_read_scope_and_404s_cleanly(client):
+    filed = client.post("/v1/requests", json=INTENT_BODY, headers=auth()).json()
+    denied = _detail(client, filed["request_id"], token="tok-approve")
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "insufficient_scope"
+
+    missing = _detail(client, "req_nope")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "not_found"

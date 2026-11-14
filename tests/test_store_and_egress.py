@@ -84,3 +84,50 @@ def test_no_vendor_client_or_network_import(path: Path):
             imported.add(node.module)
     for module in imported:
         assert not module.startswith(FORBIDDEN_IMPORTS), f"{path.name} imports {module}"
+
+
+def test_an_older_store_gains_the_new_columns_on_start(tmp_path):
+    """A database created before `why`/`max_usd` were columns must keep working.
+
+    `CREATE TABLE IF NOT EXISTS` is a no-op on an existing file, so the two
+    columns have to be added before the schema -- whose `v_requests` selects
+    them -- is applied. The deployed store has rows in it, which makes this the
+    one migration path that actually runs in anger.
+    """
+    import sqlite3
+
+    from data_download.db import SCHEMA_PATH
+
+    path = tmp_path / "older.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(SCHEMA_PATH.read_text())
+    conn.execute(
+        "INSERT INTO requests (id, state, body_kind, plan_type, plan_json, "
+        "params_json, payload_hash, intent_json, estimate_usd, blocked_reason, "
+        "plan_origin, why, max_usd, created_at, updated_at) VALUES "
+        "('req_old', 'blocked', 'intent', NULL, NULL, '{}', 'hash-old', ?, NULL, "
+        "'awaiting_plan', NULL, NULL, NULL, '2026-11-14T00:00:00Z', '2026-11-14T00:00:00Z')",
+        ('{"intent": {"dataset": "XNAS.ITCH"}, "max_usd": 120, "why": "old"}',),
+    )
+    # Back to the shape the first deployment has: no columns, old view.
+    conn.executescript(
+        "DROP VIEW v_requests; "
+        "ALTER TABLE requests DROP COLUMN why; "
+        "ALTER TABLE requests DROP COLUMN max_usd;"
+    )
+    conn.commit()
+    conn.close()
+
+    settings = Settings(
+        db_path=str(path),
+        tokens={"tok": frozenset({"read"})},
+        plan_types_dir=REPO_ROOT / "plan_types",
+    )
+    with TestClient(create_app(settings)) as client:
+        book = client.get("/ui/dashboard.json?token=tok").json()
+
+    assert [row["id"] for row in book["rows"]] == ["req_old"]
+    # `why` is NULL for a row written before it was a column ...
+    assert book["rows"][0]["why"] is None
+    # ... and the ceiling still comes out of the verbatim intent body.
+    assert book["rows"][0]["max_usd"] == 120

@@ -96,9 +96,8 @@
   });
 
   const columns = [
-    { label: "request", width: "minmax(9rem, 1.3fr)" },
+    { label: "request", width: "minmax(11rem, 1.6fr)" },
     { label: "state", width: "7.5rem" },
-    { label: "type", width: "minmax(7rem, 1fr)" },
     { label: "estimate", align: "end" },
     { label: "age", align: "end" },
     { label: "why it matters", width: "minmax(10rem, 1.7fr)" },
@@ -151,20 +150,25 @@
       >
         {#snippet row(request)}
           {@const why = whyItMatters(request)}
-          <span class="id"><code title={request.id}>{request.id}</code></span>
+          <span>
+            <!-- A name, then the key. The id is opaque by design -- it is the
+                 durable handle, not a label -- so the row leads with `#seq` and
+                 the subject, and the id is the tooltip and the small mono line
+                 for the one reader who needs to paste it into a curl. -->
+            <a
+              class="req"
+              href={withToken(`/requests/${request.id}`)}
+              title={request.id}
+            >
+              <span class="req-num">#{request.seq}</span>
+              <span class="req-subject">{request.label}</span>
+            </a>
+            <code class="req-id">{request.short_id}</code>
+          </span>
           <span
             ><span class="pill {stateTone(request.state)}">{request.state}</span
             ></span
           >
-          <span>
-            {#if request.plan_type}
-              <a href={withToken(`/plan-types#${request.plan_type}`)}
-                >{request.plan_type}</a
-              >
-            {:else}
-              —
-            {/if}
-          </span>
           <span class="num">{usd(request.estimate_usd)}</span>
           <span class="num">{age(request.age_seconds)}</span>
           <span>
@@ -205,5 +209,38 @@
     margin: 18px 0 0;
     color: var(--ink-muted);
     font-size: 13px;
+  }
+
+  /* The name is the link; the key is the footnote. Both on one line, wrapping
+     to two on a phone rather than pushing the state badge off the row. */
+  .req {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 7px;
+    text-decoration: none;
+    color: var(--ink);
+  }
+
+  .req:hover .req-subject {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+
+  .req-num {
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-faint);
+    font-size: 11.5px;
+  }
+
+  .req-subject {
+    font-size: 13px;
+  }
+
+  .req-id {
+    display: block;
+    margin-top: 2px;
+    font-size: 10.5px;
+    color: var(--ink-faint);
+    letter-spacing: 0.02em;
   }
 </style>

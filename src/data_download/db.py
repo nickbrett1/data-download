@@ -48,6 +48,28 @@ def plan_hash(plan: Any) -> str:
     return hashlib.sha256(canonical_json(plan).encode("utf-8")).hexdigest()
 
 
+# Columns that arrived after the first deployment. `CREATE TABLE IF NOT EXISTS`
+# is a no-op on an existing database, so a new column has to be added by hand
+# before the schema (whose views select it) can be applied. Additive and
+# nullable only: this is not a migration system, it is the two lines that keep
+# a one-row store readable after a schema change.
+ADDED_COLUMNS = (
+    ("requests", "why", "TEXT"),
+    ("requests", "max_usd", "REAL"),
+)
+
+
+async def _add_missing_columns(conn: aiosqlite.Connection) -> None:
+    for table, column, decl in ADDED_COLUMNS:
+        async with conn.execute(f"PRAGMA table_info({table})") as cur:
+            present = {row["name"] for row in await cur.fetchall()}
+        if not present:  # a fresh database: `executescript` will create it
+            continue
+        if column not in present:
+            log.info("adding column %s.%s", table, column)
+            await conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 class Store:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -62,6 +84,7 @@ class Store:
         for pragma in WRITE_PRAGMAS:
             await conn.execute(pragma)
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
+        await _add_missing_columns(conn)
         await conn.executescript(schema)
         self._conn = conn
 
@@ -146,6 +169,20 @@ class Store:
             (limit,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+    async def overview_one(self, request_id: str) -> dict[str, Any] | None:
+        """One row of the same view the list is built from.
+
+        The detail page has to agree with the list it was reached from: same
+        age, same facet, same stuck condition. Recomputing those from the table
+        would be a second opinion, and two answers to "why is this row
+        interesting" is the drift §7.8 warns about.
+        """
+        async with self.conn.execute(
+            "SELECT * FROM v_requests WHERE id = ?", (request_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
 
     # -- write -------------------------------------------------------------
 

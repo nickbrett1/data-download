@@ -197,6 +197,8 @@ def _request_payload(row: dict[str, Any]) -> dict[str, Any]:
         "blocked_reason": row["blocked_reason"],
         "plan_origin": row["plan_origin"],
         "matched_profile": row["matched_profile"],
+        "why": row["why"] if "why" in row.keys() else None,
+        "max_usd": row["max_usd"] if "max_usd" in row.keys() else None,
         "plan_hash": row["plan_hash"],
         "code_ref": row["code_ref"],
         "landed_sha256": row["landed_sha256"],
@@ -222,6 +224,51 @@ def _summary_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 def _new_id() -> str:
     return "req_" + uuid.uuid4().hex
+
+
+def _params_of(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row.get("params_json")
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _label(row: dict[str, Any]) -> str:
+    """What the request *is*, in one line, for a page that shows a list of them.
+
+    The id is a key: 32 hex characters chosen so two requests cannot collide,
+    which is exactly what makes it useless as a name. The thing a reader wants
+    is the subject -- the plan type, or the dataset and window an intent names.
+    """
+    params = _params_of(row)
+    if row.get("plan_type"):
+        return str(row["plan_type"])
+    parts = [str(params.get(k)) for k in ("dataset", "schema") if params.get(k)]
+    window = params.get("window") or {}
+    if isinstance(window, dict) and window.get("start") and window.get("end"):
+        parts.append(f"{window['start']}→{window['end']}")
+    return " · ".join(parts) if parts else "—"
+
+
+def _book_row(row: dict[str, Any]) -> dict[str, Any]:
+    """One row of the request book.
+
+    `params_json` is the raw column, not the page's business: the label is
+    derived here (server-side, because "what is this request" is a read-model
+    opinion) and the payload stays small enough to hand the whole book over.
+    """
+    out = {k: v for k, v in row.items() if k != "params_json"}
+    out["label"] = _label(row)
+    # Eight characters is enough to tell two rows apart by eye and short enough
+    # to sit under a name. The full id is on the link's tooltip and in full on
+    # the detail page, which is where anyone copies it.
+    stem = row["id"][4:] if row["id"].startswith("req_") else row["id"]
+    out["short_id"] = stem[:8]
+    return out
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -334,6 +381,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "lease_until": None,
                 "landed_sha256": None,
                 "errors_json": None,
+                "why": body.get("why"),
+                "max_usd": body.get("max_usd"),
                 "created_at": now,
                 "updated_at": now,
             }
@@ -364,6 +413,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "lease_until": None,
                 "landed_sha256": None,
                 "errors_json": None,
+                "why": body.get("why"),
+                "max_usd": body.get("max_usd"),
                 "created_at": now,
                 "updated_at": now,
             }
@@ -473,7 +524,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/ui/dashboard.json")
     async def dashboard_json(request: Request) -> dict[str, Any]:
         auth.require_scope(request, "read", allow_query_token=True)
-        rows = [_with_facet(row) for row in await _store(request).overview()]
+        rows = [_book_row(_with_facet(row)) for row in await _store(request).overview()]
         keys = (*FACET_ORDER, "other")
         return {
             "rows": rows,
@@ -482,6 +533,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "facet_order": list(FACET_ORDER),
             "facet_labels": FACET_LABELS,
             "showing": "all",
+        }
+
+    @app.get("/ui/request/{request_id}.json")
+    async def request_detail_json(request: Request, request_id: str) -> dict[str, Any]:
+        """One request, in full: the why, the body it arrived as, its events.
+
+        The book is a list of keys; this is the answer to clicking one. What it
+        adds over `GET /v1/requests/{id}` is the *page's* shape -- the facet,
+        the label, the age as the view computes it -- and what it adds over the
+        list is everything the list deliberately drops: the human `why`, the
+        intent or the plan, and the append-only trail.
+        """
+        auth.require_scope(request, "read", allow_query_token=True)
+        store = _store(request)
+        row = await store.get_request(request_id)
+        if row is None:
+            raise errors.not_found(f"no request with id {request_id!r}")
+        # The view, not the table: a stuck condition and the age are the
+        # read-model's answers, and recomputing them here would be a second
+        # opinion that drifts.
+        view = await store.overview_one(request_id) or row
+        events = await store.events_for(request_id)
+        return {
+            **_book_row(_with_facet(view)),
+            "payload": {
+                "body_kind": row["body_kind"],
+                "plan_type": row["plan_type"],
+                "params": _params_of(row),
+                "intent": json.loads(row["intent_json"]) if row["intent_json"] else None,
+                "plan": json.loads(row["plan_json"]) if row["plan_json"] else None,
+                "max_usd": row["max_usd"],
+                "why": row["why"],
+            },
+            "identity": {
+                "plan_hash": row["plan_hash"],
+                "code_ref": row["code_ref"],
+                "landed_sha256": row["landed_sha256"],
+                "errors": json.loads(row["errors_json"]) if row["errors_json"] else [],
+            },
+            "events": [
+                {
+                    "id": e["id"],
+                    "ts": e["ts"],
+                    "actor_kind": e["actor_kind"],
+                    "event": e["event"],
+                    "detail": json.loads(e["detail_json"]) if e["detail_json"] else None,
+                }
+                for e in events
+            ],
         }
 
     @app.get("/ui/plan-types.json")
@@ -514,6 +614,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Read scope only. The same data is on `GET /v1/plan-types` for machines;
         this exists because "which fields does a Databento plan need?" should not
         require reading raw JSON in a terminal.
+        """
+        auth.require_scope(request, "read", allow_query_token=True)
+        return _index()
+
+    @app.get("/requests/{request_id}", response_class=HTMLResponse)
+    async def request_page(request: Request, request_id: str) -> FileResponse:
+        """One request: what it asked for, why, and what has happened to it.
+
+        A list of keys with nowhere to click is half a surface. §7.8's argument
+        is that the service deleted `ls` and owes the human the answers back;
+        "which one is this?" is one of them, and it is the one a 32-character id
+        cannot answer on its own.
         """
         auth.require_scope(request, "read", allow_query_token=True)
         return _index()

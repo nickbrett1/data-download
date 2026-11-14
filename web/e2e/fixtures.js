@@ -12,6 +12,10 @@ export const dashboard = {
   rows: [
     {
       id: "req_9f2a41c8",
+      seq: 1,
+      short_id: "9f2a41c8",
+      label: "databento_batch_download",
+      why: "a trades tape for the Oct expiry",
       state: "succeeded",
       plan_type: "databento_batch_download",
       estimate_usd: 0.0412,
@@ -27,6 +31,10 @@ export const dashboard = {
     },
     {
       id: "req_4c81be07",
+      seq: 2,
+      short_id: "4c81be07",
+      label: "databento_batch_download",
+      why: "the MBO window the resolver priced",
       state: "running",
       plan_type: "databento_batch_download",
       estimate_usd: 0.88,
@@ -44,6 +52,10 @@ export const dashboard = {
     },
     {
       id: "req_b31d5e0a",
+      seq: 3,
+      short_id: "b31d5e0a",
+      label: "databento_batch_download",
+      why: "one day of quotes for ES",
       state: "approved",
       plan_type: "databento_batch_download",
       estimate_usd: 1.5,
@@ -59,6 +71,10 @@ export const dashboard = {
     },
     {
       id: "req_0a7c9d33",
+      seq: 4,
+      short_id: "0a7c9d33",
+      label: "OPRA.PILLAR · trades · 2026-10-01→2026-10-08",
+      why: "Oct expiry cycle",
       state: "blocked",
       plan_type: "databento_batch_download",
       estimate_usd: 2,
@@ -68,12 +84,16 @@ export const dashboard = {
       had_errors: false,
       stuck_condition: null,
       stuck_detail: null,
-      blocked_reason: "waiting on a plan",
+      blocked_reason: "awaiting_plan",
       max_usd: 25,
       approved_unclaimed: false,
     },
     {
       id: "req_e55f10b2",
+      seq: 5,
+      short_id: "e55f10b2",
+      label: "databento_batch_download",
+      why: "backfill for the lake",
       state: "landed_with_errors",
       plan_type: "databento_batch_download",
       estimate_usd: 0.5,
@@ -180,6 +200,51 @@ export const planTypes = {
           },
         ],
       },
+    },
+  ],
+};
+
+// The page behind a row: what `/ui/request/<id>.json` answers. Kept beside the
+// book because the detail view is not a second read-model — it is one row of
+// the book plus the three things the list deliberately drops.
+export const requestDetail = {
+  ...dashboard.rows[3],
+  params_json: undefined,
+  payload: {
+    body_kind: "intent",
+    plan_type: null,
+    params: {
+      dataset: "OPRA.PILLAR",
+      schema: "trades",
+      window: { start: "2026-10-01", end: "2026-10-08" },
+    },
+    intent: {
+      kind: "intent",
+      intent: {
+        dataset: "OPRA.PILLAR",
+        schema: "trades",
+        window: { start: "2026-10-01", end: "2026-10-08" },
+      },
+      max_usd: 25,
+      why: "OPRA.PILLAR trades for the Oct expiry cycle",
+    },
+    plan: null,
+    max_usd: 25,
+    why: "OPRA.PILLAR trades for the Oct expiry cycle",
+  },
+  identity: {
+    plan_hash: null,
+    code_ref: null,
+    landed_sha256: null,
+    errors: [],
+  },
+  events: [
+    {
+      id: 1,
+      ts: "2026-11-13T09:01:00Z",
+      actor_kind: "submitter",
+      event: "submitted",
+      detail: { body_kind: "intent", blocked_reason: "awaiting_plan" },
     },
   ],
 };

@@ -6,10 +6,16 @@
 -- NOT NULL. `estimate_usd` is always NULL this phase because nothing prices
 -- anything.
 --
--- Columns §8.1 carries that this phase does not need yet (`max_usd`, `why`,
--- `actual_usd`, `owner`, `sdk_version`, `blocked_since`, `author_attempts`) are
--- not columns here. `max_usd` and `why` live inside `intent_json`, which is the
--- verbatim body (§7.9.1); the others arrive with the phases that use them.
+-- Columns §8.1 carries that this phase does not need yet (`actual_usd`, `owner`,
+-- `sdk_version`, `blocked_since`, `author_attempts`) are not columns here; they
+-- arrive with the phases that use them.
+--
+-- `why` and `max_usd` *are* columns, because §7.2 requires both on every submit
+-- and phase 1 was reading them out of `intent_json` only. That meant a plan
+-- body lost both silently: `validate_plan` returns the plan, and the projection
+-- kept nothing the caller said about it. The columns are nullable for rows
+-- written before this change, and `v_requests` falls back to `intent_json` so
+-- those rows still show their ceiling.
 
 CREATE TABLE IF NOT EXISTS requests (
   id               TEXT PRIMARY KEY,
@@ -29,6 +35,8 @@ CREATE TABLE IF NOT EXISTS requests (
   lease_until      TEXT,                   -- phase 3
   landed_sha256    TEXT,                   -- phase 5
   errors_json      TEXT,
+  why              TEXT,                   -- the human reason, verbatim (§7.2)
+  max_usd          REAL,                   -- the ceiling that travelled with the body
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
   CHECK (state IN ('draft','blocked','approved','running','succeeded','landed_with_errors','failed')),
@@ -188,10 +196,18 @@ SELECT id,
 -- `stuck_condition` is MIN(condition) because the four conditions are mutually
 -- exclusive by state today (approved / running / running / failed); the GROUP
 -- BY is there so a future overlap cannot duplicate a row in the list.
-CREATE VIEW IF NOT EXISTS v_requests AS
+--
+-- Dropped and recreated on every start, unlike the rest of this file. A view is
+-- a query, not data, and `CREATE VIEW IF NOT EXISTS` would leave a database
+-- created yesterday on yesterday's columns -- which is exactly how the new
+-- `why`/`params_json` columns would go missing on the one deployment that has
+-- rows in it.
+DROP VIEW IF EXISTS v_requests;
+CREATE VIEW v_requests AS
 SELECT r.id,
        r.rowid AS seq,
        r.state,
+       r.body_kind,
        r.plan_type,
        r.plan_origin,
        r.estimate_usd,
@@ -201,7 +217,11 @@ SELECT r.id,
        CAST((julianday('now') - julianday(r.created_at)) * 86400 AS INTEGER) AS age_seconds,
        CASE WHEN r.state = 'approved' THEN 1 ELSE 0 END AS approved_unclaimed,
        CASE WHEN r.state = 'landed_with_errors' THEN 1 ELSE 0 END AS had_errors,
-       json_extract(r.intent_json, '$.max_usd') AS max_usd,
+       -- One ceiling, from two places: the column this phase added, and the
+       -- verbatim intent body that older rows still carry it in.
+       COALESCE(r.max_usd, json_extract(r.intent_json, '$.max_usd')) AS max_usd,
+       r.why AS why,
+       r.params_json AS params_json,
        CASE WHEN r.blocked_reason = 'awaiting_plan' THEN 1 ELSE 0 END AS merge_can_clear,
        s.condition AS stuck_condition,
        s.detail AS stuck_detail

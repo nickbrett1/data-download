@@ -1,16 +1,18 @@
 import { expect, test } from "@playwright/test";
-import { dashboard, emptyBook, planTypes } from "./fixtures.js";
+import { dashboard, emptyBook, planTypes, requestDetail } from "./fixtures.js";
 
 // Resource-type routing, not a URL glob: `**/stats` would also match the
 // document navigation and hand the browser JSON instead of the app.
-async function mock(page, { requests, types } = {}) {
+async function mock(page, { requests, types, detail } = {}) {
   await page.route(
     "**/ui/**",
     (route) => {
       const url = route.request().url();
       const body = url.includes("plan-types")
         ? (types ?? planTypes)
-        : (requests ?? dashboard);
+        : url.includes("/ui/request/")
+          ? (detail ?? requestDetail)
+          : (requests ?? dashboard);
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -32,19 +34,18 @@ test.describe("the request book", () => {
     await expect(page.locator(".tbl-head .col-label")).toHaveText([
       "request",
       "state",
-      "type",
       "estimate",
       "age",
       "why it matters",
     ]);
 
-    // Six columns of a grid share one template, which is what makes `$0.0412`
+    // Five columns of a grid share one template, which is what makes `$0.0412`
     // sit under `$0.0412` rather than wherever the previous cell ended.
     const template = await page
       .locator(".tbl-row")
       .first()
       .evaluate((el) => getComputedStyle(el).gridTemplateColumns);
-    expect(template.split(" ").length).toBe(6);
+    expect(template.split(" ").length).toBe(5);
 
     const first = page.locator(".tbl-row").first();
     await expect(first).toContainText("$0.0412");
@@ -58,9 +59,7 @@ test.describe("the request book", () => {
     await mock(page);
     await page.goto("/");
 
-    const running = page
-      .locator(".tbl-row")
-      .filter({ hasText: "req_4c81be07" });
+    const running = page.locator(".tbl-row").filter({ hasText: "4c81be07" });
     // The row's state is `running`; the badge says why it is worth looking at.
     await expect(running.locator(".pill").first()).toHaveText("running");
     await expect(running.locator(".pill.bad")).toHaveText("lease_expired");
@@ -107,7 +106,7 @@ test.describe("the request book", () => {
       .click();
     await expect(page).toHaveURL(/show=todo/);
     await expect(page.locator(".tbl-row")).toHaveCount(1);
-    await expect(page.locator(".tbl-row")).toContainText("req_b31d5e0a");
+    await expect(page.locator(".tbl-row")).toContainText("b31d5e0a");
 
     // A filter that matches nothing says so, and offers the way back.
     await page.locator(".facet-option").filter({ hasText: "Running" }).click();
@@ -137,7 +136,7 @@ test.describe("the request book", () => {
     await mock(page);
     await page.goto("/?show=broken");
     await expect(page.locator(".tbl-row")).toHaveCount(1);
-    await expect(page.locator(".tbl-row")).toContainText("req_4c81be07");
+    await expect(page.locator(".tbl-row")).toContainText("4c81be07");
   });
 
   test("the token survives the link between the two pages", async ({
@@ -582,4 +581,83 @@ test.describe("the page ends where the content ends", () => {
       await expect(page.locator(".main-nav a")).toHaveCount(2);
     });
   }
+});
+
+test.describe("naming a request, and opening it", () => {
+  test("a row leads with a name, not with the key", async ({ page }) => {
+    await mock(page);
+    await page.goto("/");
+
+    const first = page.locator(".tbl-row").first();
+    // `#1` and what was asked for. The 32-hex key is the tooltip and the small
+    // line underneath — it is the durable handle, and a handle is not a name.
+    await expect(first.locator(".req-num")).toHaveText("#1");
+    await expect(first.locator(".req-subject")).toHaveText(
+      "databento_batch_download",
+    );
+    await expect(first.locator(".req-id")).toHaveText("9f2a41c8");
+
+    const link = first.locator("a.req");
+    await expect(link).toHaveAttribute("href", /\/requests\/req_9f2a41c8$/);
+    await expect(link).toHaveAttribute("title", "req_9f2a41c8");
+  });
+
+  test("an intent is named by what it asked for, not by its type", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/");
+    const intentRow = page.locator(".tbl-row").filter({ hasText: "0a7c9d33" });
+    await expect(intentRow.locator(".req-subject")).toHaveText(
+      "OPRA.PILLAR · trades · 2026-10-01→2026-10-08",
+    );
+  });
+
+  test("clicking a row opens the request, with the why and the trail", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/?token=tok-roundtrip");
+
+    await page
+      .locator(".tbl-row")
+      .filter({ hasText: "0a7c9d33" })
+      .locator("a.req")
+      .click();
+    await expect(page).toHaveURL(
+      /\/requests\/req_0a7c9d33\?token=tok-roundtrip$/,
+    );
+
+    await expect(page.locator(".detail-title")).toHaveText(
+      "#4 · OPRA.PILLAR · trades · 2026-10-01→2026-10-08",
+    );
+    await expect(page.locator(".detail-header .pill")).toHaveText("blocked");
+
+    // The two things the list could not show: the human sentence, and the key
+    // in full, because this is the page where someone copies it into a curl.
+    await expect(page.locator(".why")).toHaveText(
+      "OPRA.PILLAR trades for the Oct expiry cycle",
+    );
+    await expect(page.locator(".meta-grid")).toContainText("req_0a7c9d33");
+
+    // The append-only trail, which no list view has room for.
+    await expect(page.locator(".events li")).toHaveCount(1);
+    await expect(page.locator(".events li")).toContainText("submitted");
+    await expect(page.locator(".events li")).toContainText("submitter");
+
+    // The body the caller sent, verbatim, behind a disclosure.
+    await page.locator("details.raw summary").click();
+    await expect(page.locator("details.raw pre")).toContainText("OPRA.PILLAR");
+  });
+
+  test("the detail page is a page: a reload and a back link both work", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/requests/req_0a7c9d33?token=tok-roundtrip");
+    await expect(page.locator(".detail-title")).toContainText("#4 ·");
+    await page.reload();
+    await expect(page.locator(".detail-title")).toContainText("#4 ·");
+    await expect(page.locator(".back-btn")).toBeVisible();
+  });
 });

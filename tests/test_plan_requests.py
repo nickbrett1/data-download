@@ -217,3 +217,29 @@ def test_nothing_advances_past_draft_or_blocked(client):
     everything = client.get("/v1/requests", headers=auth()).json()["items"]
     assert everything, "expected rows"
     assert {row["state"] for row in everything} <= VALID_STATES
+
+
+def test_a_plan_keeps_the_why_and_the_ceiling_it_was_filed_with(client):
+    """A plan body is `{plan, max_usd, why}` (§7.2), and both survived only in
+    `intent_json` before this -- so a *plan* submission dropped them silently.
+
+    That was invisible while nothing read them: the book showed a derived badge
+    and the ceiling came out of the intent body. It stopped being invisible when
+    the detail page had a `why` to print and a `$0.0000` ceiling on a request
+    whose caller had sent 120.
+    """
+    body = {
+        **PLAN_BODY,
+        "max_usd": 40,
+        "why": "a two-day trades tape for the Oct expiry, to test the interpreter",
+    }
+    filed = _submit(client, body).json()
+
+    row = client.get(f"/v1/requests/{filed['request_id']}", headers=auth()).json()
+    assert row["why"] == body["why"]
+    assert row["max_usd"] == 40
+
+    detail = client.get(f"/ui/request/{filed['request_id']}.json?token=tok-read").json()
+    assert detail["payload"]["why"] == body["why"]
+    assert detail["max_usd"] == 40
+    assert detail["label"] == "databento_batch_download"
