@@ -107,6 +107,18 @@ code {
   color: var(--ink-muted);
   margin: 16px 0 6px;
 }
+.lede {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+.sub-lede {
+  margin: 0 0 16px;
+  color: var(--ink-muted);
+  max-width: 60ch;
+}
 .card {
   background: var(--bg-raised);
   border: 1px solid var(--line);
@@ -225,9 +237,22 @@ input[type="checkbox"] {
   border-left-color: var(--accent);
   background: var(--accent-soft);
 }
+.notice.accent {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+.notice code {
+  color: var(--mark);
+}
 .hint {
   color: var(--ink-muted);
   font-size: 11px;
+}
+.quiet {
+  color: var(--ink-faint);
+}
+.muted {
+  color: var(--ink-muted);
 }
 mark {
   background: var(--mark-bg);

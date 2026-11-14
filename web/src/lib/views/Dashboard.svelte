@@ -101,11 +101,14 @@
   ];
 </script>
 
-<AppShell title="data-download" subtitle="the request book">
-  {#snippet actions()}
-    <a class="pill" href={withToken("/plan-types")}>Plan types</a>
-  {/snippet}
-
+<AppShell
+  title="data-download"
+  subtitle="the request book"
+  nav={[
+    { label: "Requests", href: withToken("/"), current: true },
+    { label: "Plan types", href: withToken("/plan-types"), current: false },
+  ]}
+>
   {#snippet footer()}
     {#if data}
       <p>
@@ -120,6 +123,7 @@
     {/if}
   {/snippet}
 
+  <p class="lede">The request book</p>
   <p class="sub-lede">
     Every download request in one list, newest first. The badge on the right
     says why a row is worth looking at. Nothing here can approve or change a

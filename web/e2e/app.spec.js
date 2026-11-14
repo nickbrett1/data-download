@@ -145,7 +145,7 @@ test.describe("the request book", () => {
   }) => {
     await mock(page);
     await page.goto("/?token=tok-read");
-    // Both the bar action and the foot link, because the token is a browser
+    // Both the nav tab and the foot link, because the token is a browser
     // navigation in each case and neither can carry a header.
     const links = page.locator('a[href="/plan-types?token=tok-read"]');
     expect(await links.count()).toBeGreaterThan(0);
@@ -281,7 +281,7 @@ test.describe("plan types", () => {
     await expect(page.locator("form")).toHaveCount(0);
     await expect(page.locator("input")).toHaveCount(0);
     // The other page is one click away, and the token rides along or it 401s.
-    await expect(page.locator(".topbar")).toContainText("Request book");
+    await expect(page.locator(".main-nav a").first()).toHaveText("Requests");
   });
 
   test("an empty registry says every submission will be rejected", async ({
@@ -294,5 +294,70 @@ test.describe("plan types", () => {
     await expect(page.locator(".empty-state")).toContainText(
       "every submission will be rejected",
     );
+  });
+});
+
+// The regression that made the Svelte port worse than the Jinja pages on a
+// phone: navigation was a state pill (a destination that looked like a badge),
+// and the page intro had no type because `.lede` was never defined. Both are
+// measurable, so they are measured here at 390px rather than eyeballed.
+test.describe("the shell on a phone", () => {
+  test.use({ viewport: { width: 390, height: 780 } });
+
+  async function expectTabs(page, current) {
+    const tabs = page.locator(".main-nav a");
+    await expect(tabs).toHaveCount(2);
+    await expect(tabs).toHaveText(["Requests", "Plan types"]);
+    // Exactly one tab is the current page, and it is the right one.
+    await expect(page.locator('.main-nav a[aria-current="page"]')).toHaveCount(
+      1,
+    );
+    await expect(page.locator('.main-nav a[aria-current="page"]')).toHaveText(
+      current,
+    );
+    // Both tabs are reachable without scrolling the bar: a tab row that hides
+    // the second view is the bug this test exists for.
+    const fits = await page
+      .locator(".main-nav")
+      .evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+    expect(fits).toBe(true);
+  }
+
+  async function expectLede(page, text) {
+    const lede = page.locator(".lede");
+    await expect(lede).toHaveText(text);
+    const type = await lede.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { size: style.fontSize, weight: style.fontWeight };
+    });
+    expect(type.size).toBe("15px");
+    expect(type.weight).toBe("600");
+  }
+
+  async function expectNoHorizontalScroll(page) {
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+  }
+
+  test("the request book shows both views and a typed intro", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/");
+    await expect(page.locator(".tbl-row")).toHaveCount(5);
+    await expectTabs(page, "Requests");
+    await expectLede(page, "The request book");
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("plan types shows both views and a typed intro", async ({ page }) => {
+    await mock(page);
+    await page.goto("/plan-types");
+    await expect(page.locator(".type-card")).toHaveCount(2);
+    await expectTabs(page, "Plan types");
+    await expectLede(page, "Plan types");
+    await expectNoHorizontalScroll(page);
   });
 });

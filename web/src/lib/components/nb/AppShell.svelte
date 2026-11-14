@@ -24,6 +24,16 @@
    *                a gallery already has an h1 in the content, and the wordmark
    *                is then the name of the product, not the page. Without this
    *                the shell could only be used by renaming that heading.
+   *   `nav`     -- the app's top-level views, as `[{ label, href, current }]`
+   *                (1.7.0). This is a *slot the block fills*, not a snippet:
+   *                data-download put a pill-shaped link to its other view in
+   *                `actions`, and on a phone a state pill and a destination
+   *                look the same, so nobody could tell what views existed.
+   *                Navigation is the bar's job and it has one shape -- a tab
+   *                row with `aria-current="page"` -- so the block owns it and
+   *                every consumer stops re-inventing it. `current` is the
+   *                caller's truth (it knows its router); the block never
+   *                guesses from the URL.
    *
    * The bar and the main column also honour the safe-area insets on a phone, so
    * an app added to a home screen does not put its nav under the clock.
@@ -36,6 +46,8 @@
     backLabel = "← back",
     status = "",
     statusTone = "ok",
+    nav = [],
+    navLabel = "Sections",
     children,
     mark,
     actions,
@@ -45,7 +57,7 @@
 </script>
 
 <div class="shell">
-  <header class="topbar">
+  <header class="topbar" class:has-nav={nav?.length}>
     <div class="topbar-inner">
       <div class="brand">
         {#if mark}
@@ -65,6 +77,15 @@
           >
         </div>
       </div>
+      {#if nav?.length}
+        <nav class="main-nav" aria-label={navLabel}>
+          {#each nav as item}
+            <a href={item.href} aria-current={item.current ? "page" : undefined}
+              >{item.label}</a
+            >
+          {/each}
+        </nav>
+      {/if}
       {#if actions || status}
         <div class="bar-end">
           {#if actions}
@@ -139,6 +160,51 @@
     flex: none;
   }
 
+  /* The bar's navigation: the app's top-level views, always both visible.
+     A tab row, not pills -- a destination must not look like a state. */
+  .main-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    /* Hug the brand and let the bar's tail take the right-hand end. */
+    margin-right: auto;
+    min-width: 0;
+    overflow-x: auto;
+    /* A phone shows two or three views; a scrollbar under the tabs would eat
+       the bar's height, and momentum scrolling still reaches the rest. */
+    scrollbar-width: none;
+  }
+
+  .main-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .main-nav a {
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--ink-muted);
+    font-size: 12.5px;
+    line-height: 1.4;
+    white-space: nowrap;
+    /* 32px of touch target is the floor: the row's height is set by the
+       wordmark anyway, so a shorter tab only shrinks what you can hit. */
+    min-height: 30px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .main-nav a:hover {
+    background: var(--bg-hover);
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  .main-nav a[aria-current="page"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
   .bar-end {
     display: flex;
     align-items: center;
@@ -197,5 +263,23 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+  }
+
+  @media (max-width: 520px) {
+    /* With tabs in the bar, the micro subtitle is what to give up: it repeats
+       what the highlighted tab already says, and on a 360px phone it is the
+       thing that pushes the second view out of reach. The tabs stay. */
+    .has-nav .titles .micro {
+      display: none;
+    }
+
+    .topbar-inner {
+      gap: 10px;
+    }
+
+    .main-nav a {
+      padding: 4px 8px;
+      font-size: 12px;
+    }
   }
 </style>
