@@ -7,14 +7,32 @@
   --bg-sunken: rgba(15, 23, 42, 0.35);
   --bg-hover: rgba(51, 65, 85, 0.5);
   --bg-selected: #334155;
+  /* A ground that has content *behind* it: a sticky row or a sheet that must
+     stay legible while the page scrolls under it. It is `--bg` made nearly
+     opaque on purpose -- fully opaque would read as a second page, and a
+     translucent `--bg-raised` lets the text underneath ghost through. */
+  --bg-overlay: rgba(15, 23, 42, 0.93);
   --line: rgba(148, 163, 184, 0.14);
   --line-strong: rgba(148, 163, 184, 0.25);
   --ink: #e2e8f0;
   --ink-dim: #cbd5e1;
   --ink-muted: rgba(226, 232, 240, 0.62);
   --ink-faint: rgba(226, 232, 240, 0.42);
+  /* The top of the ink ramp, for the two states where the text is the point:
+     a heading you are reading and the thing under the pointer. `--ink` is body
+     text; hover and "this is the page you are on" both ask for one step more
+     emphasis than body text, and without a role for it every consumer wrote
+     `#fff` -- a pure white the ground was deliberately not chosen for. */
+  --ink-strong: #f1f5f9;
   --accent: #7dd3fc;
   --accent-soft: rgba(125, 211, 252, 0.14);
+  /* An accent *hairline*: the border of something the accent has picked out --
+     a chip that is on, the button under the pointer. `--line` is the neutral
+     hairline; this is the same idea in the accent colour, in two weights, so a
+     selected state can be told from a hovered one without inventing a third
+     opacity in each component. */
+  --accent-line: rgba(125, 211, 252, 0.4);
+  --accent-line-strong: rgba(125, 211, 252, 0.55);
   --ok: #6ee7b7;
   --ok-bg: rgba(52, 211, 153, 0.15);
   --warn: #fdba74;
@@ -29,6 +47,12 @@
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
+  /* A control's height, as a role rather than a number in each block. Desktop
+     screens want a compact 32px button; a phone wants 44px, which is the
+     smallest thing a thumb reliably hits (Apple HIG, WCAG 2.5.5). No block here
+     reads it yet -- data-download uses none of the blocks that do -- but it is
+     part of the theme, so it is part of this file. */
+  --tap: 2rem;
   --radius: 8px;
   --radius-sm: 6px;
   --radius-pill: 999px;
@@ -168,7 +192,7 @@ code {
 }
 .seg button.on {
   background: var(--bg-selected);
-  color: #f1f5f9;
+  color: var(--ink-strong);
 }
 .seg button:disabled {
   opacity: 0.35;
@@ -186,7 +210,7 @@ code {
 }
 .btn:hover:not(:disabled) {
   background: var(--bg-hover);
-  color: #f1f5f9;
+  color: var(--ink-strong);
 }
 .btn:disabled {
   opacity: 0.35;
@@ -194,7 +218,7 @@ code {
 }
 .btn.primary {
   background: var(--accent-soft);
-  border-color: rgba(125, 211, 252, 0.4);
+  border-color: var(--accent-line);
   color: var(--accent);
 }
 input[type="search"],
