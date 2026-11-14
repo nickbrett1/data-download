@@ -17,12 +17,8 @@
   {% include "_theme.html" %}
 </head>
 <body>
-  <header class="top">
-    <span class="brand">data-download<span class="slash">/</span><span class="sub">requests</span></span>
-    <span class="pill info">read-only</span>
-    <span class="spacer"></span>
-    <span class="micro">{{ generated_at }}</span>
-  </header>
+  {% set active = "requests" %}
+  {% include "_header.html" %}
 
   <main>
     <p class="lede">The request book</p>
@@ -124,9 +120,8 @@
 
     <div class="foot">
       <p>
-        Plan types may be filed:
-        {% for t in registry %}<code>{{ t.name }}</code> <span class="muted">v{{ t.version }}</span>{% if not loop.last %}, {% endif %}{% else %}none registered{% endfor %}.
-        <a href="/plan-types{% if query_token %}?token={{ query_token }}{% endif %}">Browse their schemas &rarr;</a>
+        Plan types: {{ registry|length }} registered &middot; browse them in the
+        <em>Plan types</em> tab &middot; machine-readable at <code>GET /v1/plan-types</code>.
       </p>
       <p class="muted">generated {{ generated_at }} &middot; store <code>{{ db_path }}</code> &middot; read-only, no authority</p>
     </div>

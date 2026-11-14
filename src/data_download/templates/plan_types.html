@@ -16,9 +16,6 @@
   <title>data-download — plan types</title>
   {% include "_theme.html" %}
   <style>
-    a.brand { color: var(--ink); }
-    .brand.slash { color: var(--ink-faint); }
-
     .type-card { margin: 0 0 14px; }
 
     .type-head {
@@ -109,14 +106,8 @@
   </style>
 </head>
 <body>
-  <header class="top">
-    <a class="brand" href="/{% if query_token %}?token={{ query_token }}{% endif %}">data-download</a>
-    <span class="brand slash">/</span>
-    <span class="brand sub">plan types</span>
-    <span class="pill info">read-only</span>
-    <span class="spacer"></span>
-    <span class="micro">{{ generated_at }}</span>
-  </header>
+  {% set active = "plans" %}
+  {% include "_header.html" %}
 
   <main>
     <p class="lede">Plan types</p>

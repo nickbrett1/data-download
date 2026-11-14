@@ -1,0 +1,17 @@
+{# The one sticky header. `active` is set by the page before including this:
+   "requests" or "plans". Links carry ?token= because a plain navigation cannot
+   set an Authorization header. #}
+  <header class="top">
+    <a class="brand" href="/{% if query_token %}?token={{ query_token }}{% endif %}">data-download</a>
+    <nav class="tabs" aria-label="Sections">
+      <a class="tab{{ ' on' if active == 'requests' else '' }}"
+         href="/{% if query_token %}?token={{ query_token }}{% endif %}"
+         {% if active == 'requests' %}aria-current="page"{% endif %}>Requests</a>
+      <a class="tab{{ ' on' if active == 'plans' else '' }}"
+         href="/plan-types{% if query_token %}?token={{ query_token }}{% endif %}"
+         {% if active == 'plans' %}aria-current="page"{% endif %}>Plan types</a>
+    </nav>
+    <span class="pill info">read-only</span>
+    <span class="spacer"></span>
+    <span class="micro">{{ generated_at }}</span>
+  </header>

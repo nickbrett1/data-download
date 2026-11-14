@@ -81,8 +81,36 @@
       color: var(--ink);
     }
 
-    .brand .slash { color: var(--ink-faint); font-weight: 400; margin: 0 2px; }
-    .brand .sub { color: var(--ink-muted); font-weight: 400; }
+    a.brand { color: var(--ink); }
+    a.brand:hover { text-decoration: none; color: var(--accent); }
+
+    /* top-level tabs: the page's two subjects, in the header, not in a foot */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      margin-left: 8px;
+    }
+
+    .tab {
+      padding: 4px 10px;
+      border-radius: var(--radius-sm);
+      color: var(--ink-muted);
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+
+    .tab:hover {
+      background: var(--bg-hover);
+      color: var(--ink);
+      text-decoration: none;
+    }
+
+    .tab.on {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
 
     .spacer { flex: 1 1 auto; }
     .top .micro { white-space: nowrap; }

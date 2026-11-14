@@ -71,3 +71,22 @@ def test_html_pages_are_never_cached(client):
         res = client.get(path)
         assert res.status_code == 200, path
         assert "no-store" in res.headers.get("cache-control", ""), path
+
+
+def test_header_tabs_mark_which_page_you_are_on(client):
+    """Both subjects are reachable in one click from either page."""
+    requests_page = client.get("/?token=tok-read").text
+    plans_page = client.get("/plan-types?token=tok-read").text
+
+    for html in (requests_page, plans_page):
+        assert 'class="tabs"' in html
+        assert ">Requests</a>" in html
+        assert ">Plan types</a>" in html
+        # the token rides along, or the tab would 401
+        assert 'href="/plan-types?token=tok-read"' in html
+
+    assert 'class="tab on"' in requests_page
+    assert 'aria-current="page"' in requests_page
+    # exactly one tab is active on each page
+    assert requests_page.count('class="tab on"') == 1
+    assert plans_page.count('class="tab on"') == 1
