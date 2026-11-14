@@ -53,6 +53,12 @@ steps:
       - npm ci --no-audit --no-fund
       - npm run lint
       - npm run build
+      # The browser has to match the library, not the image tag: `npm ci`
+      # resolves @playwright/test to the newest 1.65.x, while the image is
+      # tagged v1.65.0 and ships *its* browser build -- a mismatch exits 1 with
+      # no useful message. Installing here also means the step does not break
+      # the day the image tag lags.
+      - npx playwright install --with-deps chromium
       # The suite mocks /ui/*.json: pytest owns the server contract, this owns
       # the render, so it needs neither Python nor a database.
       - npx playwright test
