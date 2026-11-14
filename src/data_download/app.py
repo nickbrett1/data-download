@@ -69,6 +69,85 @@ def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
         facet = "other"
     return {**row, "facet": facet, "facet_label": FACET_LABELS.get(facet, facet.title())}
 
+
+def _type_label(spec: dict[str, Any]) -> str:
+    """A human word for a JSON-Schema node, without inventing a type system."""
+    kind = spec.get("type")
+    if kind is None and "enum" in spec:
+        return "one of"
+    if kind is None and "const" in spec:
+        return "fixed"
+    kind = kind or "any"
+    if kind == "array":
+        items = spec.get("items") or {}
+        inner = _type_label(items) if isinstance(items, dict) and items else "any"
+        return f"list of {inner}"
+    return str(kind)
+
+
+def _constraints(spec: dict[str, Any]) -> list[str]:
+    """The bits of a schema node a person needs to fill it in correctly.
+
+    Deliberately not a general JSON-Schema renderer: this prints the keywords
+    our registry actually uses, so an unexpected keyword shows up as a visible
+    gap rather than being silently prettified into something untrue.
+    """
+    out: list[str] = []
+    if "enum" in spec:
+        out.append("one of " + ", ".join(str(v) for v in spec["enum"]))
+    if "const" in spec:
+        out.append(f"must be {spec['const']!r}")
+    if "pattern" in spec:
+        out.append(f"pattern {spec['pattern']}")
+    if "minLength" in spec:
+        out.append(f"min length {spec['minLength']}")
+    if "minItems" in spec:
+        out.append(f"at least {spec['minItems']} item(s)")
+    if "default" in spec:
+        out.append(f"defaults to {spec['default']!r}")
+    return out
+
+
+def _schema_view(schema: dict[str, Any]) -> dict[str, Any]:
+    """Flatten one params_schema into rows a person can read.
+
+    Property order follows the YAML, which is the author's ordering and usually
+    the order you would fill the fields in. `required` is a set, so it becomes a
+    badge rather than its own section - knowing a field exists matters more than
+    which paragraph of the spec declared it mandatory.
+    """
+    required = set(schema.get("required") or [])
+    properties = schema.get("properties") or {}
+    fields = []
+    for name, spec in properties.items():
+        spec = spec if isinstance(spec, dict) else {}
+        fields.append(
+            {
+                "name": name,
+                "required": name in required,
+                "type": _type_label(spec),
+                "constraints": _constraints(spec),
+                "description": (spec.get("description") or "").strip(),
+            }
+        )
+    return {
+        "fields": fields,
+        "required_count": len(required),
+        "optional_count": max(len(fields) - len(required), 0),
+        "closed": schema.get("additionalProperties") is False,
+        "raw": json.dumps(schema, indent=2, sort_keys=False),
+    }
+
+
+def _plan_type_view(entry: Any) -> dict[str, Any]:
+    full = entry.full_entry()
+    return {
+        **full,
+        "anchor": entry.name,
+        "schema": _schema_view(full.get("params_schema") or {}),
+        "on_failure": sorted(entry.on_failure_allowed),
+    }
+
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
@@ -395,6 +474,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "registry": registry.all(),
                 "generated_at": utcnow(),
                 "db_path": settings.db_path,
+            },
+        )
+
+    @app.get("/plan-types", response_class=HTMLResponse)
+    async def plan_types_page(request: Request) -> HTMLResponse:
+        """The browse view for the registry: what may be filed, and as what.
+
+        Read scope only. The same data is on `GET /v1/plan-types` for machines;
+        this exists because "which fields does a Databento plan need?" should not
+        require reading raw JSON in a terminal.
+        """
+        auth.require_scope(request, "read", allow_query_token=True)
+        return templates.TemplateResponse(
+            request=request,
+            name="plan_types.html",
+            context={
+                "types": [_plan_type_view(entry) for entry in registry.all()],
+                "query_token": request.query_params.get("token") or "",
+                "generated_at": utcnow(),
             },
         )
 
