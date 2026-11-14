@@ -120,10 +120,6 @@
   ]}
 >
   <p class="lede">The request book</p>
-  <p class="sub-lede">
-    Every download request in one list, newest first. The badge on the right
-    says why a row is worth looking at.
-  </p>
 
   {#if failure}
     <EmptyState cause="error" customMessage={failure} />

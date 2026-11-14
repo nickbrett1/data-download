@@ -207,6 +207,11 @@ test.describe("the request book", () => {
     expect(body).not.toContain("not breakage");
     expect(body).not.toContain("approval is a CLI");
     expect(body).not.toContain("cannot reach");
+
+    // The paragraph itself is gone too: three sentences of intro above six
+    // rows was most of the page. The title says what the page is, the badge
+    // says why a row matters, and the filter strip says what is in the book.
+    await expect(page.locator(".sub-lede")).toHaveCount(0);
   });
 
   test("no console errors", async ({ page }) => {
