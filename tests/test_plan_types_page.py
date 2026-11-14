@@ -108,3 +108,14 @@ def test_brand_carries_the_app_mark(client):
         assert 'fill="currentColor"' in html, path
         # it lives in the header, before the tabs
         assert html.index('class="mark"') < html.index('class="tabs"'), path
+
+
+def test_header_says_nothing_that_is_not_actionable(client):
+    """A status with no action attached is noise: the header keeps the mark,
+    the tabs, and nothing else."""
+    html = client.get("/?token=tok-read").text
+    header = html[html.index("<header"):html.index("</header>")]
+    assert "read-only" not in header
+    assert "class=\"spacer\"" not in header
+    # the useful version of that fact lives in the page, in words
+    assert "approval is a CLI verb" in html
