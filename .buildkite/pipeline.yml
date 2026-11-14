@@ -59,9 +59,15 @@ steps:
       # no useful message. Installing here also means the step does not break
       # the day the image tag lags.
       - npx playwright install --with-deps chromium
+      # `--list` first: it proves the config, the fixture imports and the
+      # browser are all findable without running anything, and it is the one
+      # line of output that survives even when the run itself stays silent.
+      - npx playwright test --list
       # The suite mocks /ui/*.json: pytest owns the server contract, this owns
       # the render, so it needs neither Python nor a database.
-      - npx playwright test
+      # `--reporter=line` writes a line per test as it starts, so a suite that
+      # dies mid-way still leaves a trail.
+      - npx playwright test --reporter=line
 
   - label: ":male-doctor: Smoke test image (starts and serves HTTP)"
     key: docker_smoke
