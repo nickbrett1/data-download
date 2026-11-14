@@ -23,9 +23,16 @@ export default defineConfig({
   webServer: {
     // The frontend is assumed built: `npm run build` is the step before this one,
     // locally and in CI.
-    command: `npx vite preview --port ${port} --strictPort`,
+    // `--host 127.0.0.1` explicitly: in a container the default bind (localhost)
+    // can resolve to ::1 while the readiness probe asks 127.0.0.1, and the
+    // only symptom of that is a silent 60s timeout.
+    command: `npx vite preview --host 127.0.0.1 --port ${port} --strictPort`,
     url: `http://127.0.0.1:${port}/`,
     reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
+    timeout: 120_000,
+    // Ignored by default, and then a server that dies on startup is invisible:
+    // the suite just times out with no clue why.
+    stdout: "pipe",
+    stderr: "pipe",
   },
 });
