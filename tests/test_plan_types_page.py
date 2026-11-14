@@ -90,3 +90,11 @@ def test_header_tabs_mark_which_page_you_are_on(client):
     # exactly one tab is active on each page
     assert requests_page.count('class="tab on"') == 1
     assert plans_page.count('class="tab on"') == 1
+
+
+def test_render_time_appears_once_in_the_foot_not_the_header(client):
+    """A per-request page has no meaningful "as of" in its header."""
+    for path in ("/?token=tok-read", "/plan-types?token=tok-read"):
+        html = client.get(path).text
+        assert html.count("generated ") == 1, path
+        assert html.index("generated ") > html.index("<main>"), path
