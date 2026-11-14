@@ -63,3 +63,11 @@ def test_plan_types_page_is_read_only(client):
 def test_dashboard_links_to_the_plan_type_browser(client):
     html = client.get("/?token=tok-read").text
     assert 'href="/plan-types?token=tok-read"' in html
+
+
+def test_html_pages_are_never_cached(client):
+    """A stale page would show a book that is not the book."""
+    for path in ("/?token=tok-read", "/plan-types?token=tok-read"):
+        res = client.get(path)
+        assert res.status_code == 200, path
+        assert "no-store" in res.headers.get("cache-control", ""), path

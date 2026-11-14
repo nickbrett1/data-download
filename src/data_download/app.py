@@ -47,6 +47,12 @@ FACET_LABELS = {
 }
 TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
 
+# Both HTML pages are a view of live state, and both may carry `?token=` in the
+# URL. A cached copy would show a stale book to a reader who has no idea it is
+# stale, so: never store. Browsers were otherwise free to heuristically cache
+# these because we send no validators at all.
+NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
+
 
 def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
     """Attach the one label that explains why this row is interesting.
@@ -460,6 +466,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
+            headers=NO_STORE,
             context={
                 "rows": visible,
                 "total": len(rows),
@@ -489,6 +496,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request=request,
             name="plan_types.html",
+            headers=NO_STORE,
             context={
                 "types": [_plan_type_view(entry) for entry in registry.all()],
                 "query_token": request.query_params.get("token") or "",
