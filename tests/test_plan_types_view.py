@@ -85,3 +85,15 @@ def test_a_type_is_anchored_and_closed(client):
     )
     # the file a reader would open to change it
     assert first["source"].endswith(".yaml")
+
+
+def test_the_schema_declares_its_own_dialect(client):
+    """The spec version is a property of the document, not a caption.
+
+    A reader who copies the schema out of the page gets the dialect with it, so
+    no one has to guess which JSON Schema rules apply - and the UI does not have
+    to print a bare date that reads like data provenance.
+    """
+    first = _view(client)["types"][0]
+    schema = json.loads(first["schema"]["raw"])
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"

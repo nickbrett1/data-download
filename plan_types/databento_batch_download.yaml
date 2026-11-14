@@ -13,6 +13,10 @@ description: >-
   manifest, metadata and condition receipts.
 
 params_schema:
+  # The dialect this schema is written in. Declared here rather than in the
+  # page's heading: it is a property of the document, and a validator that
+  # reads the file should not need a caption elsewhere to know the rules.
+  $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   additionalProperties: false
   required: [dataset, schema, symbols, stype_in, start, end]

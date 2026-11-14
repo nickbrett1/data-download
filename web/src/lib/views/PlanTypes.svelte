@@ -143,7 +143,7 @@
         </dl>
 
         <details>
-          <summary>JSON schema (Draft 2020-12)</summary>
+          <summary>Raw JSON schema</summary>
           <pre>{type.schema.raw}</pre>
         </details>
       </section>
