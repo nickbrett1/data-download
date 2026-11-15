@@ -19,7 +19,7 @@
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import FilterPanel from "$lib/components/nb/FilterPanel.svelte";
   import { getView, withToken } from "$lib/api";
-  import { age, stateTone, usd, whyItMatters } from "$lib/format";
+  import { filed, stateTone, usd, whyItMatters } from "$lib/format";
 
   const FACET_LABELS = {
     broken: "Broken",
@@ -99,7 +99,7 @@
     { label: "request", width: "minmax(11rem, 1.6fr)" },
     { label: "state", width: "7.5rem" },
     { label: "estimate", align: "end" },
-    { label: "age", align: "end" },
+    { label: "filed", align: "end" },
     { label: "why it matters", width: "minmax(10rem, 1.7fr)" },
   ];
 </script>
@@ -151,10 +151,12 @@
         {#snippet row(request)}
           {@const why = whyItMatters(request)}
           <span>
-            <!-- A name, then the key. The id is opaque by design -- it is the
+            <!-- A name, not a key. The id is opaque by design -- it is the
                  durable handle, not a label -- so the row leads with `#seq` and
-                 the subject, and the id is the tooltip and the small mono line
-                 for the one reader who needs to paste it into a curl. -->
+                 the subject, the second line says who is being asked, and the
+                 id survives only as the tooltip. The link's `::after` covers
+                 the row, so the whole line is the target rather than the three
+                 words in it. -->
             <a
               class="req"
               href={withToken(`/requests/${request.id}`)}
@@ -163,14 +165,14 @@
               <span class="req-num">#{request.seq}</span>
               <span class="req-subject">{request.label}</span>
             </a>
-            <code class="req-id">{request.short_id}</code>
+            <span class="req-vendor">{request.vendor || "—"}</span>
           </span>
           <span
             ><span class="pill {stateTone(request.state)}">{request.state}</span
             ></span
           >
           <span class="num">{usd(request.estimate_usd)}</span>
-          <span class="num">{age(request.age_seconds)}</span>
+          <span class="num filed">{filed(request.created_at)}</span>
           <span>
             {#if why}
               <span class="pill {why.tone}" title={why.title ?? ""}
@@ -211,17 +213,40 @@
     font-size: 13px;
   }
 
-  /* The name is the link; the key is the footnote. Both on one line, wrapping
-     to two on a phone rather than pushing the state badge off the row. */
+  /* The name is the link, and the link is the row: `::after` stretches it over
+     the nearest positioned ancestor, which is why `:global(.tbl-row)` is
+     relative. One anchor, one tab stop, and a hit area the width of the line.
+
+     The first cell has to stop clipping for that to work -- the block's
+     `.tbl-row :global(*)` rule gives every cell `overflow: hidden` so a long
+     value cannot shift the columns. `.req-subject` clips itself instead, which
+     keeps the ellipsis and lets the overlay escape. */
+  :global(.tbl-row:has(.req)) {
+    position: relative;
+    cursor: pointer;
+  }
+
+  :global(.tbl-row:has(.req) > :first-child) {
+    overflow: visible;
+  }
+
   .req {
     display: inline-flex;
     align-items: baseline;
     gap: 7px;
+    max-width: 100%;
     text-decoration: none;
     color: var(--ink);
   }
 
-  .req:hover .req-subject {
+  .req::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  /* Hover belongs to the row, because the row is what the link covers. */
+  :global(.tbl-row:has(.req):hover) .req-subject {
     color: var(--accent);
     text-decoration: underline;
   }
@@ -234,13 +259,22 @@
 
   .req-subject {
     font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .req-id {
+  /* The vendor under the name: the same place the opaque key used to sit, and
+     the answer to the question the key never answered. */
+  .req-vendor {
     display: block;
     margin-top: 2px;
     font-size: 10.5px;
-    color: var(--ink-faint);
-    letter-spacing: 0.02em;
+    color: var(--ink-muted);
+  }
+
+  .filed {
+    color: var(--ink-dim);
+    white-space: nowrap;
   }
 </style>

@@ -12,9 +12,10 @@ export const dashboard = {
   rows: [
     {
       id: "req_9f2a41c8",
+      created_at: "2026-11-14T23:10:00Z",
       seq: 1,
-      short_id: "9f2a41c8",
       label: "databento_batch_download",
+      vendor: "Databento",
       why: "a trades tape for the Oct expiry",
       state: "succeeded",
       plan_type: "databento_batch_download",
@@ -31,9 +32,10 @@ export const dashboard = {
     },
     {
       id: "req_4c81be07",
+      created_at: "2026-11-14T23:53:00Z",
       seq: 2,
-      short_id: "4c81be07",
       label: "databento_batch_download",
+      vendor: "Databento",
       why: "the MBO window the resolver priced",
       state: "running",
       plan_type: "databento_batch_download",
@@ -52,9 +54,10 @@ export const dashboard = {
     },
     {
       id: "req_b31d5e0a",
+      created_at: "2026-11-14T21:40:00Z",
       seq: 3,
-      short_id: "b31d5e0a",
       label: "databento_batch_download",
+      vendor: "Databento",
       why: "one day of quotes for ES",
       state: "approved",
       plan_type: "databento_batch_download",
@@ -71,12 +74,13 @@ export const dashboard = {
     },
     {
       id: "req_0a7c9d33",
+      created_at: "2026-11-13T09:00:00Z",
       seq: 4,
-      short_id: "0a7c9d33",
       label: "OPRA.PILLAR · trades · 2026-10-01→2026-10-08",
+      vendor: "Databento",
       why: "Oct expiry cycle",
       state: "blocked",
-      plan_type: "databento_batch_download",
+      plan_type: null,
       estimate_usd: 2,
       age_seconds: 90000,
       facet: "waiting",
@@ -90,9 +94,10 @@ export const dashboard = {
     },
     {
       id: "req_e55f10b2",
+      created_at: "2026-11-12T15:20:00Z",
       seq: 5,
-      short_id: "e55f10b2",
       label: "databento_batch_download",
+      vendor: "Databento",
       why: "backfill for the lake",
       state: "landed_with_errors",
       plan_type: "databento_batch_download",
@@ -149,6 +154,7 @@ export const planTypes = {
     {
       name: "databento_batch_download",
       version: 3,
+      vendor: "Databento",
       anchor: "databento_batch_download",
       description:
         "One batch download from Databento, priced before it is approved.",

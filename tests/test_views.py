@@ -292,6 +292,14 @@ def test_the_view_carries_no_server_trivia(client, db_path):
     assert "generated_at" not in types
 
 
+def test_a_plan_type_card_names_its_vendor(client):
+    """The type's name carries the vendor as a prefix, which is not the same
+    thing as saying who sells the data to a reader who does not decode
+    `databento_batch_download`."""
+    types = client.get("/ui/plan-types.json?token=tok-read").json()["types"]
+    assert [t["vendor"] for t in types] == ["Databento"]
+
+
 def test_the_view_accepts_a_query_token(client, db_path):
     """A browser cannot set an Authorization header on a plain navigation, so
     the token has to be accepted in the URL - on the view as well as the page."""
@@ -388,8 +396,9 @@ def test_a_row_leads_with_the_subject_and_keeps_the_key(client, db_path):
 
     row = _book(client)["rows"][0]
     assert row["label"] == "XNAS.ITCH · mbo · 2026-09-01→2026-09-02"
-    assert row["short_id"] == "01234567", "the key is still there, abbreviated"
     assert row["id"] == "req_0123456789abcdef0123456789abcdef"
+    # Not even abbreviated: a row shows no part of the key.
+    assert "short_id" not in row
     assert row["why"] == "one September day of MBO for XNAS"
     assert "params_json" not in row, "the raw column is not the page's business"
 
@@ -398,7 +407,64 @@ def test_a_plan_row_is_labelled_by_its_type(client, db_path):
     seed(db_path, [{"id": "req_plan", "state": "draft"}])
     row = _book(client)["rows"][0]
     assert row["label"] == "databento_batch_download"
-    assert row["short_id"] == "plan"
+
+
+def test_a_row_names_the_vendor_the_dataset_belongs_to(client, db_path):
+    """`XNAS.ITCH` is vendor vocabulary: without the vendor it means nothing.
+
+    A plan row has a plan type, and the type declares its vendor. An intent has
+    no type -- not until a plan exists -- so its vendor comes from whichever
+    registered type claims the dataset code.
+    """
+    seed(
+        db_path,
+        [
+            {
+                "id": "req_intent",
+                "state": "blocked",
+                "body_kind": "intent",
+                "plan_type": None,
+                "plan_json": None,
+                "estimate_usd": None,
+                "blocked_reason": "awaiting_plan",
+                "params_json": json.dumps(
+                    {"dataset": "XNAS.ITCH", "schema": "mbo", "window": {}}
+                ),
+                "intent_json": json.dumps({"max_usd": 10}),
+            },
+            {"id": "req_plan", "state": "draft"},
+        ],
+    )
+    by_id = {row["id"]: row for row in _book(client)["rows"]}
+    assert by_id["req_intent"]["vendor"] == "Databento"
+    assert by_id["req_plan"]["vendor"] == "Databento"
+
+
+def test_an_unclaimed_dataset_shows_no_vendor_rather_than_a_guess(client, db_path):
+    """No registered type speaks for this code, and the row says so.
+
+    The alternative -- defaulting to the vendor of the only type we have --
+    would be right today and quietly wrong the day a second one is added.
+    """
+    seed(
+        db_path,
+        [
+            {
+                "id": "req_odd",
+                "state": "blocked",
+                "body_kind": "intent",
+                "plan_type": None,
+                "plan_json": None,
+                "estimate_usd": None,
+                "blocked_reason": "awaiting_plan",
+                "params_json": json.dumps(
+                    {"dataset": "NOTAVENDOR.SET", "schema": "mbo", "window": {}}
+                ),
+                "intent_json": json.dumps({"max_usd": 10}),
+            }
+        ],
+    )
+    assert _book(client)["rows"][0]["vendor"] == ""
 
 
 def _detail(client, request_id, token="tok-read"):

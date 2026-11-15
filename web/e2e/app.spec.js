@@ -1,4 +1,8 @@
 import { expect, test } from "@playwright/test";
+
+// Fixed clock rendering: the `filed` column is local time, and a test that
+// asserted a string would otherwise pass in London and fail in Auckland.
+test.use({ timezoneId: "UTC" });
 import { dashboard, emptyBook, planTypes, requestDetail } from "./fixtures.js";
 
 // Resource-type routing, not a URL glob: `**/stats` would also match the
@@ -35,7 +39,7 @@ test.describe("the request book", () => {
       "request",
       "state",
       "estimate",
-      "age",
+      "filed",
       "why it matters",
     ]);
 
@@ -49,7 +53,9 @@ test.describe("the request book", () => {
 
     const first = page.locator(".tbl-row").first();
     await expect(first).toContainText("$0.0412");
-    await expect(first).toContainText("1h 4m");
+    // When it was filed, in a form a person reads. Not "1h 4m": an age answers
+    // a question nobody asked and has to be converted back into a clock.
+    await expect(first.locator(".filed")).toHaveText("14 Nov 23:10");
     await expect(first.locator(".pill")).toHaveText("succeeded");
   });
 
@@ -59,7 +65,8 @@ test.describe("the request book", () => {
     await mock(page);
     await page.goto("/");
 
-    const running = page.locator(".tbl-row").filter({ hasText: "4c81be07" });
+    // The second row filed: `running`, and stuck.
+    const running = page.locator(".tbl-row").nth(1);
     // The row's state is `running`; the badge says why it is worth looking at.
     await expect(running.locator(".pill").first()).toHaveText("running");
     await expect(running.locator(".pill.bad")).toHaveText("lease_expired");
@@ -106,7 +113,7 @@ test.describe("the request book", () => {
       .click();
     await expect(page).toHaveURL(/show=todo/);
     await expect(page.locator(".tbl-row")).toHaveCount(1);
-    await expect(page.locator(".tbl-row")).toContainText("b31d5e0a");
+    await expect(page.locator(".tbl-row")).toContainText("#3");
 
     // A filter that matches nothing says so, and offers the way back.
     await page.locator(".facet-option").filter({ hasText: "Running" }).click();
@@ -136,7 +143,7 @@ test.describe("the request book", () => {
     await mock(page);
     await page.goto("/?show=broken");
     await expect(page.locator(".tbl-row")).toHaveCount(1);
-    await expect(page.locator(".tbl-row")).toContainText("4c81be07");
+    await expect(page.locator(".tbl-row")).toContainText("#2");
   });
 
   test("the token survives the link between the two pages", async ({
@@ -589,13 +596,16 @@ test.describe("naming a request, and opening it", () => {
     await page.goto("/");
 
     const first = page.locator(".tbl-row").first();
-    // `#1` and what was asked for. The 32-hex key is the tooltip and the small
-    // line underneath — it is the durable handle, and a handle is not a name.
+    // `#1` and what was asked for. The 32-hex key is the tooltip and nothing
+    // else in the row: it is a durable handle, and a handle is not a name.
     await expect(first.locator(".req-num")).toHaveText("#1");
     await expect(first.locator(".req-subject")).toHaveText(
       "databento_batch_download",
     );
-    await expect(first.locator(".req-id")).toHaveText("9f2a41c8");
+    await expect(first.locator(".req-id")).toHaveCount(0);
+    await expect(first).not.toContainText("9f2a41c8");
+    // Who is being asked. A dataset is vendor vocabulary; the name is context.
+    await expect(first.locator(".req-vendor")).toHaveText("Databento");
 
     const link = first.locator("a.req");
     await expect(link).toHaveAttribute("href", /\/requests\/req_9f2a41c8$/);
@@ -607,10 +617,34 @@ test.describe("naming a request, and opening it", () => {
   }) => {
     await mock(page);
     await page.goto("/");
-    const intentRow = page.locator(".tbl-row").filter({ hasText: "0a7c9d33" });
+    const intentRow = page.locator(".tbl-row").filter({
+      hasText: "OPRA.PILLAR · trades",
+    });
     await expect(intentRow.locator(".req-subject")).toHaveText(
       "OPRA.PILLAR · trades · 2026-10-01→2026-10-08",
     );
+    // An intent has no plan type, so its vendor comes from the registry's
+    // dataset namespace — the same word the plan rows show.
+    await expect(intentRow.locator(".req-vendor")).toHaveText("Databento");
+  });
+
+  test("the whole row is the target, not just the name", async ({ page }) => {
+    await mock(page);
+    await page.goto("/?token=tok-roundtrip");
+
+    // The far end of the row -- the badge in the last column -- which used to be
+    // dead space. The anchor is still the only link; its `::after` covers the row.
+    const row = page.locator(".tbl-row").filter({ hasText: "OPRA.PILLAR" });
+    // A raw mouse click at the far end of the row -- the last cell -- because a
+    // locator click would (correctly) refuse: the point now belongs to the
+    // row-wide link, not to the badge it happens to be over.
+    const box = await row.boundingBox();
+    await page.mouse.click(box.x + box.width - 12, box.y + box.height / 2);
+
+    await expect(page).toHaveURL(
+      /\/requests\/req_0a7c9d33\?token=tok-roundtrip$/,
+    );
+    await expect(page.locator(".detail-title")).toContainText("#4 ·");
   });
 
   test("clicking a row opens the request, with the why and the trail", async ({
@@ -621,7 +655,7 @@ test.describe("naming a request, and opening it", () => {
 
     await page
       .locator(".tbl-row")
-      .filter({ hasText: "0a7c9d33" })
+      .filter({ hasText: "OPRA.PILLAR · trades" })
       .locator("a.req")
       .click();
     await expect(page).toHaveURL(

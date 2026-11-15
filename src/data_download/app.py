@@ -169,6 +169,7 @@ def _plan_type_view(entry: Any) -> dict[str, Any]:
     return {
         "name": entry.name,
         "version": entry.version,
+        "vendor": entry.vendor,
         "description": entry.description,
         "anchor": entry.name,
         "schema": _schema_view(entry.params_schema or {}),
@@ -254,20 +255,34 @@ def _label(row: dict[str, Any]) -> str:
     return " · ".join(parts) if parts else "—"
 
 
-def _book_row(row: dict[str, Any]) -> dict[str, Any]:
+def _vendor_of(row: dict[str, Any], registry: Registry) -> str:
+    """Who is being asked for the data.
+
+    A plan row is filed against a plan type, and the type declares its vendor.
+    An intent names a dataset in vendor vocabulary and has no type yet, so the
+    vendor comes from whichever registered type claims that dataset code. An
+    unclaimed code gets "" -- the row says nothing rather than guessing, and
+    the detail page still prints the dataset verbatim.
+    """
+    plan_type = row.get("plan_type")
+    if plan_type:
+        return registry.vendor_of(str(plan_type))
+    return registry.vendor_for_dataset(str(_params_of(row).get("dataset") or ""))
+
+
+def _book_row(row: dict[str, Any], registry: Registry) -> dict[str, Any]:
     """One row of the request book.
 
-    `params_json` is the raw column, not the page's business: the label is
-    derived here (server-side, because "what is this request" is a read-model
-    opinion) and the payload stays small enough to hand the whole book over.
+    `params_json` is the raw column, not the page's business: the label and the
+    vendor are derived here (server-side, because "what is this request" is a
+    read-model opinion) and the payload stays small enough to hand the whole
+    book over. The id is not in the row at all -- it is a key, not a name, and
+    it is on the link's tooltip and in full on the detail page, which is where
+    anyone copies it into a curl.
     """
     out = {k: v for k, v in row.items() if k != "params_json"}
     out["label"] = _label(row)
-    # Eight characters is enough to tell two rows apart by eye and short enough
-    # to sit under a name. The full id is on the link's tooltip and in full on
-    # the detail page, which is where anyone copies it.
-    stem = row["id"][4:] if row["id"].startswith("req_") else row["id"]
-    out["short_id"] = stem[:8]
+    out["vendor"] = _vendor_of(row, registry)
     return out
 
 
@@ -524,7 +539,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/ui/dashboard.json")
     async def dashboard_json(request: Request) -> dict[str, Any]:
         auth.require_scope(request, "read", allow_query_token=True)
-        rows = [_book_row(_with_facet(row)) for row in await _store(request).overview()]
+        rows = [
+            _book_row(_with_facet(row), registry) for row in await _store(request).overview()
+        ]
         keys = (*FACET_ORDER, "other")
         return {
             "rows": rows,
@@ -556,7 +573,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         view = await store.overview_one(request_id) or row
         events = await store.events_for(request_id)
         return {
-            **_book_row(_with_facet(view)),
+            **_book_row(_with_facet(view), registry),
             "payload": {
                 "body_kind": row["body_kind"],
                 "plan_type": row["plan_type"],

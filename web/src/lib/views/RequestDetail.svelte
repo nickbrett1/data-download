@@ -61,6 +61,9 @@
           : data.stuck_condition,
       });
     }
+    if (data.vendor) {
+      rows.push({ label: "vendor", value: data.vendor });
+    }
     rows.push(
       { label: "ceiling", value: usd(data.max_usd) },
       { label: "estimate", value: usd(data.estimate_usd) },

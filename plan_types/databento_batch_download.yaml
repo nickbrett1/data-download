@@ -12,6 +12,22 @@ description: >-
   A Databento batch job (batch.submit), split per day, downloaded with its
   manifest, metadata and condition receipts.
 
+# Who sells the data, and which dataset codes are theirs. The read model names
+# the vendor on a row because a dataset code alone (`XNAS.ITCH`) is vendor
+# vocabulary and means nothing without it; a plan row gets the vendor from its
+# plan type, and an intent -- which names a dataset but no plan type, not until
+# a plan exists -- gets it from this list. An unclaimed dataset shows no vendor
+# rather than a guess: the honest reading of an empty match is "no registered
+# vendor speaks for this code yet".
+vendor: Databento
+datasets:
+  - "*.ITCH"
+  - "*.PILLAR"
+  - "*.MDP3"
+  - "*.IMPACT"
+  - "EQUS.*"
+  - "DBEQ.*"
+
 params_schema:
   # The dialect this schema is written in. Declared here rather than in the
   # page's heading: it is a property of the document, and a validator that

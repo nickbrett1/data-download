@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,11 @@ class PlanType:
     params_schema: dict[str, Any] = field(default_factory=dict)
     verify_meaning: str = ""
     resume_meaning: str = ""
+    # Who sells the data, and the dataset codes they speak for. Declared in git
+    # with the type, because the read model needs a vendor name on an intent
+    # row -- which has no plan type, and so no other handle on its vendor.
+    vendor: str = ""
+    datasets: tuple[str, ...] = ()
 
     def index_entry(self) -> dict[str, Any]:
         """What `GET /v1/plan-types` returns: enough to decide, not the schema."""
@@ -41,6 +47,7 @@ class PlanType:
             "version": self.version,
             "description": self.description,
             "source": self.source,
+            "vendor": self.vendor,
             "verify_required": self.verify_required,
         }
 
@@ -48,6 +55,8 @@ class PlanType:
         return {
             **self.index_entry(),
             "params_schema": self.params_schema,
+            "vendor": self.vendor,
+            "datasets": list(self.datasets),
             "verify": {
                 "required": self.verify_required,
                 "on_failure": sorted(self.on_failure_allowed),
@@ -74,6 +83,26 @@ class Registry:
     def all(self) -> list[PlanType]:
         return [self._types[k] for k in sorted(self._types)]
 
+    def vendor_of(self, plan_type: str | None) -> str:
+        """The vendor behind a plan type, or "" when the type is not one of ours."""
+        entry = self._types.get(plan_type) if plan_type else None
+        return entry.vendor if entry else ""
+
+    def vendor_for_dataset(self, dataset: str | None) -> str:
+        """Who sells this dataset code, as declared by the types that claim it.
+
+        An intent names a dataset in vendor vocabulary before any plan exists,
+        so the only handle on its vendor is the namespace the registered types
+        declare. No match is not an error about the request -- it means the
+        vocabulary in git has nothing to say about this code yet.
+        """
+        if not dataset:
+            return ""
+        for entry in self.all():
+            if any(fnmatch(dataset, pattern) for pattern in entry.datasets):
+                return entry.vendor
+        return ""
+
 
 def _load_one(path: Path) -> PlanType:
     with path.open("r", encoding="utf-8") as fh:
@@ -97,11 +126,17 @@ def _load_one(path: Path) -> PlanType:
     if bad:
         raise ValueError(f"{path}: verify.on_failure has unknown value(s) {sorted(bad)}")
 
+    datasets = doc.get("datasets") or []
+    if not isinstance(datasets, list) or not all(isinstance(d, str) for d in datasets):
+        raise ValueError(f"{path}: datasets must be a list of strings")
+
     return PlanType(
         name=str(doc["name"]),
         version=int(doc.get("version", 1)),
         description=str(doc["description"]).strip(),
         source=path.name,
+        vendor=str(doc.get("vendor") or "").strip(),
+        datasets=tuple(datasets),
         verify_required=bool(verify.get("required", True)),
         on_failure_allowed=frozenset(allowed),
         params_schema=doc["params_schema"],

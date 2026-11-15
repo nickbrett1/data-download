@@ -90,6 +90,7 @@
       <section class="card type-card" id={type.anchor}>
         <div class="type-head">
           <h2>{type.name}</h2>
+          {#if type.vendor}<span class="pill">{type.vendor}</span>{/if}
           <span class="pill">v{type.version}</span>
           <span class="spacer"></span>
           <span class="micro">

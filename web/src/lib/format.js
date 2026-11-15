@@ -29,6 +29,21 @@ export function usd(value) {
   return `$${Number(value).toFixed(4)}`;
 }
 
+/** When a request was filed, as a person reads a clock: `14 Nov 23:41`.
+ * Local time on purpose -- the reader is the one who filed it, and the service
+ * stores UTC (`Z`), so a raw timestamp would be an hour or two out in the very
+ * column they use to remember when they asked. */
+export function filed(iso) {
+  if (!iso) return "—";
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return "—";
+  const day = when.getDate();
+  const month = when.toLocaleString("en-GB", { month: "short" });
+  const hh = String(when.getHours()).padStart(2, "0");
+  const mm = String(when.getMinutes()).padStart(2, "0");
+  return `${day} ${month} ${hh}:${mm}`;
+}
+
 export function age(seconds) {
   const total = Number(seconds);
   if (!Number.isFinite(total)) return "—";
