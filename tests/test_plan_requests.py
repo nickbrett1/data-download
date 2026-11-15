@@ -18,7 +18,10 @@ def _submit(client, body=None, token="tok-submit"):
 def test_healthz_needs_no_auth_and_no_store(client):
     response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    # `store` is a report, not a check: the status code is still 200 whatever it
+    # says, so a DB fault cannot restart-loop the container -- but `docker ps`
+    # no longer says `(healthy)` about a process that cannot read its own store.
+    assert response.json() == {"status": "ok", "store": "ready"}
 
 
 def test_plan_submit_returns_202_then_reads_back(client):

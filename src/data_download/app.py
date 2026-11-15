@@ -12,9 +12,11 @@ the offline dry run (`dryrun.py`) is a CLI harness this module does not import.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -182,13 +184,46 @@ def _plan_type_view(entry: Any) -> dict[str, Any]:
     }
 
 
-def _store(request: Request) -> Store:
-    store = getattr(request.app.state, "store", None)
-    if store is None or request.app.state.store_error:
-        raise errors.store_unavailable(
-            request.app.state.store_error or "store is not connected"
-        )
-    return store
+# A connect that failed at startup is not necessarily permanent. The usual cause
+# is SQLite's per-connection schema cache going stale while a deploy's old
+# container still held the database (`error in view v_pending: no such table:
+# main.requests`), and a *new* connection is the only cure. So a request that
+# finds no store retries -- single-flight, because six concurrent routes must not
+# open six stores, and rate-limited, because a genuinely broken file must not be
+# hammered once per request. This is the difference between a store fault that
+# lasts until someone restarts the container and one that heals itself the
+# moment the old process exits.
+RECONNECT_INTERVAL_SECONDS = 5.0
+
+
+async def _store(request: Request) -> Store:
+    state = request.app.state
+    if state.store is None:
+        await _reconnect(state)
+    if state.store is None:
+        raise errors.store_unavailable(state.store_error or "store is not connected")
+    return state.store
+
+
+async def _reconnect(state: Any) -> None:
+    async with state.store_lock:
+        if state.store is not None:
+            return
+        now = time.monotonic()
+        if now < state.store_next_attempt:
+            return
+        state.store_next_attempt = now + RECONNECT_INTERVAL_SECONDS
+        store = Store(state.settings.db_path)
+        try:
+            await store.connect()
+        except Exception as exc:  # noqa: BLE001 - the reason is reported, not raised
+            state.store_error = f"cannot open the request store: {exc}"
+            log.warning("store reconnect failed: %s", exc)
+            await store._close_quietly()
+            return
+        state.store = store
+        state.store_error = None
+        log.warning("request store reconnected at %s", state.settings.db_path)
 
 
 def _request_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -302,6 +337,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.registry = registry
         app.state.store = None
         app.state.store_error = None
+        # Reconnect bookkeeping: see `_store`. The lock makes the retry
+        # single-flight and the deadline makes it rate-limited.
+        app.state.store_lock = asyncio.Lock()
+        app.state.store_next_attempt = 0.0
         # Resolved once per process, not per request: a long-lived service must
         # not record two commits for one deployment (phase 3 order §5).
         app.state.code_ref = settings.code_ref
@@ -359,17 +398,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # -- liveness ----------------------------------------------------------
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        # Deliberately does not touch the store: "up but broken" must not look
-        # like "down", or the healthcheck restart-loops a working service.
-        return {"status": "ok"}
+    async def healthz(request: Request) -> dict[str, str]:
+        # Still a liveness check that does not touch the store: "up but broken"
+        # must not look like "down", or the healthcheck restart-loops a working
+        # service. What changed is that it stops *claiming* to be well: a store
+        # that never opened used to report `{"status": "ok"}` while every route
+        # answered 503, so `docker ps` said `(healthy)` about a service that
+        # could not read its own database.
+        state = request.app.state
+        return {"status": "ok", "store": "ready" if state.store else "unavailable"}
 
     # -- writes ------------------------------------------------------------
 
     @app.post("/v1/requests", status_code=202)
     async def submit_request(request: Request) -> JSONResponse:
         auth.require_scope(request, "submit")
-        store = _store(request)
+        store = await _store(request)
 
         try:
             body = await request.json()
@@ -503,7 +547,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
         auth.require_scope(request, "read")
-        store = _store(request)
+        store = await _store(request)
         rows, total = await store.list_requests(
             state=state, plan_type=plan_type, limit=limit, offset=offset
         )
@@ -521,7 +565,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         wait: float = Query(default=0, ge=0, le=60),
     ) -> dict[str, Any]:
         auth.require_scope(request, "read")
-        store = _store(request)
+        store = await _store(request)
         row = await store.get_request(request_id)
         if row is None:
             raise errors.not_found(f"no request with id {request_id!r}")
@@ -535,7 +579,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/requests/{request_id}/events")
     async def get_events(request: Request, request_id: str) -> dict[str, Any]:
         auth.require_scope(request, "read")
-        store = _store(request)
+        store = await _store(request)
         if await store.get_request(request_id) is None:
             raise errors.not_found(f"no request with id {request_id!r}")
         events = await store.events_for(request_id)
@@ -581,8 +625,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/ui/dashboard.json")
     async def dashboard_json(request: Request) -> dict[str, Any]:
         auth.require_scope(request, "read", allow_query_token=True)
+        store = await _store(request)
         rows = [
-            _book_row(_with_facet(row), registry) for row in await _store(request).overview()
+            _book_row(_with_facet(row), registry) for row in await store.overview()
         ]
         keys = (*FACET_ORDER, "other")
         return {
@@ -605,7 +650,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         intent or the plan, and the append-only trail.
         """
         auth.require_scope(request, "read", allow_query_token=True)
-        store = _store(request)
+        store = await _store(request)
         row = await store.get_request(request_id)
         if row is None:
             raise errors.not_found(f"no request with id {request_id!r}")

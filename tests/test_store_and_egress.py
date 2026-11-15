@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import asyncio
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -11,7 +13,7 @@ from fastapi.testclient import TestClient
 from conftest import auth
 from data_download.app import create_app
 from data_download.config import Settings, load_settings, parse_tokens
-from data_download.db import payload_hash
+from data_download.db import Store, payload_hash
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src" / "data_download"
@@ -27,13 +29,75 @@ def test_unusable_store_is_up_but_broken(tmp_path):
     )
     app = create_app(settings)
     with TestClient(app) as client:
-        # liveness stays honest: /healthz must not touch the store, or a DB
-        # fault puts the container in a restart loop
-        assert client.get("/healthz").json() == {"status": "ok"}
+        # liveness stays honest: /healthz must not fail, or a DB fault puts the
+        # container in a restart loop -- but it stops claiming the store is fine
+        assert client.get("/healthz").json() == {
+            "status": "ok",
+            "store": "unavailable",
+        }
 
         response = client.get("/v1/requests", headers=auth("tok"))
         assert response.status_code == 503
         assert response.json()["error"]["code"] == "store_unavailable"
+        # A path that cannot exist is not a stale cache: the request-time retry
+        # must not turn a permanent fault into a 200 or a crash.
+        assert client.get("/v1/requests", headers=auth("tok")).status_code == 503
+
+
+def test_a_view_over_a_missing_table_is_healed(tmp_path):
+    """The exact shape build 48 died of: views standing over no `requests`.
+
+    Two containers during a deploy share one file; the old one's DDL can leave
+    the new one holding `v_pending` while the table it selects is gone. The views
+    are queries, so dropping them is free and the schema can be re-applied --
+    without the heal, `connect` fails and every route answers 503.
+    """
+    path = str(tmp_path / "requests.db")
+    store = Store(path)
+    asyncio.run(store.connect())
+    asyncio.run(store.close())
+
+    conn = sqlite3.connect(path)
+    views = conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'view'"
+    ).fetchall()
+    assert len(views) == 5
+    for name, _ in views:
+        conn.execute(f"DROP VIEW {name}")
+    conn.execute("DROP TABLE requests")
+    for _, sql in views:  # the views survive their table, which SQLite allows
+        conn.execute(sql)
+    conn.commit()
+    conn.close()
+
+    healed = Store(path)
+    asyncio.run(healed.connect())
+    assert asyncio.run(healed.overview()) == []
+    asyncio.run(healed.close())
+
+
+def test_a_store_that_could_not_open_retries_on_the_next_request(tmp_path, monkeypatch):
+    """A startup failure is not a sentence; a request is allowed to try again."""
+    # The real interval is 5s, which is right for a service and useless in a
+    # test: here the point is that a *later* request succeeds, not that it waits.
+    monkeypatch.setattr("data_download.app.RECONNECT_INTERVAL_SECONDS", 0.0)
+    blocked = tmp_path / "blocked"
+    blocked.write_text("not a directory")  # mkdir now fails, not the file check
+    settings = Settings(
+        db_path=str(blocked / "requests.db"),
+        tokens={"tok": frozenset({"read", "submit"})},
+        plan_types_dir=REPO_ROOT / "plan_types",
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        assert client.get("/healthz").json()["store"] == "unavailable"
+        assert client.get("/v1/requests", headers=auth("tok")).status_code == 503
+
+        # Whatever the obstruction was, it is gone now -- as an old container
+        # exiting is -- and the process must heal rather than wait for a restart.
+        blocked.unlink()
+        assert client.get("/v1/requests", headers=auth("tok")).status_code == 200
+        assert client.get("/healthz").json()["store"] == "ready"
 
 
 def test_payload_hash_is_order_and_whitespace_independent():

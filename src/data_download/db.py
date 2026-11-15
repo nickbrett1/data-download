@@ -314,6 +314,56 @@ class ClaimRefused(Exception):
         return " ".join(parts)
 
 
+# The five read-surface views. All of them are queries: dropping one loses
+# nothing, which is what makes them safe to rebuild when the schema is confused.
+VIEW_NAMES = ("v_pending", "v_done", "v_stuck", "v_blocked", "v_requests")
+
+
+def _statements(schema: str) -> list[str]:
+    """The schema, split into statements so a failure can name the one that broke.
+
+    `executescript` reports "no such table: main.requests" with no indication of
+    which statement asked, which cost an hour on build 48. Comments go first --
+    this file's prose is full of semicolons -- and only then is the rest split,
+    which is exact because no string literal or CHECK in the schema contains one.
+    """
+    without_comments = "\n".join(
+        line.split("--", 1)[0] for line in schema.splitlines()
+    )
+    return [chunk.strip() for chunk in without_comments.split(";") if chunk.strip()]
+
+
+async def _apply_schema(conn: aiosqlite.Connection) -> None:
+    for statement in _statements(SCHEMA_PATH.read_text(encoding="utf-8")):
+        try:
+            await conn.execute(statement)
+        except sqlite3.Error as exc:
+            headline = statement.lstrip("\n-").splitlines()[0][:90]
+            raise sqlite3.OperationalError(f"{exc} [in: {headline}]") from exc
+
+
+async def _heal_views(conn: aiosqlite.Connection) -> None:
+    """Drop the views when the table they select is not there.
+
+    A half-finished rebuild, or another process's DDL, can leave the five views
+    standing over a missing `requests`. They are queries, so throwing them away
+    costs nothing and is the only way the schema can be re-applied cleanly.
+    """
+    async with conn.execute("PRAGMA table_info(requests)") as cur:
+        has_table = bool(await cur.fetchall())
+    if has_table:
+        return
+    async with conn.execute(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'view' AND name IN "
+        "('v_pending','v_done','v_stuck','v_blocked','v_requests')"
+    ) as cur:
+        row = await cur.fetchone()
+    if row and row[0]:
+        log.warning("requests is missing but %d read-surface views remain: dropping them", row[0])
+        for name in VIEW_NAMES:
+            await conn.execute(f"DROP VIEW IF EXISTS {name}")
+
+
 class Store:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -321,18 +371,68 @@ class Store:
         self._write_lock = asyncio.Lock()
 
     async def connect(self) -> None:
+        """Open the store, retrying a bounded number of times on a fresh connection.
+
+        The retry is not defensiveness for its own sake. A deploy briefly runs
+        two containers against one database, and SQLite's schema cache is
+        per-connection: DDL from the old process can leave the new one holding a
+        view over a table it can no longer see (`error in view v_pending: no such
+        table: main.requests` -- how build 48's first boot died, on a file that
+        was completely healthy). A stale cache cannot be repaired on the
+        connection that has it, so the fix is a new connection, not a retry of
+        the statement.
+        """
+        attempts = 1 if self.path == ":memory:" else 3
+        last: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                await self._open()
+                return
+            except Exception as exc:  # noqa: BLE001 - re-raised below
+                last = exc
+                log.warning(
+                    "opening the store failed (attempt %d/%d): %s",
+                    attempt,
+                    attempts,
+                    exc,
+                    exc_info=True,
+                )
+                await self._close_quietly()
+                if attempt < attempts:
+                    await asyncio.sleep(0.2 * attempt)
+        assert last is not None
+        raise last
+
+    async def _open(self) -> None:
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         conn = await aiosqlite.connect(self.path, isolation_level=None)
         conn.row_factory = aiosqlite.Row
-        for pragma in WRITE_PRAGMAS:
-            await conn.execute(pragma)
-        schema = SCHEMA_PATH.read_text(encoding="utf-8")
-        await _add_missing_columns(conn)
-        await _migrate_requests(conn)
-        await _migrate_events(conn)
-        await conn.executescript(schema)
+        try:
+            for pragma in WRITE_PRAGMAS:
+                await conn.execute(pragma)
+            await _add_missing_columns(conn)
+            await _migrate_requests(conn)
+            await _migrate_events(conn)
+            await _heal_views(conn)
+            await _apply_schema(conn)
+            # A read through the busiest view, on this connection, before the
+            # connection is published. If the schema cache is stale, this is
+            # where it stops being someone's 503.
+            async with conn.execute("SELECT count(*) FROM v_pending") as cur:
+                await cur.fetchone()
+        except Exception:
+            await conn.close()
+            raise
         self._conn = conn
+
+    async def _close_quietly(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            try:
+                await conn.close()
+            except Exception:  # noqa: BLE001 - closing a broken connection
+                log.debug("closing a failed store connection", exc_info=True)
 
     async def close(self) -> None:
         if self._conn is not None:
