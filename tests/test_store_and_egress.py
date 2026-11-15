@@ -127,7 +127,8 @@ def test_an_older_store_gains_the_new_columns_on_start(tmp_path):
         book = client.get("/ui/dashboard.json?token=tok").json()
 
     assert [row["id"] for row in book["rows"]] == ["req_old"]
-    # `why` is NULL for a row written before it was a column ...
-    assert book["rows"][0]["why"] is None
+    # ... and so does the reason, out of the same verbatim body. A row written
+    # before the column must not read as "no reason was given".
+    assert book["rows"][0]["why"] == "old" 
     # ... and the ceiling still comes out of the verbatim intent body.
     assert book["rows"][0]["max_usd"] == 120

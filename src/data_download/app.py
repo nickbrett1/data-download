@@ -564,7 +564,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "intent": json.loads(row["intent_json"]) if row["intent_json"] else None,
                 "plan": json.loads(row["plan_json"]) if row["plan_json"] else None,
                 "max_usd": row["max_usd"],
-                "why": row["why"],
+                "why": view["why"] if "why" in view.keys() else row["why"],
             },
             "identity": {
                 "plan_hash": row["plan_hash"],

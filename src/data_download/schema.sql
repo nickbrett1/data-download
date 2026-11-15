@@ -220,7 +220,10 @@ SELECT r.id,
        -- One ceiling, from two places: the column this phase added, and the
        -- verbatim intent body that older rows still carry it in.
        COALESCE(r.max_usd, json_extract(r.intent_json, '$.max_usd')) AS max_usd,
-       r.why AS why,
+       -- Same fallback for the reason: rows written before `why` was a column
+       -- carry it in the verbatim intent body, and losing it would make the
+       -- detail page claim no reason was given by a caller who gave one.
+       COALESCE(r.why, json_extract(r.intent_json, '$.why')) AS why,
        r.params_json AS params_json,
        CASE WHEN r.blocked_reason = 'awaiting_plan' THEN 1 ELSE 0 END AS merge_can_clear,
        s.condition AS stuck_condition,
