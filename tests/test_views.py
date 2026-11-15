@@ -174,7 +174,7 @@ def test_repeat_failure_does_not_fire_at_two(client, db_path):
 
 
 def _book(client) -> dict:
-    res = client.get("/ui/dashboard.json?token=tok-read")
+    res = client.get("/ui/dashboard.json", headers=auth("tok-read"))
     assert res.status_code == 200
     return res.json()
 
@@ -291,7 +291,7 @@ def test_the_view_carries_no_server_trivia(client, db_path):
     for gone in ("generated_at", "db_path", "registry_count"):
         assert gone not in book, f"{gone} is back in the view-model"
 
-    types = client.get("/ui/plan-types.json?token=tok-read").json()
+    types = client.get("/ui/plan-types.json", headers=auth("tok-read")).json()
     assert "generated_at" not in types
 
 
@@ -299,18 +299,20 @@ def test_a_plan_type_card_names_its_vendor(client):
     """The type's name carries the vendor as a prefix, which is not the same
     thing as saying who sells the data to a reader who does not decode
     `databento_batch_download`."""
-    types = client.get("/ui/plan-types.json?token=tok-read").json()["types"]
+    types = client.get("/ui/plan-types.json", headers=auth("tok-read")).json()["types"]
     assert [t["vendor"] for t in types] == ["Databento"]
 
 
-def test_the_view_accepts_a_query_token(client, db_path):
-    """A browser cannot set an Authorization header on a plain navigation, so
-    the token has to be accepted in the URL - on the view as well as the page."""
+def test_a_token_is_only_accepted_in_a_header(client, db_path):
+    """One way in, so there is one thing to audit: the shell is public and the
+    data is behind an Authorization header. A `?token=` is refused even when it
+    is the right token, because a token that works in a URL is a token in a
+    proxy log, a `Referer` and the Homepage tile's Docker label."""
     _seed_all(db_path)
     assert client.get("/ui/dashboard.json").status_code == 401
     assert client.get("/ui/dashboard.json?token=nonsense").status_code == 401
-    assert client.get("/ui/dashboard.json?token=tok-read").status_code == 200
-    assert client.get("/ui/dashboard.json", headers=auth()).status_code == 200
+    assert client.get("/ui/dashboard.json?token=tok-read").status_code == 401
+    assert client.get("/ui/dashboard.json", headers=auth("tok-read")).status_code == 200
 
 
 def test_the_page_is_the_built_bundle(client, db_path, tmp_path, monkeypatch):
@@ -323,21 +325,24 @@ def test_the_page_is_the_built_bundle(client, db_path, tmp_path, monkeypatch):
     (built / "index.html").write_text("<html><body>built</body></html>")
     monkeypatch.setattr(app_module, "WEB_DIST_DIR", built)
 
-    res = client.get("/?token=tok-read")
+    res = client.get("/")
     assert res.status_code == 200
     assert "built" in res.text
     assert "no-store" in res.headers.get("cache-control", "")
 
     monkeypatch.setattr(app_module, "WEB_DIST_DIR", tmp_path / "absent")
-    res = client.get("/?token=tok-read")
+    res = client.get("/")
     assert res.status_code == 503
     assert "npm run build" in res.json()["detail"]
 
 
-def test_dashboard_requires_read_scope(client):
-    assert client.get("/").status_code == 401
-    assert client.get("/?token=nonsense").status_code == 401
-    assert client.get("/", headers=auth("tok-approve")).status_code == 403
+def test_the_page_is_public_and_the_data_is_not(client, built_web):
+    """A link to the app is not a credential. The shell draws nothing on its
+    own; every figure on it comes from a gated view-model."""
+    assert client.get("/").status_code == 200
+    assert client.get("/", headers=auth("tok-approve")).status_code == 200
+    assert client.get("/ui/dashboard.json").status_code == 401
+    assert client.get("/ui/dashboard.json", headers=auth("tok-approve")).status_code == 403
 
 
 def test_dashboard_is_get_only(client):
@@ -471,7 +476,7 @@ def test_an_unclaimed_dataset_shows_no_vendor_rather_than_a_guess(client, db_pat
 
 
 def _detail(client, request_id, token="tok-read"):
-    return client.get(f"/ui/request/{request_id}.json?token={token}")
+    return client.get(f"/ui/request/{request_id}.json", headers=auth(token))
 
 
 def test_the_detail_view_carries_what_the_list_drops(client):

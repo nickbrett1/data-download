@@ -16,7 +16,7 @@
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DataTable from "$lib/components/nb/DataTable.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
-  import { getView, withToken } from "$lib/api";
+  import { getView } from "$lib/api";
 
   let data = $state(null);
   let failure = $state("");
@@ -49,8 +49,8 @@
   footer={false}
   title="data-download"
   nav={[
-    { label: "Requests", href: withToken("/"), current: false },
-    { label: "Plan types", href: withToken("/plan-types"), current: true },
+    { label: "Requests", href: "/", current: false },
+    { label: "Plan types", href: "/plan-types", current: true },
   ]}
 >
   {#snippet mark()}

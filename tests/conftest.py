@@ -80,6 +80,23 @@ def settings(db_path: Path) -> Settings:
 
 
 @pytest.fixture
+def built_web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A stand-in for the built bundle.
+
+    The HTML routes are public and serve one file, so a test that asserts the
+    shell is reachable needs a dist to serve -- a checkout has not necessarily
+    run `npm run build` in web/, and CI has no node at all.
+    """
+    from data_download import app as app_module
+
+    built = tmp_path / "web"
+    (built / "assets").mkdir(parents=True)
+    (built / "index.html").write_text("<html><body>built</body></html>")
+    monkeypatch.setattr(app_module, "WEB_DIST_DIR", built)
+    return built
+
+
+@pytest.fixture
 def client(settings: Settings):
     app = create_app(settings)
     with TestClient(app) as test_client:

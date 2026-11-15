@@ -15,7 +15,7 @@
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DetailPanel from "$lib/components/nb/DetailPanel.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
-  import { getView, withToken } from "$lib/api";
+  import { getView } from "$lib/api";
   import { age, filed, stateTone, usd } from "$lib/format";
 
   // The three blocked facets are the same state and three different answers to
@@ -150,8 +150,8 @@
   footer={false}
   title="data-download"
   nav={[
-    { label: "Requests", href: withToken("/"), current: true },
-    { label: "Plan types", href: withToken("/plan-types"), current: false },
+    { label: "Requests", href: "/", current: true },
+    { label: "Plan types", href: "/plan-types", current: false },
   ]}
 >
   {#snippet mark()}

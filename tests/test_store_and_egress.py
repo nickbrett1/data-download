@@ -188,7 +188,7 @@ def test_an_older_store_gains_the_new_columns_on_start(tmp_path):
         plan_types_dir=REPO_ROOT / "plan_types",
     )
     with TestClient(create_app(settings)) as client:
-        book = client.get("/ui/dashboard.json?token=tok").json()
+        book = client.get("/ui/dashboard.json", headers=auth("tok")).json()
 
     assert [row["id"] for row in book["rows"]] == ["req_old"]
     # ... and so does the reason, out of the same verbatim body. A row written

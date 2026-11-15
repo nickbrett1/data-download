@@ -5,6 +5,14 @@ because asking for a new plan is a different act from filing a request. Endpoint
 use `submit`, `read` and `escalate`; `approve` is never granted by any endpoint
 (it is a CLI verb) and `deploy` has no verb yet. A token's scopes
 come from `DATA_DOWNLOAD_API_TOKENS`; the check is here, not by convention.
+
+A token comes from the `Authorization` header and from nowhere else. The query
+string used to be accepted for the HTML pages, because a browser navigation
+cannot set a header -- but the cost was a live credential in every place a URL
+is copied to: the Homepage tile's Docker label, the compose file, proxy access
+logs, `Referer`s and browser history. The pages are now a public shell and the
+view-models are gated, so the browser holds the token and sends it as a header.
+There is deliberately no fallback: one way in is one thing to audit.
 """
 
 from __future__ import annotations
@@ -22,16 +30,8 @@ def _token_from_header(request: Request) -> str | None:
     return token or None
 
 
-def _token_from_query(request: Request) -> str | None:
-    token = request.query_params.get("token")
-    return token.strip() if token and token.strip() else None
-
-
-def authenticate(request: Request, *, allow_query_token: bool = False) -> tuple[str, frozenset[str]]:
+def authenticate(request: Request) -> tuple[str, frozenset[str]]:
     token = _token_from_header(request)
-    if token is None and allow_query_token:
-        # Browser links (the dashboard, the Homepage tile) cannot set a header.
-        token = _token_from_query(request)
     if token is None:
         raise errors.unauthenticated()
     scopes = request.app.state.settings.scopes_for(token)
@@ -40,10 +40,8 @@ def authenticate(request: Request, *, allow_query_token: bool = False) -> tuple[
     return token, scopes
 
 
-def require_scope(
-    request: Request, scope: str, *, allow_query_token: bool = False
-) -> tuple[str, frozenset[str]]:
-    token, scopes = authenticate(request, allow_query_token=allow_query_token)
+def require_scope(request: Request, scope: str) -> tuple[str, frozenset[str]]:
+    token, scopes = authenticate(request)
     if scope not in scopes:
         raise errors.insufficient_scope(scope, scopes)
     return token, scopes

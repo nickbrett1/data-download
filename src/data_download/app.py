@@ -830,10 +830,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # precedence, the plan-type registry, and `/v1/*` -- the API the CLI and the
     # agents already call. What moved into the browser: `$%.4f`, "1h 04m", and
     # the badge colour. That split is the whole argument for keeping FastAPI.
+    #
+    # The split inside the frontend is where the token lives. The HTML shell is
+    # public -- it is one `index.html` and a hashed bundle with no data in it --
+    # and every view-model below needs `read` in an `Authorization` header. So
+    # no URL carries a token: the shell is reachable from a plain tile or home
+    # screen icon, and the browser hands the token over once (a `#token=`
+    # fragment, which no server and no access log ever sees) and keeps it.
+    # That is also why `?token=` is refused below: a credential in a query
+    # string ends up in proxy logs, `Referer`s and whatever renders the link.
 
     @app.get("/ui/dashboard.json")
     async def dashboard_json(request: Request) -> dict[str, Any]:
-        auth.require_scope(request, "read", allow_query_token=True)
+        auth.require_scope(request, "read")
         store = await _store(request)
         rows = [
             _book_row(_with_facet(row), registry) for row in await store.overview()
@@ -858,7 +867,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         list is everything the list deliberately drops: the human `why`, the
         intent or the plan, and the append-only trail.
         """
-        auth.require_scope(request, "read", allow_query_token=True)
+        auth.require_scope(request, "read")
         store = await _store(request)
         row = await store.get_request(request_id)
         if row is None:
@@ -906,7 +915,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/ui/plan-types.json")
     async def plan_types_json(request: Request) -> dict[str, Any]:
-        auth.require_scope(request, "read", allow_query_token=True)
+        auth.require_scope(request, "read")
         return {"types": [_plan_type_view(entry) for entry in registry.all()]}
 
     def _index() -> FileResponse:
@@ -922,20 +931,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request) -> FileResponse:
-        # `read` scope, GET only, no form that mutates. The query token exists
-        # because a browser link cannot set an Authorization header.
-        auth.require_scope(request, "read", allow_query_token=True)
         return _index()
 
     @app.get("/plan-types", response_class=HTMLResponse)
     async def plan_types_page(request: Request) -> FileResponse:
         """The browse view for the registry: what may be filed, and as what.
 
-        Read scope only. The same data is on `GET /v1/plan-types` for machines;
-        this exists because "which fields does a Databento plan need?" should not
-        require reading raw JSON in a terminal.
+        The same data is on `GET /v1/plan-types` for machines; this exists
+        because "which fields does a Databento plan need?" should not require
+        reading raw JSON in a terminal. The page itself is an empty shell; the
+        rows arrive from the gated view-model below.
         """
-        auth.require_scope(request, "read", allow_query_token=True)
         return _index()
 
     @app.get("/requests/{request_id}", response_class=HTMLResponse)
@@ -947,7 +953,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "which one is this?" is one of them, and it is the one a 32-character id
         cannot answer on its own.
         """
-        auth.require_scope(request, "read", allow_query_token=True)
         return _index()
 
     # -- static & home-screen icons (public, no auth required) -------------

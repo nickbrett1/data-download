@@ -8,7 +8,8 @@
    * them, where the interesting condition is a badge instead of a partition.
    *
    * Nothing here can approve or change a request: approval has no endpoint and
-   * no scope these pages can reach, and the token in the URL is `read` only.
+   * no scope these pages can reach, and the token this browser holds is `read`
+   * only.
    * That fact shapes the page -- there is no button, and no line of prose
    * saying so either: a reader who came to look at the book does not need to be
    * told what the book cannot do.
@@ -18,7 +19,7 @@
   import DataTable from "$lib/components/nb/DataTable.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import FilterPanel from "$lib/components/nb/FilterPanel.svelte";
-  import { getView, withToken } from "$lib/api";
+  import { getView } from "$lib/api";
   import { filed, stateTone, whyItMatters } from "$lib/format";
 
   const FACET_LABELS = {
@@ -123,8 +124,8 @@
   footer={false}
   title="data-download"
   nav={[
-    { label: "Requests", href: withToken("/"), current: true },
-    { label: "Plan types", href: withToken("/plan-types"), current: false },
+    { label: "Requests", href: "/", current: true },
+    { label: "Plan types", href: "/plan-types", current: false },
   ]}
 >
   {#snippet mark()}
@@ -168,7 +169,7 @@
                  words in it. -->
             <a
               class="req"
-              href={withToken(`/requests/${request.id}`)}
+              href={`/requests/${request.id}`}
               title={request.id}
             >
               <span class="req-num">#{request.seq}</span>

@@ -68,6 +68,26 @@ exactly the context the Jinja templates used to be handed. The image builds the
 frontend in a `node` stage and the runtime is still plain python — no node, no
 second server, and `/v1/*` never moved.
 
+### Where the token lives
+
+The HTML shell is **public**: it is one `index.html` and a hashed bundle with no
+data in it, so a Homepage tile, a home-screen icon or a link pasted into a chat
+opens the app. Every figure comes from `/ui/*.json`, which require `read` in an
+`Authorization` header — and only from a header. A token is never accepted in a
+URL, because a URL is exactly what gets copied: into a Docker label, a compose
+file, a proxy access log, a `Referer`, browser history.
+
+The browser holds the token and hands it over once, in one of two shapes:
+
+- `#token=…` — a fragment, which no server and no access log ever sees. The app
+  consumes it and strips it from the address bar on load, so screenshots and
+  re-shares are clean. This is the shape to paste.
+- a paste into the unlock card, kept in `localStorage`, which is what a phone
+  gets the first time.
+
+A refused token clears itself and brings the card back saying so. To sign out of
+a browser, clear `localStorage` (or rotate the token, which does it for everyone).
+
 That is also how the tests divide: `pytest` owns the contract (which row gets
 which facet, what a plan type says a parameter demands), and `web/e2e/` owns the
 render, mocking `/ui/*.json` so it needs neither Python nor a database.

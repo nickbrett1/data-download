@@ -287,7 +287,9 @@ def test_a_plan_keeps_the_why_and_the_ceiling_it_was_filed_with(client):
     assert row["why"] == body["why"]
     assert row["max_usd"] == 40
 
-    detail = client.get(f"/ui/request/{filed['request_id']}.json?token=tok-read").json()
+    detail = client.get(
+        f"/ui/request/{filed['request_id']}.json", headers=auth("tok-read")
+    ).json()
     assert detail["payload"]["why"] == body["why"]
     assert detail["max_usd"] == 40
     assert detail["label"] == "databento_batch_download"

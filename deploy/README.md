@@ -117,6 +117,11 @@ Append `deploy/homepage-services.yaml` to your Homepage `services.yaml`
 (and enable the `homepage` Docker provider) to show a health widget for the
 service.
 
+**Never put a token in `href`.** The HTML shell is public, so the tile opens the
+app and the browser asks for a token (or takes one from a `#token=…` fragment).
+`homepage.href=?token=…` writes a live credential into a Docker label, the
+compose file, and every proxy log and screenshot of the dashboard.
+
 ## 6. Networking notes
 
 - Network mode is `bridge`.

@@ -13,7 +13,15 @@ import {
 
 // Resource-type routing, not a URL glob: `**/stats` would also match the
 // document navigation and hand the browser JSON instead of the app.
-async function mock(page, { requests, types, detail } = {}) {
+//
+// `token` is seeded into localStorage rather than put in the URL, because that
+// is how the app holds it now: the shell is public and every request carries
+// the token in an Authorization header. A test that wants no token passes "".
+async function mock(page, { requests, types, detail, token = "tok-read" } = {}) {
+  await page.addInitScript((value) => {
+    if (value) localStorage.setItem("data_download.read_token", value);
+    else localStorage.removeItem("data_download.read_token");
+  }, token);
   await page.route(
     "**/ui/**",
     (route) => {
@@ -156,27 +164,75 @@ test.describe("the request book", () => {
     await expect(page.locator(".tbl-row")).toContainText("#2");
   });
 
-  test("the token survives the link between the two pages", async ({
+  test("a link between the two pages carries no credential", async ({
     page,
   }) => {
     await mock(page);
-    await page.goto("/?token=tok-read");
-    // Both the nav tab and the foot link, because the token is a browser
-    // navigation in each case and neither can carry a header.
-    const links = page.locator('a[href="/plan-types?token=tok-read"]');
+    await page.goto("/");
+    // The shell is public and the token lives in this browser, so a nav tab is
+    // just a tab: nothing in the address bar can be logged, forwarded or
+    // screenshotted as a token.
+    const links = page.locator('a[href="/plan-types"]');
     expect(await links.count()).toBeGreaterThan(0);
+    const hrefs = await page.locator("a[href]").evaluateAll((els) =>
+      els.map((el) => el.getAttribute("href")),
+    );
+    expect(hrefs.filter((href) => href.includes("token="))).toEqual([]);
+    await expect(page).not.toHaveURL(/token=/);
   });
 
-  test("an unauthenticated answer says what to do about it", async ({
+  test("a browser with no token is asked for one, and unlocks", async ({
     page,
   }) => {
+    await mock(page, { token: "" });
+    await page.goto("/");
+
+    const gate = page.locator(".gate");
+    await expect(gate).toContainText("no read token");
+    await expect(page.locator(".tbl-row")).toHaveCount(0);
+
+    await gate.locator('input[name="token"]').fill("tok-read");
+    await gate.locator("button[type=submit]").click();
+
+    await expect(page.locator(".gate")).toHaveCount(0);
+    await expect(page.locator(".tbl-row")).toHaveCount(5);
+    // Kept for the next visit, and never in the URL.
+    const saved = await page.evaluate(() =>
+      localStorage.getItem("data_download.read_token"),
+    );
+    expect(saved).toBe("tok-read");
+    await expect(page).not.toHaveURL(/token=/);
+  });
+
+  test("#token= is taken out of the address bar once it is used", async ({
+    page,
+  }) => {
+    await mock(page, { token: "" });
+    await page.goto("/#token=tok-read");
+    await expect(page.locator(".tbl-row")).toHaveCount(5);
+    await expect(page).not.toHaveURL(/token=/);
+    const saved = await page.evaluate(() =>
+      localStorage.getItem("data_download.read_token"),
+    );
+    expect(saved).toBe("tok-read");
+  });
+
+  test("a refused token says so, and asks again", async ({ page }) => {
+    // Authorised once, so the count is a fact: this browser said something and
+    // the server did not accept it.
+    await mock(page, { token: "stale-token" });
     await page.route(
       "**/ui/**",
       (route) => route.fulfill({ status: 401, body: "" }),
       { times: 99 },
     );
     await page.goto("/");
-    await expect(page.locator(".empty-state")).toContainText("?token=");
+    const gate = page.locator(".gate");
+    await expect(gate).toContainText("That token was refused");
+    const saved = await page.evaluate(() =>
+      localStorage.getItem("data_download.read_token"),
+    );
+    expect(saved).toBe(null);
   });
 
   test("the head is the home-screen entry, not a bare tab", async ({
@@ -640,7 +696,7 @@ test.describe("naming a request, and opening it", () => {
 
   test("the whole row is the target, not just the name", async ({ page }) => {
     await mock(page);
-    await page.goto("/?token=tok-roundtrip");
+    await page.goto("/");
 
     // The far end of the row -- the badge in the last column -- which used to be
     // dead space. The anchor is still the only link; its `::after` covers the row.
@@ -651,9 +707,7 @@ test.describe("naming a request, and opening it", () => {
     const box = await row.boundingBox();
     await page.mouse.click(box.x + box.width - 12, box.y + box.height / 2);
 
-    await expect(page).toHaveURL(
-      /\/requests\/req_0a7c9d33\?token=tok-roundtrip$/,
-    );
+    await expect(page).toHaveURL(/\/requests\/req_0a7c9d33$/);
     await expect(page.locator(".detail-title")).toContainText("#4 ·");
   });
 
@@ -661,16 +715,14 @@ test.describe("naming a request, and opening it", () => {
     page,
   }) => {
     await mock(page);
-    await page.goto("/?token=tok-roundtrip");
+    await page.goto("/");
 
     await page
       .locator(".tbl-row")
       .filter({ hasText: "OPRA.PILLAR · trades" })
       .locator("a.req")
       .click();
-    await expect(page).toHaveURL(
-      /\/requests\/req_0a7c9d33\?token=tok-roundtrip$/,
-    );
+    await expect(page).toHaveURL(/\/requests\/req_0a7c9d33$/);
 
     await expect(page.locator(".detail-title")).toHaveText(
       "#4 · OPRA.PILLAR · trades · 2026-10-01→2026-10-08",
@@ -698,7 +750,7 @@ test.describe("naming a request, and opening it", () => {
     page,
   }) => {
     await mock(page);
-    await page.goto("/requests/req_0a7c9d33?token=tok-roundtrip");
+    await page.goto("/requests/req_0a7c9d33");
     await expect(page.locator(".detail-title")).toContainText("#4 ·");
     await page.reload();
     await expect(page.locator(".detail-title")).toContainText("#4 ·");
@@ -831,7 +883,7 @@ test.describe("a request that is waiting, in three different ways", () => {
     page,
   }) => {
     await mock(page);
-    await page.goto("/requests/req_0a7c9d33?token=tok-read");
+    await page.goto("/requests/req_0a7c9d33");
 
     const section = page
       .locator(".block")
@@ -884,7 +936,7 @@ test.describe("a request that is waiting, in three different ways", () => {
         },
       },
     });
-    await page.goto("/requests/req_0a7c9d33?token=tok-read");
+    await page.goto("/requests/req_0a7c9d33");
     const section = page
       .locator(".block")
       .filter({ hasText: "why there is no job" });
@@ -901,7 +953,7 @@ test.describe("a request that is waiting, in three different ways", () => {
         match: { ...requestDetail.match, verdict: "not_claimed" },
       },
     });
-    await page.goto("/requests/req_0a7c9d33?token=tok-read");
+    await page.goto("/requests/req_0a7c9d33");
     await expect(section).toContainText("new plan asked for");
     await expect(section).not.toContainText("POST /v1/requests/");
   });

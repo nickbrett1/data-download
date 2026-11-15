@@ -146,7 +146,7 @@ def test_the_bound_row_is_then_ordinary_work_to_approve(client, db_path):
     registry = registry_with(tmp_path=db_path.parent, datasets=lambda d: [*d, "ZZZZ.*"])
     run_rematch(db_path, registry)
 
-    book = client.get("/ui/dashboard.json?token=tok-read").json()
+    book = client.get("/ui/dashboard.json", headers=auth("tok-read")).json()
     row = next(r for r in book["rows"] if r["id"] == request_id)
     assert row["facet"] == "todo"
     assert row["facet_label"] == "To approve"
@@ -215,7 +215,7 @@ def test_a_plan_that_still_does_not_fit_rewrites_the_verdict_and_says_why(client
 
     # `needs_params` outranks `requested`: the caller has a move again, and
     # saying "plan requested" would hide it.
-    book = client.get("/ui/dashboard.json?token=tok-read").json()
+    book = client.get("/ui/dashboard.json", headers=auth("tok-read")).json()
     row = next(r for r in book["rows"] if r["id"] == request_id)
     assert row["facet"] == "needs_params"
 
