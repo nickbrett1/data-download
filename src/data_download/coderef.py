@@ -39,9 +39,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run_git(args: list[str], repo_root: Path) -> subprocess.CompletedProcess[str] | None:
+    # `-c safe.directory=<root>` is not a nicety: CI runs as root over a
+    # checkout owned by another uid, and git refuses that ("dubious ownership")
+    # with a non-zero exit. Without this, a real checkout reads as "sha is not a
+    # commit" and every claim is refused -- which is exactly how build 47 died.
     try:
         return subprocess.run(
-            ["git", *args],
+            ["git", "-c", f"safe.directory={repo_root}", *args],
             cwd=repo_root,
             capture_output=True,
             text=True,
@@ -86,8 +90,17 @@ def resolve(env: dict[str, str] | None = None, repo_root: Path | None = None) ->
 
 
 def has_checkout(repo_root: Path | None = None) -> bool:
+    """Does git *work* here -- not merely "is there a `.git` directory".
+
+    The distinction is the whole of build 47: the CI host has a `.git` it is not
+    allowed to read, so a filesystem check says yes and every command says no.
+    A checkout that cannot be read is no checkout.
+    """
     root = repo_root or REPO_ROOT
-    return (root / ".git").exists()
+    if not (root / ".git").exists():
+        return False
+    finished = _run_git(["rev-parse", "--git-dir"], root)
+    return finished is not None and finished.returncode == 0
 
 
 def is_commit(sha: str, repo_root: Path | None = None) -> bool | None:

@@ -370,6 +370,19 @@ def test_resolve_answers_none_when_there_is_no_checkout_and_no_env(tmp_path: Pat
     assert coderef.has_checkout(tmp_path) is False
 
 
+def test_a_git_directory_git_cannot_use_is_not_a_checkout(tmp_path: Path):
+    """Build 47: the CI host had a `.git` it was not allowed to read.
+
+    A filesystem check said "yes, a checkout" and every git command said no, so
+    a real commit read as *not a commit* and every claim was refused. A checkout
+    that cannot be read is no checkout, and the honest answer is *cannot tell*.
+    """
+    (tmp_path / ".git").mkdir()  # a `.git` that is not a repository
+    assert coderef.has_checkout(tmp_path) is False
+    assert coderef.is_commit("0" * 40, repo_root=tmp_path) is None
+    assert coderef.resolve(env={}, repo_root=tmp_path) is None
+
+
 def test_coderef_prefers_the_environment_over_the_checkout():
     """The image has no `.git`; its sha is the build arg."""
     assert coderef.resolve(env={coderef.ENV_VAR: "b" * 40}) == "b" * 40
