@@ -196,3 +196,32 @@ def test_an_older_store_gains_the_new_columns_on_start(tmp_path):
     assert book["rows"][0]["why"] == "old" 
     # ... and the ceiling still comes out of the verbatim intent body.
     assert book["rows"][0]["max_usd"] == 120
+
+
+def test_the_service_gives_its_logger_somewhere_to_write(monkeypatch):
+    """uvicorn configures `uvicorn.*` and leaves root alone.
+
+    So an `info` line from this package propagated to a root logger with no
+    handler: dropped silently, unless it was a warning and logging's last-resort
+    handler printed it. The one that mattered was `code_ref`, which names the
+    commit a container is running -- absent from every deployment's log, which
+    is the one place it is needed.
+
+    Asserted on the installer rather than through a live app because pytest's
+    logging plugin replaces the handlers it finds.
+    """
+    import logging
+
+    from data_download.app import _configure_logging
+
+    logger = logging.getLogger("data_download")
+    monkeypatch.setattr(logger, "handlers", [])
+    monkeypatch.setattr(logger, "level", logging.WARNING)
+
+    _configure_logging("info")
+    assert len(logger.handlers) == 1
+    assert logger.isEnabledFor(logging.INFO)
+
+    # Idempotent, or a second app (a test client, a reload) doubles every line.
+    _configure_logging("info")
+    assert len(logger.handlers) == 1

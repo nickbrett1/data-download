@@ -661,3 +661,14 @@ def test_a_row_filed_before_the_match_carries_no_verdict_rather_than_a_guess(cli
     body = _detail(client, "req_old").json()
     assert body["match"] is None
     assert body["facet"] == "no_plan"
+
+
+def test_every_facet_key_has_a_label(client):
+    """`facet_labels` is handed over as the names of the facets.
+
+    A key in `facets` with no label in that map renders as the key itself, and
+    `other` -- where a state this code has never heard of lands -- is a facet
+    the order list deliberately omits but the labels must not.
+    """
+    book = _book(client)
+    assert set(book["facets"]) <= set(book["facet_labels"])

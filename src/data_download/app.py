@@ -37,6 +37,30 @@ from .registry import Registry, load_registry
 
 log = logging.getLogger(__name__)
 
+
+def _configure_logging(level: str) -> None:
+    """Give this package's logger somewhere to write.
+
+    uvicorn configures `uvicorn.*` and leaves the root logger untouched, so
+    every `log.info` here propagated to a root logger with no handler: dropped
+    silently, unless it was a warning and logging's last-resort handler printed
+    it. The cost was concrete -- the line that names the code the process is
+    running (`code_ref ...`), and the line that says the store opened, never
+    appeared in a container's logs, which is the one place they are needed.
+    Idempotent, and harmless under pytest where a handler may already exist.
+    """
+    # The package logger, not this module's: `db`, `auth` and `coderef` log too,
+    # and one handler on the parent covers all of them as they appear.
+    package = logging.getLogger(__package__ or __name__)
+    if package.handlers:
+        return
+    handler = logging.StreamHandler()
+    # The same shape as uvicorn's own lines, so one `docker logs` reads as one
+    # log rather than two formats interleaved.
+    handler.setFormatter(logging.Formatter("%(levelname)s:     %(message)s"))
+    package.addHandler(handler)
+    package.setLevel(level.upper())
+
 STATIC_DIR = Path(__file__).with_name("static")
 
 # The built frontend (web/dist, copied next to this module by the image). Vite
@@ -74,6 +98,11 @@ FACET_LABELS = {
     "todo": "To approve",
     "working": "Running",
     "done": "Finished",
+    # Not in FACET_ORDER, because a state this code has never heard of is a
+    # render-last case, not a position in the workflow. But it is in the labels,
+    # because this map is handed over as "the names of the facets": a row in
+    # `other` with no name in it would render as the word `other`.
+    "other": "Other",
 }
 TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
 
@@ -410,6 +439,7 @@ def _book_row(row: dict[str, Any], registry: Registry) -> dict[str, Any]:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    _configure_logging(os.environ.get("LOG_LEVEL", "info"))
     settings = settings or load_settings()
     registry: Registry = load_registry(settings.plan_types_dir)
 
