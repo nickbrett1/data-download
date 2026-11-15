@@ -27,6 +27,7 @@ TOKENS = {
     "tok-submit": frozenset({"submit", "read"}),
     "tok-read": frozenset({"read"}),
     "tok-approve": frozenset({"approve"}),
+    "tok-escalate": frozenset({"submit", "read", "escalate"}),
 }
 
 PLAN_BODY = {

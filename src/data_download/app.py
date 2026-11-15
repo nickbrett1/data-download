@@ -28,10 +28,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, errors, profiles
+from . import auth, errors, match, profiles
 from . import job as job_mod
 from .config import Settings, load_settings
-from .db import Store, canonical_json, payload_hash, utcnow
+from .db import EscalateRefused, Store, canonical_json, payload_hash, utcnow
 from .models import validate_intent, validate_plan
 from .registry import Registry, load_registry
 
@@ -239,6 +239,13 @@ def _request_payload(row: dict[str, Any]) -> dict[str, Any]:
         "blocked_reason": row["blocked_reason"],
         "plan_origin": row["plan_origin"],
         "matched_profile": row["matched_profile"],
+        # Phase 2.5: why this Request has no Job, and whether anyone has asked
+        # for a plan. A blocked row that cannot say which is a dead end.
+        "match_verdict": row["match_verdict"] if "match_verdict" in row.keys() else None,
+        "match": json.loads(row["match_report_json"])
+        if row.keys() and "match_report_json" in row.keys() and row["match_report_json"]
+        else None,
+        "escalated_at": row["escalated_at"] if "escalated_at" in row.keys() else None,
         "why": row["why"] if "why" in row.keys() else None,
         "max_usd": row["max_usd"] if "max_usd" in row.keys() else None,
         "job_hash": row["job_hash"],
@@ -259,6 +266,8 @@ def _summary_payload(row: dict[str, Any]) -> dict[str, Any]:
         "estimate_usd": row["estimate_usd"],
         "blocked_reason": row["blocked_reason"],
         "plan_origin": row["plan_origin"],
+        "match_verdict": row["match_verdict"] if "match_verdict" in row.keys() else None,
+        "escalated_at": row["escalated_at"] if "escalated_at" in row.keys() else None,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -488,31 +497,97 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 for key in ("dataset", "schema", "window", "symbols", "stype_in")
                 if key in intent_obj
             }
+            # The match decides whether this Request needs a plan at all, and
+            # says why. It is a schema comparison over the registry -- pure,
+            # cheap, and the same answer every time.
+            report = match.attempt(intent_obj, registry)
+            report_text = match.as_json(report)
+            job_text = job_digest = None
+            plan_type = None
+            if report["verdict"] == match.MATCHED:
+                plan = profiles.resolve(registry, report["plan_type"])
+                chosen = next(
+                    (
+                        c
+                        for c in report["candidates"]
+                        if c["plan_type"] == report["plan_type"]
+                    ),
+                    {},
+                )
+                if plan is not None:
+                    # The intent supplied everything the plan declares, so there
+                    # is nothing to ask a human and nothing to invent: bind it.
+                    # `verify` is empty here and the plan's own default applies;
+                    # a caller who wants to choose says so by filing a plan.
+                    # An intent carries no `verify`, and a Job cannot be bound
+                    # without one. The default is the conservative policy: a
+                    # failed verification quarantines, never commits, so a
+                    # matched intent can never land half-verified bytes.
+                    verify = body.get("verify") or {}
+                    on_failure = (
+                        verify.get("on_failure") if isinstance(verify, dict) else None
+                    )
+                    if on_failure is None:
+                        allowed = plan.type.on_failure_allowed
+                        on_failure = (
+                            "quarantine"
+                            if "quarantine" in allowed
+                            else sorted(allowed)[0]
+                        )
+                    elif on_failure not in plan.type.on_failure_allowed:
+                        raise errors.plan_not_valid(
+                            f"verify.on_failure {on_failure!r} is not allowed for "
+                            f"plan_type {plan.name!r}"
+                        )
+                    try:
+                        bound = plan.binder(
+                            dict(chosen.get("params") or {}),
+                            {"on_failure": on_failure},
+                        )
+                        job_text, job_digest = job_mod.bind_and_seal(bound)
+                        plan_type = plan.name
+                    except (job_mod.JobInvalid, ValueError, KeyError) as exc:
+                        # A binder that refuses params its own schema accepted is
+                        # a plan defect, not the caller's: record it and stay
+                        # blocked rather than blaming the request.
+                        report["verdict"] = match.CANNOT_EXPRESS
+                        report["error"] = f"binder refused: {exc}"
+                        report_text = match.as_json(report)
             row = {
                 "id": _new_id(),
-                "state": "blocked",
+                "state": "draft" if job_text else "blocked",
                 "body_kind": "intent",
-                "plan_type": None,
-                "job_json": None,
+                "plan_type": plan_type,
+                "job_json": job_text,
                 "params_json": canonical_json(params),
                 "idempotency_key": idempotency_key,
                 "payload_hash": digest,
                 "intent_json": canonical_json(body),
                 "estimate_usd": None,
-                "blocked_reason": "awaiting_plan",
-                "plan_origin": None,
+                "blocked_reason": None if job_text else "awaiting_plan",
+                "plan_origin": "matched" if job_text else None,
                 "matched_profile": None,
-                "code_ref": None,
-                "job_hash": None,
+                "code_ref": getattr(request.app.state, "code_ref", None)
+                if job_text
+                else None,
+                "job_hash": job_digest,
                 "lease_until": None,
                 "landed_sha256": None,
                 "errors_json": None,
+                "match_verdict": report["verdict"],
+                "match_report_json": report_text,
+                "escalated_at": None,
                 "why": body.get("why"),
                 "max_usd": body.get("max_usd"),
                 "created_at": now,
                 "updated_at": now,
             }
-            event_detail = {"body_kind": "intent", "blocked_reason": "awaiting_plan"}
+            event_detail = {
+                "body_kind": "intent",
+                "match_verdict": report["verdict"],
+                "plan_type": plan_type,
+                "blocked_reason": row["blocked_reason"],
+            }
         else:
             raise errors.invalid_body("kind must be 'plan' or 'intent'")
 
@@ -530,9 +605,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "request_id": stored["id"],
                 "state": stored["state"],
                 "blocked_reason": stored["blocked_reason"],
+                "match_verdict": stored.get("match_verdict"),
+                "match": json.loads(stored["match_report_json"])
+                if stored.get("match_report_json")
+                else None,
                 # Informational: an earlier Request with the same body. This one
                 # still exists, with its own id and its own output directory.
                 "duplicate_of": duplicate_of,
+            },
+        )
+
+    @app.post("/v1/requests/{request_id}/escalate", status_code=202)
+    async def escalate_request(request: Request, request_id: str) -> JSONResponse:
+        """Ask for a new plan. Records demand; writes no plan.
+
+        A caller may do this only when no registered plan type could take the
+        intent even with every parameter it declares -- otherwise the answer is
+        409 with the shortest path to a plan that already exists, because a
+        caller who can escalate will escalate and adding two fields has to look
+        cheaper than waiting for new code.
+        """
+        auth.require_scope(request, "escalate")
+        store = await _store(request)
+        note = None
+        raw = await request.body()
+        if raw.strip():
+            try:
+                body = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise errors.invalid_body("body is not valid JSON") from None
+            if not isinstance(body, dict):
+                raise errors.invalid_body("body must be a JSON object")
+            note = body.get("note")
+            if note is not None and not isinstance(note, str):
+                raise errors.invalid_body("note must be a string")
+        try:
+            row, changed = await store.escalate(request_id, note=note)
+        except EscalateRefused as exc:
+            if exc.reason == "not_found":
+                raise errors.not_found(
+                    f"no request with id {request_id!r}"
+                ) from None
+            raise errors.ApiError(
+                409,
+                "escalate_refused",
+                exc.as_text(),
+                reason=exc.reason,
+                state=exc.state,
+                would_fit=exc.would_fit,
+            ) from None
+        return JSONResponse(
+            status_code=202,
+            content={
+                "request_id": row["id"],
+                "state": row["state"],
+                "blocked_reason": row["blocked_reason"],
+                "match_verdict": row["match_verdict"],
+                "escalated_at": row["escalated_at"],
+                "created": changed,
             },
         )
 

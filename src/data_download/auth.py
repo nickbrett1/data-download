@@ -1,7 +1,9 @@
 """Bearer-token authentication and server-side scope enforcement (§7.3).
 
-Three scopes exist in the design. This phase uses `submit` and `read`; `approve`
-is never granted by any endpoint and `deploy` has no verb yet. A token's scopes
+The design names three scopes; `escalate` is the fourth (phase 2.5) and exists
+because asking for a new plan is a different act from filing a request. Endpoints
+use `submit`, `read` and `escalate`; `approve` is never granted by any endpoint
+(it is a CLI verb) and `deploy` has no verb yet. A token's scopes
 come from `DATA_DOWNLOAD_API_TOKENS`; the check is here, not by convention.
 """
 

@@ -72,6 +72,12 @@ ADDED_COLUMNS = (
     # Phase 3: the claimant (§8.2). Nullable, like the rest of this tuple, and
     # for the same reason -- the store may already hold rows.
     ("requests", "owner", "TEXT"),
+    # Phase 2.5: why an intent has no Job, and whether anyone has asked for a
+    # plan. Nullable and added in place -- no CHECK widens, so no table rebuild:
+    # the verdict is a column, not a new `blocked_reason` value.
+    ("requests", "match_verdict", "TEXT"),
+    ("requests", "match_report_json", "TEXT"),
+    ("requests", "escalated_at", "TEXT"),
 )
 
 
@@ -119,6 +125,9 @@ CREATE TABLE requests_phase2 (
   lease_until      TEXT,
   landed_sha256    TEXT,
   errors_json      TEXT,
+  match_verdict    TEXT,
+  match_report_json TEXT,
+  escalated_at     TEXT,
   why              TEXT,
   max_usd          REAL,
   created_at       TEXT NOT NULL,
@@ -143,7 +152,8 @@ _PHASE2_COLUMNS = (
     "id, state, body_kind, plan_type, job_json, params_json, payload_hash, "
     "idempotency_key, intent_json, estimate_usd, blocked_reason, plan_origin, "
     "matched_profile, code_ref, job_hash, owner, lease_until, landed_sha256, "
-    "errors_json, why, max_usd, created_at, updated_at"
+    "errors_json, match_verdict, match_report_json, escalated_at, "
+    "why, max_usd, created_at, updated_at"
 )
 
 
@@ -294,6 +304,34 @@ class ApproveRefused(Exception):
 
     def as_text(self) -> str:
         return f"approve_refused: {self.reason} (state={self.state})"
+
+
+class EscalateRefused(Exception):
+    """A caller asked for a new plan and the answer was no (phase 2.5).
+
+    `would_fit` is carried, not just the reason: the only useful thing to say
+    to a caller whose intent an existing plan could take is *how* to make it
+    take it, and making them ask twice to find out is how a caller learns that
+    escalating is easier than reading.
+    """
+
+    REASONS = frozenset(
+        {"not_found", "wrong_state", "a_plan_matches", "already_requested"}
+    )
+
+    def __init__(
+        self,
+        reason: str,
+        state: str | None = None,
+        would_fit: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.state = state
+        self.would_fit = would_fit
+
+    def as_text(self) -> str:
+        return f"escalate_refused: {self.reason} (state={self.state})"
 
 
 class ClaimRefused(Exception):
@@ -718,6 +756,76 @@ class Store:
                 )
                 await self.conn.execute("COMMIT")
             except ApproveRefused:
+                await self.conn.execute("ROLLBACK")
+                raise
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        return (await self.get_request(request_id) or row), True
+
+    async def escalate(
+        self,
+        request_id: str,
+        *,
+        note: str | None = None,
+        now: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """`blocked` -> "a new plan has been asked for". Returns `(row, changed)`.
+
+        This records **demand, not a plan**: a plan type is a params schema plus
+        a committed binder, and nothing here writes one. What it does is turn a
+        row that nobody was looking at into a row with an owner's request on it,
+        and it carries the match report so the request is evidence-backed.
+
+        It is refused while any registered plan is merely short of parameters --
+        `a_plan_matches` -- because that is a caller who has not finished
+        reading, not a gap in the registry. Escalating twice is a no-op with no
+        second event, for the same reason approval is.
+        """
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = await self._select(request_id)
+                if row is None:
+                    raise EscalateRefused("not_found")
+                if row["state"] != "blocked":
+                    raise EscalateRefused("wrong_state", row["state"])
+                if row["escalated_at"]:
+                    await self.conn.execute("ROLLBACK")
+                    return row, False
+                report = (
+                    json.loads(row["match_report_json"])
+                    if row["match_report_json"]
+                    else {}
+                )
+                if row["match_verdict"] == "needs_params":
+                    raise EscalateRefused(
+                        "a_plan_matches", row["state"], report.get("would_fit")
+                    )
+                if row["match_verdict"] == "matched":
+                    # A bound row is not blocked; a hand-edited store is not
+                    # bound by a state CHECK written when the row was stored.
+                    raise EscalateRefused("a_plan_matches", row["state"], None)
+                await self.conn.execute(
+                    "UPDATE requests SET escalated_at = ?, updated_at = ? "
+                    "WHERE id = ? AND state = 'blocked' AND escalated_at IS NULL",
+                    (ts, ts, request_id),
+                )
+                await self._event(
+                    request_id,
+                    ts,
+                    "submitter",
+                    "escalated",
+                    {
+                        "note": note,
+                        "match_verdict": row["match_verdict"],
+                        "registry": report.get("registry"),
+                        "would_fit": report.get("would_fit"),
+                    },
+                )
+                await self.conn.execute("COMMIT")
+            except EscalateRefused:
                 await self.conn.execute("ROLLBACK")
                 raise
             except Exception:

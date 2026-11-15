@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS requests (
   lease_until      TEXT,                   -- phase 3
   landed_sha256    TEXT,                   -- phase 5
   errors_json      TEXT,
+  match_verdict    TEXT,                   -- phase 2.5: matched|needs_params|cannot_express|not_claimed
+  match_report_json TEXT,                  -- the whole MatchReport, with a registry digest
+  escalated_at     TEXT,                   -- phase 2.5: when a caller asked for a new plan
   why              TEXT,                   -- the human reason, verbatim (§7.2)
   max_usd          REAL,                   -- the ceiling that travelled with the body
   created_at       TEXT NOT NULL,
@@ -248,6 +251,13 @@ SELECT r.id,
        -- detail page claim no reason was given by a caller who gave one.
        COALESCE(r.why, json_extract(r.intent_json, '$.why')) AS why,
        r.params_json AS params_json,
+       -- Phase 2.5: why an intent has no Job, and whether a new plan was asked
+       -- for. In the union view rather than in each of the four facet views,
+       -- because those are `IF NOT EXISTS` and a deployed store would keep the
+       -- old column list forever (see the note above).
+       r.match_verdict,
+       r.match_report_json,
+       r.escalated_at,
        CASE WHEN r.blocked_reason = 'awaiting_plan' THEN 1 ELSE 0 END AS merge_can_clear,
        s.condition AS stuck_condition,
        s.detail AS stuck_detail

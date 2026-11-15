@@ -10,11 +10,12 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-KNOWN_SCOPES = frozenset({"submit", "read", "approve", "deploy"})
+KNOWN_SCOPES = frozenset({"submit", "read", "escalate", "approve", "deploy"})
 
-# A bare token (not JSON, no `:scopes` suffix) gets this. `approve` is never
-# granted implicitly: §7.3 makes it human-CLI-only, and this phase has no
-# approve path at all.
+# A bare token (not JSON, no `:scopes` suffix) gets this. Neither `escalate` nor
+# `approve` is granted implicitly: `approve` is human-CLI-only (§7.3), and
+# `escalate` asks for new code, so a token that can file a request cannot also
+# ask for the registry to grow without somebody naming that in its scopes.
 DEFAULT_SCOPES = frozenset({"submit", "read"})
 
 
