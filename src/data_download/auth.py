@@ -10,9 +10,10 @@ A token comes from the `Authorization` header and from nowhere else. The query
 string used to be accepted for the HTML pages, because a browser navigation
 cannot set a header -- but the cost was a live credential in every place a URL
 is copied to: the Homepage tile's Docker label, the compose file, proxy access
-logs, `Referer`s and browser history. The pages are now a public shell and the
-view-models are gated, so the browser holds the token and sends it as a header.
-There is deliberately no fallback: one way in is one thing to audit.
+logs, `Referer`s and browser history. The UI is now a public read-only
+projection instead, so no browser ever needs a token; this module guards
+`/v1/*`, which is where the verbs are. A query token is refused outright: one
+way in is one thing to audit.
 """
 
 from __future__ import annotations

@@ -52,7 +52,8 @@ deliberate, because the two sides have different kinds of truth in them:
 | --- | --- |
 | the SQLite store | it is the only writer |
 | `v_pending` / `v_done` / `v_stuck` / `v_blocked` | the views *are* the read-model; a page is a projection of them |
-| token auth and the `read` scope | approval has no endpoint **and** no scope these pages can reach |
+| the token, on `/v1/*` | the pages are a public read-only projection; the verbs are machine credentials |
+
 | `/v1/*` | the CLI and the agents already call it; moving it would break them |
 | `_with_facet` precedence | "`running` + `lease_expired` is broken, not running" is a domain rule, not a colour — and so is which of the three blocked facets a row lands in |
 | the plan-type registry | loaded from `plan_types/*.yaml` at startup |
@@ -68,25 +69,33 @@ exactly the context the Jinja templates used to be handed. The image builds the
 frontend in a `node` stage and the runtime is still plain python — no node, no
 second server, and `/v1/*` never moved.
 
-### Where the token lives
+### What is public, and what is not
 
-The HTML shell is **public**: it is one `index.html` and a hashed bundle with no
-data in it, so a Homepage tile, a home-screen icon or a link pasted into a chat
-opens the app. Every figure comes from `/ui/*.json`, which require `read` in an
-`Authorization` header — and only from a header. A token is never accepted in a
-URL, because a URL is exactly what gets copied: into a Docker label, a compose
-file, a proxy access log, a `Referer`, browser history.
+The UI is **public**: `/`, `/plan-types`, `/requests/<id>` and the `/ui/*.json`
+view-models they read all open with no credential. That is a decision, not an
+omission. Everything here is a GET of a projection — a request book, the
+registry, an append-only trail — and there is no verb behind them: approval has
+no endpoint, and `submit` and `escalate` are tokens that live with machines.
+So "can you reach port 8820" is the whole read trust model, and the port is
+expected to be on the LAN or the tailnet.
 
-The browser holds the token and hands it over once, in one of two shapes:
+A lock was tried here and removed. It cost a live read token in a Homepage
+tile's Docker label (and four world-readable backups of it), a rotation, and a
+bookmark that stopped working — all to stop a stranger on the LAN reading a
+table of Databento requests. The mechanisms that remain are the ones that
+matter:
 
-- `#token=…` — a fragment, which no server and no access log ever sees. The app
-  consumes it and strips it from the address bar on load, so screenshots and
-  re-shares are clean. This is the shape to paste.
-- a paste into the unlock card, kept in `localStorage`, which is what a phone
-  gets the first time.
+| door | who holds the key |
+| --- | --- |
+| `GET /v1/*` | `read` or `submit` in an `Authorization` header |
+| `POST /v1/requests` | `submit` |
+| `POST /v1/requests/{id}/escalate` | `escalate` |
+| approval | no HTTP door at all; a CLI verb |
 
-A refused token clears itself and brings the card back saying so. To sign out of
-a browser, clear `localStorage` (or rotate the token, which does it for everyone).
+No URL anywhere carries a token, and `auth.py` has no query-string path: one
+way in, so one thing to audit. `DATA_DOWNLOAD_API_TOKENS` is a list of
+`<token>:<scopes>` pairs, and `python -c` is not how you read it — it comes from
+Doppler on the NAS, or the service's own `.env` beside its compose file.
 
 That is also how the tests divide: `pytest` owns the contract (which row gets
 which facet, what a plan type says a parameter demands), and `web/e2e/` owns the

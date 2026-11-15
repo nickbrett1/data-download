@@ -831,18 +831,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # agents already call. What moved into the browser: `$%.4f`, "1h 04m", and
     # the badge colour. That split is the whole argument for keeping FastAPI.
     #
-    # The split inside the frontend is where the token lives. The HTML shell is
-    # public -- it is one `index.html` and a hashed bundle with no data in it --
-    # and every view-model below needs `read` in an `Authorization` header. So
-    # no URL carries a token: the shell is reachable from a plain tile or home
-    # screen icon, and the browser hands the token over once (a `#token=`
-    # fragment, which no server and no access log ever sees) and keeps it.
-    # That is also why `?token=` is refused below: a credential in a query
-    # string ends up in proxy logs, `Referer`s and whatever renders the link.
+    # The pages and their view-models are **public**, and deliberately so. What
+    # they show is a read-only projection: a request book, a registry, an
+    # append-only trail. There is no verb here -- approval has no endpoint, and
+    # `submit` and `escalate` are separate tokens that live with the agents --
+    # so a lock on this screen would protect the least valuable thing in the
+    # system with the most fragile mechanism in it. It used to have one, and the
+    # cost was a live credential in a Docker label, a rotation, and a bookmark
+    # that stopped working.
+    #
+    # The door that matters is the one in front of `/v1/*`, which still needs a
+    # token in an `Authorization` header. "Can reach port 8820" is the trust
+    # boundary for reading, and it is expected to be the LAN or the tailnet.
 
     @app.get("/ui/dashboard.json")
     async def dashboard_json(request: Request) -> dict[str, Any]:
-        auth.require_scope(request, "read")
         store = await _store(request)
         rows = [
             _book_row(_with_facet(row), registry) for row in await store.overview()
@@ -867,7 +870,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         list is everything the list deliberately drops: the human `why`, the
         intent or the plan, and the append-only trail.
         """
-        auth.require_scope(request, "read")
         store = await _store(request)
         row = await store.get_request(request_id)
         if row is None:
@@ -915,7 +917,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/ui/plan-types.json")
     async def plan_types_json(request: Request) -> dict[str, Any]:
-        auth.require_scope(request, "read")
         return {"types": [_plan_type_view(entry) for entry in registry.all()]}
 
     def _index() -> FileResponse:

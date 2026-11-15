@@ -174,7 +174,7 @@ def test_repeat_failure_does_not_fire_at_two(client, db_path):
 
 
 def _book(client) -> dict:
-    res = client.get("/ui/dashboard.json", headers=auth("tok-read"))
+    res = client.get("/ui/dashboard.json")
     assert res.status_code == 200
     return res.json()
 
@@ -299,19 +299,23 @@ def test_a_plan_type_card_names_its_vendor(client):
     """The type's name carries the vendor as a prefix, which is not the same
     thing as saying who sells the data to a reader who does not decode
     `databento_batch_download`."""
-    types = client.get("/ui/plan-types.json", headers=auth("tok-read")).json()["types"]
+    types = client.get("/ui/plan-types.json").json()["types"]
     assert [t["vendor"] for t in types] == ["Databento"]
 
 
-def test_a_token_is_only_accepted_in_a_header(client, db_path):
-    """One way in, so there is one thing to audit: the shell is public and the
-    data is behind an Authorization header. A `?token=` is refused even when it
-    is the right token, because a token that works in a URL is a token in a
-    proxy log, a `Referer` and the Homepage tile's Docker label."""
+def test_the_view_models_ask_for_no_credential(client, db_path):
+    """The read-model is public, and that is a decision rather than an omission.
+
+    Everything reachable here is a GET of a projection: a request book, a
+    registry, an append-only trail. No verb, so nothing to protect with a lock
+    -- and a lock was tried, at the price of a live credential in a Docker label
+    and a bookmark that stopped working. `submit` and `escalate` keep their
+    tokens, and those are the only things that can change the world."""
     _seed_all(db_path)
-    assert client.get("/ui/dashboard.json").status_code == 401
-    assert client.get("/ui/dashboard.json?token=nonsense").status_code == 401
-    assert client.get("/ui/dashboard.json?token=tok-read").status_code == 401
+    assert client.get("/ui/dashboard.json").status_code == 200
+    # A token in a URL is not a feature we kept a compat path for: it is a
+    # credential in a proxy log, a `Referer` and a tile's label.
+    assert client.get("/ui/dashboard.json?token=tok-read").status_code == 200
     assert client.get("/ui/dashboard.json", headers=auth("tok-read")).status_code == 200
 
 
@@ -336,13 +340,14 @@ def test_the_page_is_the_built_bundle(client, db_path, tmp_path, monkeypatch):
     assert "npm run build" in res.json()["detail"]
 
 
-def test_the_page_is_public_and_the_data_is_not(client, built_web):
-    """A link to the app is not a credential. The shell draws nothing on its
-    own; every figure on it comes from a gated view-model."""
-    assert client.get("/").status_code == 200
-    assert client.get("/", headers=auth("tok-approve")).status_code == 200
-    assert client.get("/ui/dashboard.json").status_code == 401
-    assert client.get("/ui/dashboard.json", headers=auth("tok-approve")).status_code == 403
+def test_a_link_to_the_app_is_not_a_credential(client, built_web):
+    """`/`, its two siblings and the view-models behind them all open without
+    one, so a Homepage tile, a home-screen icon or a pasted link just works."""
+    for path in ("/", "/plan-types", "/requests/req_whatever"):
+        assert client.get(path).status_code == 200, path
+        assert client.get(path, headers=auth("tok-approve")).status_code == 200, path
+    for path in ("/ui/dashboard.json", "/ui/plan-types.json"):
+        assert client.get(path).status_code == 200, path
 
 
 def test_dashboard_is_get_only(client):
@@ -475,8 +480,8 @@ def test_an_unclaimed_dataset_shows_no_vendor_rather_than_a_guess(client, db_pat
     assert _book(client)["rows"][0]["vendor"] == ""
 
 
-def _detail(client, request_id, token="tok-read"):
-    return client.get(f"/ui/request/{request_id}.json", headers=auth(token))
+def _detail(client, request_id):
+    return client.get(f"/ui/request/{request_id}.json")
 
 
 def test_the_detail_view_carries_what_the_list_drops(client):
@@ -512,12 +517,9 @@ def test_the_detail_view_agrees_with_the_list_it_was_reached_from(client):
     assert abs(detail["age_seconds"] - row["age_seconds"]) <= 2
 
 
-def test_the_detail_view_is_read_scope_and_404s_cleanly(client):
-    filed = client.post("/v1/requests", json=INTENT_BODY, headers=auth()).json()
-    denied = _detail(client, filed["request_id"], token="tok-approve")
-    assert denied.status_code == 403
-    assert denied.json()["error"]["code"] == "insufficient_scope"
-
+def test_the_detail_view_404s_cleanly(client):
+    """An id that is not in the store is a 404 with a code, not an empty page:
+    the page has to be able to tell "gone" from "still loading"."""
     missing = _detail(client, "req_nope")
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "not_found"

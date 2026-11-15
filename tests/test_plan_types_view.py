@@ -21,21 +21,16 @@ from conftest import auth
 
 
 def _view(client) -> dict:
-    res = client.get("/ui/plan-types.json", headers=auth("tok-read"))
+    res = client.get("/ui/plan-types.json")
     assert res.status_code == 200
     return res.json()
 
 
-def test_the_view_requires_read_scope(client, built_web):
-    assert client.get("/ui/plan-types.json").status_code == 401
-    assert (
-        client.get("/ui/plan-types.json", headers=auth("tok-approve")).status_code
-        == 403
-    )
-    # The shell is public -- it is one HTML file with no data in it -- because
-    # that is what lets a plain link open the app. The rows are the gated part.
+def test_the_registry_is_a_public_projection(client, built_web):
+    """A plan type is committed YAML; there is nothing here worth a lock, and a
+    lock here is what used to put a credential in every link to the page."""
+    assert client.get("/ui/plan-types.json").status_code == 200
     assert client.get("/plan-types").status_code == 200
-    assert client.get("/plan-types", headers=auth("tok-approve")).status_code == 200
 
 
 def test_the_view_is_read_only(client):

@@ -13,18 +13,7 @@ import {
 
 // Resource-type routing, not a URL glob: `**/stats` would also match the
 // document navigation and hand the browser JSON instead of the app.
-//
-// `token` is seeded into localStorage rather than put in the URL, because that
-// is how the app holds it now: the shell is public and every request carries
-// the token in an Authorization header. A test that wants no token passes "".
-async function mock(
-  page,
-  { requests, types, detail, token = "tok-read" } = {},
-) {
-  await page.addInitScript((value) => {
-    if (value) localStorage.setItem("data_download.read_token", value);
-    else localStorage.removeItem("data_download.read_token");
-  }, token);
+async function mock(page, { requests, types, detail } = {}) {
   await page.route(
     "**/ui/**",
     (route) => {
@@ -172,9 +161,8 @@ test.describe("the request book", () => {
   }) => {
     await mock(page);
     await page.goto("/");
-    // The shell is public and the token lives in this browser, so a nav tab is
-    // just a tab: nothing in the address bar can be logged, forwarded or
-    // screenshotted as a token.
+    // Both views are public, so a nav tab is just a tab. No token in an href
+    // anywhere on the page: a credential in a URL is a credential in a log.
     const links = page.locator('a[href="/plan-types"]');
     expect(await links.count()).toBeGreaterThan(0);
     const hrefs = await page
@@ -182,60 +170,6 @@ test.describe("the request book", () => {
       .evaluateAll((els) => els.map((el) => el.getAttribute("href")));
     expect(hrefs.filter((href) => href.includes("token="))).toEqual([]);
     await expect(page).not.toHaveURL(/token=/);
-  });
-
-  test("a browser with no token is asked for one, and unlocks", async ({
-    page,
-  }) => {
-    await mock(page, { token: "" });
-    await page.goto("/");
-
-    const gate = page.locator(".gate");
-    await expect(gate).toContainText("no read token");
-    await expect(page.locator(".tbl-row")).toHaveCount(0);
-
-    await gate.locator('input[name="token"]').fill("tok-read");
-    await gate.locator("button[type=submit]").click();
-
-    await expect(page.locator(".gate")).toHaveCount(0);
-    await expect(page.locator(".tbl-row")).toHaveCount(5);
-    // Kept for the next visit, and never in the URL.
-    const saved = await page.evaluate(() =>
-      localStorage.getItem("data_download.read_token"),
-    );
-    expect(saved).toBe("tok-read");
-    await expect(page).not.toHaveURL(/token=/);
-  });
-
-  test("#token= is taken out of the address bar once it is used", async ({
-    page,
-  }) => {
-    await mock(page, { token: "" });
-    await page.goto("/#token=tok-read");
-    await expect(page.locator(".tbl-row")).toHaveCount(5);
-    await expect(page).not.toHaveURL(/token=/);
-    const saved = await page.evaluate(() =>
-      localStorage.getItem("data_download.read_token"),
-    );
-    expect(saved).toBe("tok-read");
-  });
-
-  test("a refused token says so, and asks again", async ({ page }) => {
-    // Authorised once, so the count is a fact: this browser said something and
-    // the server did not accept it.
-    await mock(page, { token: "stale-token" });
-    await page.route(
-      "**/ui/**",
-      (route) => route.fulfill({ status: 401, body: "" }),
-      { times: 99 },
-    );
-    await page.goto("/");
-    const gate = page.locator(".gate");
-    await expect(gate).toContainText("That token was refused");
-    const saved = await page.evaluate(() =>
-      localStorage.getItem("data_download.read_token"),
-    );
-    expect(saved).toBe(null);
   });
 
   test("the head is the home-screen entry, not a bare tab", async ({
