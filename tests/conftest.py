@@ -10,11 +10,18 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from data_download import coderef
 from data_download.app import create_app
 from data_download.config import Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLAN_TYPES_DIR = REPO_ROOT / "plan_types"
+
+# What the app records as `code_ref` (§4.1). The real HEAD where there is a
+# checkout (this dev container), and a placeholder where there is not (CI runs
+# the suite from a ticket, with no `.git`). Both are claimable: with a checkout
+# the sha resolves, without one the check can only answer "cannot tell".
+CODE_REF = coderef.resolve(env={}) or "0" * 40
 
 TOKENS = {
     "tok-submit": frozenset({"submit", "read"}),
@@ -63,7 +70,12 @@ def db_path(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def settings(db_path: Path) -> Settings:
-    return Settings(db_path=str(db_path), tokens=TOKENS, plan_types_dir=PLAN_TYPES_DIR)
+    return Settings(
+        db_path=str(db_path),
+        tokens=TOKENS,
+        plan_types_dir=PLAN_TYPES_DIR,
+        code_ref=CODE_REF,
+    )
 
 
 @pytest.fixture

@@ -26,7 +26,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, coderef, errors, profiles
+from . import auth, errors, profiles
 from . import job as job_mod
 from .config import Settings, load_settings
 from .db import Store, canonical_json, payload_hash, utcnow
@@ -304,7 +304,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.store_error = None
         # Resolved once per process, not per request: a long-lived service must
         # not record two commits for one deployment (phase 3 order §5).
-        app.state.code_ref = coderef.resolve_and_log()
+        app.state.code_ref = settings.code_ref
+        log.info("code_ref %s", settings.code_ref or "unknown (no checkout, no build arg)")
 
         store = Store(settings.db_path)
         try:

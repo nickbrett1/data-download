@@ -247,7 +247,7 @@ def test_a_row_with_no_code_ref_cannot_be_claimed(client, settings):
     assert caught.value.reason == "code_ref_unresolved"
 
 
-def test_a_code_ref_no_checkout_contains_cannot_be_claimed(client, settings):
+def test_a_code_ref_the_checkout_rejects_cannot_be_claimed(client, settings):
     seed(
         settings.db_path,
         [
@@ -259,8 +259,19 @@ def test_a_code_ref_no_checkout_contains_cannot_be_claimed(client, settings):
             }
         ],
     )
+    # An explicit checker, because "is this sha in the checkout" is a question
+    # CI cannot answer -- there is no `.git` there, so the default degrades to
+    # *cannot tell* and would let this through.
     with pytest.raises(ClaimRefused) as caught:
-        _run(_call(settings.db_path, "claim", "req_fake", "owner-a"))
+        _run(
+            _call(
+                settings.db_path,
+                "claim",
+                "req_fake",
+                "owner-a",
+                code_ref_checker=lambda sha: False,
+            )
+        )
     assert caught.value.reason == "code_ref_unknown"
     assert caught.value.code_ref == "0" * 40
 
@@ -329,11 +340,34 @@ def test_the_claim_cli_speaks_the_same_refusals(client, settings):
     assert "not_found" in missing.stderr
 
 
-def test_coderef_resolves_the_checkout_it_runs_from():
+def test_coderef_answers_from_the_checkout_when_there_is_one(tmp_path: Path):
+    """Both environments this suite runs in: a checkout, and a CI ticket.
+
+    The suite is executed from a git checkout in the dev container and from a
+    ticket on the CI host, so this test may not assume either. What must hold
+    everywhere: with a checkout, HEAD is a commit and a made-up sha is not;
+    without one, the honest answer is *cannot tell*.
+    """
+    if not coderef.has_checkout():
+        assert coderef.resolve(env={}) is None
+        assert coderef.is_commit("0" * 40) is None
+        return
     head = coderef.resolve(env={})
-    assert head is not None, "the test suite runs in a checkout, so a sha must resolve"
+    assert head is not None
     assert coderef.is_commit(head) is True
     assert coderef.is_commit("0" * 40) is False
+    # A directory with no `.git` cannot answer, whatever it is asked.
+    assert coderef.is_commit(head, repo_root=tmp_path) is None
+
+
+def test_resolve_answers_none_when_there_is_no_checkout_and_no_env(tmp_path: Path):
+    """The CI shape: the suite runs from a ticket, so nothing can name a commit.
+
+    `None` here is *cannot tell*, and it becomes `code_ref NULL` at submit and a
+    refused claim -- not a crash, and not a made-up sha.
+    """
+    assert coderef.resolve(env={}, repo_root=tmp_path) is None
+    assert coderef.has_checkout(tmp_path) is False
 
 
 def test_coderef_prefers_the_environment_over_the_checkout():

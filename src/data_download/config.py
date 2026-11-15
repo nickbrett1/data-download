@@ -24,6 +24,10 @@ class Settings:
     tokens: dict[str, frozenset[str]] = field(default_factory=dict)
     plan_types_dir: Path | None = None
     port: int = 8820
+    # The commit this process runs (§4.1). Resolved here rather than in the app
+    # so a test can name it, and so the one resolution per process is visible in
+    # the settings rather than hidden in a lifespan side effect.
+    code_ref: str | None = None
 
     def scopes_for(self, token: str) -> frozenset[str] | None:
         return self.tokens.get(token)
@@ -123,6 +127,8 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         log.error("DATA_DOWNLOAD_API_TOKENS is unusable (%s) - no token will authenticate", exc)
         tokens = {}
 
+    from .coderef import resolve as resolve_code_ref
+
     port_raw = (env.get("PORT") or "8820").strip()
     try:
         port = int(port_raw)
@@ -137,6 +143,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         tokens=tokens,
         plan_types_dir=find_plan_types_dir(env.get("DATA_DOWNLOAD_PLAN_TYPES_DIR")),
         port=port,
+        code_ref=resolve_code_ref(env),
     )
 
 
