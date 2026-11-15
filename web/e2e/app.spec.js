@@ -696,31 +696,24 @@ test.describe("naming a request, and opening it", () => {
   });
 });
 
-test.describe("the bar as a Home Screen app", () => {
-  // An init script runs before the parser has made the real <html>, so a class
-  // set there lands on a throwaway element. Wait for the document instead.
-  async function markStandalone(page) {
-    await page.addInitScript(() => {
-      const add = () =>
-        document.documentElement.classList.add("ios-standalone");
-      if (document.readyState === "loading") {
-        document.addEventListener("readystatechange", add, { once: true });
-      } else {
-        add();
-      }
-    });
-  }
-
-  // iOS composites a standalone app against the viewport itself, so the sticky
-  // bar's backdrop blur lands on the bar's own text. Playwright cannot emulate
-  // `display-mode`, but it can set the class index.html sets from
-  // `navigator.standalone`, which is the same rule.
+test.describe("the bar at the top of the page", () => {
+  // This describe block used to be "the bar as a Home Screen app". app-shell's
+  // bar was glass, so this app patched it under `display-mode: standalone` and
+  // under `html.ios-standalone` (set inline in index.html from
+  // `navigator.standalone`). @nb 1.16.1 made the bar opaque everywhere -- a bar
+  // that owns the top edge of the viewport has nothing above it to see through
+  // to -- and the patch is gone with it.
+  //
+  // So this asserts the block's own rule on an ordinary page load, with nothing
+  // emulated, because that is now the only case there is. The regression it
+  // guards has not gone away, it has moved: it is a consumer stylesheet putting
+  // the glass back for specificity, which is precisely what the deleted patch
+  // did in the other direction.
   for (const [path, name] of [
     ["/", "the request book"],
     ["/plan-types", "plan types"],
   ]) {
     test(`${name}: the bar is opaque, with no blur`, async ({ page }) => {
-      await markStandalone(page);
       await mock(page);
       await page.goto(path);
 
@@ -741,12 +734,22 @@ test.describe("the bar as a Home Screen app", () => {
     });
   }
 
-  test("outside a Home Screen app the glass stays", async ({ page }) => {
+  test("it is the same while content is scrolling under it", async ({
+    page,
+  }) => {
     await mock(page);
     await page.goto("/");
+    await page.evaluate(() => window.scrollTo(0, 600));
+    await expect
+      .poll(() =>
+        page
+          .locator(".topbar")
+          .evaluate((el) => getComputedStyle(el).backgroundColor),
+      )
+      .toBe("rgb(15, 23, 42)");
     const backdrop = await page
       .locator(".topbar")
       .evaluate((el) => getComputedStyle(el).backdropFilter);
-    expect(backdrop).toBe("blur(8px)");
+    expect(backdrop).toBe("none");
   });
 });

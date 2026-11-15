@@ -42,22 +42,6 @@
   </head>
   <body>
     <div id="app"></div>
-    <script>
-      // A Home Screen app on iOS is not "Safari with no chrome": the page is
-      // composited against the standalone viewport and the status bar is drawn
-      // over it. The sticky bar's `backdrop-filter` then samples the wrong
-      // layer and the blur lands on the bar's own text -- the wordmark and the
-      // tabs come out soft, permanently, not just while scrolling.
-      //
-      // `display-mode: standalone` covers modern iOS and is the CSS rule in
-      // app.css. This class is the fallback for the versions that report
-      // `browser` and expose `navigator.standalone` instead. Inline and before
-      // the bundle, because a class added after paint is a visible flash of
-      // the blur it exists to prevent.
-      if (window.navigator.standalone === true) {
-        document.documentElement.classList.add("ios-standalone");
-      }
-    </script>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
