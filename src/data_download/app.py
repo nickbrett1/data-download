@@ -106,10 +106,10 @@ FACET_LABELS = {
 }
 TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
 
-# Both HTML pages are a view of live state, and both may carry `?token=` in the
-# URL. A cached copy would show a stale book to a reader who has no idea it is
-# stale, so: never store. Browsers were otherwise free to heuristically cache
-# these because we send no validators at all.
+# The pages and their view-models are a view of live state. A cached copy would
+# show a stale book to a reader who has no idea it is stale, so: never store.
+# Browsers were otherwise free to heuristically cache these because we send no
+# validators at all.
 NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
 
 
