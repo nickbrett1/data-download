@@ -7,6 +7,10 @@
  * the read-model's opinion, not the view's.
  */
 
+/** The three facets that mean `state = blocked`. Not `waiting`: one word, three
+ * owners of the next move, and the server decides which is which. */
+const BLOCKED_FACETS = new Set(["needs_params", "no_plan", "requested"]);
+
 const TONES = {
   draft: "",
   approved: "info",
@@ -55,9 +59,61 @@ export function age(seconds) {
   return `${Math.floor(total / 86400)}d ${Math.floor((total % 86400) / 3600)}h`;
 }
 
+/** The ceiling, appended to whatever the badge says: the answer's price is
+ * part of the answer, and the row has no column for it (see Dashboard). */
+function withCap(text, row) {
+  if (row.max_usd === null || row.max_usd === undefined) return text;
+  return `${text} · $${Number(row.max_usd).toFixed(0)}`;
+}
+
+/** A blocked row says whose move it is.
+ *
+ * `needs_params` is something the caller can act on this minute ("add symbols,
+ * stype_in"); `no_plan` is a decision about code; `requested` is that decision
+ * already asked for. Three badges, because they were one badge -- "waiting on a
+ * plan" -- and that one word hid the only question a reader has: what do I do?
+ */
+function blockedMove(row) {
+  const gap = row.gap ?? {};
+  if (row.facet === "needs_params") {
+    const missing = gap.missing ?? [];
+    const text = missing.length
+      ? `add ${missing.join(", ")}`
+      : "add missing params";
+    return {
+      text: withCap(text, row),
+      tone: "info",
+      title: gap.plan_type
+        ? `${gap.plan_type} already takes this dataset; these params are what it is short of`
+        : "",
+    };
+  }
+  if (row.facet === "no_plan") {
+    // A rejected value first: "you sent something wrong" explains the row
+    // better than "we have nothing", and it is not fixable by more fields.
+    if ((gap.rejected ?? []).length) {
+      return {
+        text: withCap(`rejects ${gap.rejected.join(", ")}`, row),
+        tone: "warn",
+        title: gap.plan_type
+          ? `${gap.plan_type} rejected a value this request sent`
+          : "",
+      };
+    }
+    const text = gap.dataset ? `no plan for ${gap.dataset}` : "no plan yet";
+    return { text: withCap(text, row), tone: "warn" };
+  }
+  return {
+    text: withCap("new plan requested", row),
+    tone: "info",
+    title: row.escalated_at ? `asked for on ${filed(row.escalated_at)}` : "",
+  };
+}
+
 /** The one sentence under a state badge: why this row is worth looking at.
  * Mirrors the precedence in `_with_facet` -- a stuck condition outranks the
- * state it is stuck in, and `blocked` is waiting, not breakage. */
+ * state it is stuck in, and `blocked` is split by who moves next, not by the
+ * state it is in. */
 export function whyItMatters(row) {
   if (row.facet === "broken") {
     return {
@@ -66,13 +122,7 @@ export function whyItMatters(row) {
       title: row.stuck_detail ?? "",
     };
   }
-  if (row.facet === "waiting") {
-    const cap =
-      row.max_usd === null || row.max_usd === undefined
-        ? ""
-        : ` · $${Number(row.max_usd).toFixed(0)}`;
-    return { text: `${row.blocked_reason ?? "blocked"}${cap}`, tone: "warn" };
-  }
+  if (BLOCKED_FACETS.has(row.facet)) return blockedMove(row);
   if (row.facet === "todo") {
     return {
       text: row.approved_unclaimed ? "unclaimed" : "needs approval",

@@ -23,7 +23,13 @@
 
   const FACET_LABELS = {
     broken: "Broken",
-    waiting: "Waiting on a plan",
+    // Kept as a fallback only: the server sends `facet_labels` with every
+    // view-model, and that is the one true list. A facet added in Python whose
+    // key is never added here would otherwise reach the row as `needs_params`
+    // with the underscore still in it.
+    needs_params: "Needs parameters",
+    no_plan: "No plan yet",
+    requested: "Plan requested",
     todo: "To approve",
     working: "Running",
     done: "Finished",
@@ -79,7 +85,7 @@
           { value: "all", label: "All", count: data.total },
           ...order.map((key) => ({
             value: key,
-            label: FACET_LABELS[key] ?? key,
+            label: data.facet_labels?.[key] ?? FACET_LABELS[key] ?? key,
             count: (data.facets[key] ?? []).length,
           })),
         ],

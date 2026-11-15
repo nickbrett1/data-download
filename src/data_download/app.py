@@ -52,10 +52,25 @@ VIEW_NAMES = ("v_pending", "v_done", "v_stuck", "v_blocked")
 # The dashboard is one list. These facets are how a row is *labelled*, not how
 # the page is laid out: a broken request and a finished one sit in the same
 # column, and the badge is what differs. Order is by what needs a human first.
-FACET_ORDER = ("broken", "waiting", "todo", "working", "done")
+FACET_ORDER = (
+    "broken",
+    "needs_params",
+    "no_plan",
+    "requested",
+    "todo",
+    "working",
+    "done",
+)
 FACET_LABELS = {
     "broken": "Broken",
-    "waiting": "Waiting on a plan",
+    # One blocked row used to carry one label, "Waiting on a plan", which
+    # conflated three different owners of the next move: the caller who omitted
+    # a field, the plan author who has no type for this dataset, and the person
+    # who has already been asked. Phase 2.5 stores the verdict that separates
+    # them, so the label does too.
+    "needs_params": "Needs parameters",
+    "no_plan": "No plan yet",
+    "requested": "Plan requested",
     "todo": "To approve",
     "working": "Running",
     "done": "Finished",
@@ -74,12 +89,25 @@ def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
 
     Precedence matters and is deliberate: a stuck condition outranks the state
     it is stuck in (`running` + `lease_expired` is *broken*, not *running*), and
-    `blocked` outranks nothing but is not breakage - it has its own label.
+    `blocked` outranks nothing but is not breakage - it has its own labels.
+
+    A blocked row is split three ways, in the order of who moves next (§2.5):
+    escalated first, because once someone has asked for a plan the caller's
+    options are spent; then `needs_params`, which is the caller's own gap; then
+    `no_plan`, which is a decision about code. A row stored before the match
+    existed has no verdict, and `no_plan` is the honest reading of that: it has
+    no plan, and nobody asked for one. Backfilling a verdict now would date it
+    to the moment of the scrape rather than the moment of the request.
     """
     if row.get("stuck_condition"):
         facet = "broken"
     elif row.get("state") == "blocked":
-        facet = "waiting"
+        if row.get("escalated_at"):
+            facet = "requested"
+        elif row.get("match_verdict") == match.NEEDS_PARAMS:
+            facet = "needs_params"
+        else:
+            facet = "no_plan"
     elif row.get("state") in ("draft", "approved"):
         facet = "todo"
     elif row.get("state") == "running":
@@ -320,6 +348,43 @@ def _vendor_of(row: dict[str, Any], registry: Registry) -> str:
     return registry.vendor_for_dataset(str(_params_of(row).get("dataset") or ""))
 
 
+def _gap_of(row: dict[str, Any]) -> dict[str, Any] | None:
+    """The one short sentence for why a blocked row has no Job.
+
+    Two fields, because it rides on every row of the book: the type that came
+    closest and what it was short of. The whole report stays on the row's page,
+    where there is room for every candidate and the example that would fit.
+
+    `missing` comes from `would_fit` rather than from a candidate of our own
+    choosing, because `would_fit` is already the read-model's "best candidate"
+    rule (fewest gaps, then name) and a second rule here would disagree with the
+    refusal message a caller gets from `escalate`.
+    """
+    raw = row.get("match_report_json")
+    if not raw:
+        return None
+    try:
+        report = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    would = report.get("would_fit") or {}
+    rejected = sorted(
+        {
+            where
+            for candidate in report.get("candidates") or []
+            if candidate.get("verdict") == match.CANNOT_EXPRESS
+            for where in (candidate.get("rejected") or {})
+        }
+    )
+    return {
+        "verdict": report.get("verdict"),
+        "dataset": report.get("dataset"),
+        "plan_type": would.get("plan_type"),
+        "missing": list(would.get("missing") or []),
+        "rejected": rejected,
+    }
+
+
 def _book_row(row: dict[str, Any], registry: Registry) -> dict[str, Any]:
     """One row of the request book.
 
@@ -329,10 +394,18 @@ def _book_row(row: dict[str, Any], registry: Registry) -> dict[str, Any]:
     book over. The id is not in the row at all -- it is a key, not a name, and
     it is on the link's tooltip and in full on the detail page, which is where
     anyone copies it into a curl.
+
+    `match_report_json` is dropped for the same reason, reduced to `gap`: the
+    book has a badge's worth of room for "why not", and one row's worth of
+    schema failures is not 500 rows' worth of payload. The page for a single
+    request carries the whole report, alongside the params it arrived with.
     """
-    out = {k: v for k, v in row.items() if k != "params_json"}
+    out = {
+        k: v for k, v in row.items() if k not in ("params_json", "match_report_json")
+    }
     out["label"] = _label(row)
     out["vendor"] = _vendor_of(row, registry)
+    out["gap"] = _gap_of(row)
     return out
 
 
@@ -800,6 +873,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "max_usd": row["max_usd"],
                 "why": view["why"] if "why" in view.keys() else row["why"],
             },
+            # Phase 2.5: the verdict, every candidate, and the example that
+            # would have fitted. Parsed, not the stored string -- this is the
+            # one page with room for the report, and it is what turns "waiting
+            # on a plan" into "add symbols and stype_in".
+            "match": json.loads(row["match_report_json"])
+            if row["match_report_json"]
+            else None,
             "identity": {
                 "job_hash": row["job_hash"],
                 "code_ref": row["code_ref"],

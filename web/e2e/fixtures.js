@@ -83,8 +83,20 @@ export const dashboard = {
       plan_type: null,
       estimate_usd: 2,
       age_seconds: 90000,
-      facet: "waiting",
-      facet_label: "Waiting on a plan",
+      // One blocked row used to be one label. It is now three, because the
+      // next move has three different owners: the caller adds the params, or
+      // someone decides about code, or someone has already been asked.
+      facet: "needs_params",
+      facet_label: "Needs parameters",
+      match_verdict: "needs_params",
+      escalated_at: null,
+      gap: {
+        verdict: "needs_params",
+        dataset: "OPRA.PILLAR",
+        plan_type: "databento_batch_download",
+        missing: ["symbols", "stype_in"],
+        rejected: [],
+      },
       had_errors: false,
       stuck_condition: null,
       stuck_detail: null,
@@ -116,13 +128,23 @@ export const dashboard = {
   total: 5,
   facets: {
     broken: [],
-    waiting: [],
+    needs_params: [],
+    no_plan: [],
+    requested: [],
     todo: [],
     working: [],
     done: [],
     other: [],
   },
-  facet_order: ["broken", "waiting", "todo", "working", "done"],
+  facet_order: [
+    "broken",
+    "needs_params",
+    "no_plan",
+    "requested",
+    "todo",
+    "working",
+    "done",
+  ],
   facet_labels: {},
   showing: "all",
 };
@@ -141,7 +163,9 @@ export const emptyBook = {
   total: 0,
   facets: {
     broken: [],
-    waiting: [],
+    needs_params: [],
+    no_plan: [],
+    requested: [],
     todo: [],
     working: [],
     done: [],
@@ -238,6 +262,45 @@ export const requestDetail = {
     max_usd: 25,
     why: "OPRA.PILLAR trades for the Oct expiry cycle",
   },
+  // Phase 2.5: the report behind the badge. `match` is present only on rows
+  // stored after the match existed -- a row filed before it has no verdict, and
+  // inventing one at read time would date it to the read.
+  match: {
+    verdict: "needs_params",
+    dataset: "OPRA.PILLAR",
+    registry: "b3d1f0c9a2e47861",
+    plan_type: null,
+    candidates: [
+      {
+        plan_type: "databento_batch_download",
+        version: 1,
+        vendor: "Databento",
+        verdict: "needs_params",
+        detail: "missing required params",
+        missing: ["symbols", "stype_in"],
+        rejected: {},
+        params: {
+          dataset: "OPRA.PILLAR",
+          schema: "trades",
+          start: "2026-10-01",
+          end: "2026-10-08",
+        },
+      },
+    ],
+    would_fit: {
+      plan_type: "databento_batch_download",
+      missing: ["symbols", "stype_in"],
+      params: {
+        dataset: "OPRA.PILLAR",
+        schema: "trades",
+        start: "2026-10-01",
+        end: "2026-10-08",
+        symbols: ["<symbols>"],
+        stype_in: "<stype_in>",
+      },
+      note: "an example shape, not a quote: the missing values are placeholders",
+    },
+  },
   identity: {
     job_hash: null,
     code_ref: null,
@@ -254,3 +317,62 @@ export const requestDetail = {
     },
   ],
 };
+
+// The three blocked answers side by side, which is the whole point of the
+// split: the same `state`, three different owners of the next move. Built from
+// the one blocked row above so nothing drifts but the field under test.
+function blockedRow(seq, state) {
+  const base = dashboard.rows[3];
+  return { ...base, seq, ...state };
+}
+
+export const blockedBook = (() => {
+  const rows = [
+    blockedRow(1, {}),
+    blockedRow(2, {
+      id: "req_77a1c204",
+      facet: "no_plan",
+      facet_label: "No plan yet",
+      match_verdict: "not_claimed",
+      escalated_at: null,
+      gap: {
+        verdict: "not_claimed",
+        dataset: "ZZZZ.UNKNOWN",
+        plan_type: null,
+        missing: [],
+        rejected: [],
+      },
+    }),
+    blockedRow(3, {
+      id: "req_55c9e18b",
+      facet: "requested",
+      facet_label: "Plan requested",
+      match_verdict: "not_claimed",
+      escalated_at: "2026-11-14T08:15:00Z",
+      gap: {
+        verdict: "not_claimed",
+        dataset: "ZZZZ.UNKNOWN",
+        plan_type: null,
+        missing: [],
+        rejected: [],
+      },
+    }),
+  ];
+  const facets = {
+    broken: [],
+    needs_params: [],
+    no_plan: [],
+    requested: [],
+    todo: [],
+    working: [],
+    done: [],
+    other: [],
+  };
+  for (const row of rows) facets[row.facet].push(row);
+  return {
+    ...dashboard,
+    rows,
+    total: rows.length,
+    facets,
+  };
+})();

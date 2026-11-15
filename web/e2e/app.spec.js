@@ -3,7 +3,13 @@ import { expect, test } from "@playwright/test";
 // Fixed clock rendering: the `filed` column is local time, and a test that
 // asserted a string would otherwise pass in London and fail in Auckland.
 test.use({ timezoneId: "UTC" });
-import { dashboard, emptyBook, planTypes, requestDetail } from "./fixtures.js";
+import {
+  blockedBook,
+  dashboard,
+  emptyBook,
+  planTypes,
+  requestDetail,
+} from "./fixtures.js";
 
 // Resource-type routing, not a URL glob: `**/stats` would also match the
 // document navigation and hand the browser JSON instead of the app.
@@ -82,7 +88,10 @@ test.describe("the request book", () => {
 
     const group = page.locator(".facet-group").first();
     const radios = group.locator('input[type="radio"]');
-    await expect(radios).toHaveCount(6);
+    // All, plus the seven facets. `waiting` used to be one of them; it is now
+    // three (needs params / no plan / requested), because "waiting on a plan"
+    // named a state and hid an owner.
+    await expect(radios).toHaveCount(8);
     // One name for the whole group, or the browser lets you pick two.
     expect(
       new Set(await radios.evaluateAll((all) => all.map((i) => i.name))).size,
@@ -752,5 +761,148 @@ test.describe("the bar at the top of the page", () => {
       .locator(".topbar")
       .evaluate((el) => getComputedStyle(el).backdropFilter);
     expect(backdrop).toBe("none");
+  });
+});
+
+// One blocked row used to carry one label. It carried three different
+// situations with three different next moves, and a reader could not tell "add
+// two fields" from "this needs new code" — the question that started phase 2.5.
+test.describe("a request that is waiting, in three different ways", () => {
+  test("the facets name who moves next, not the state", async ({ page }) => {
+    await mock(page, { requests: blockedBook });
+    await page.goto("/");
+
+    const group = page.locator(".facet-group").first();
+    // Each blocked answer is its own choice, one row apiece.
+    for (const [label, count] of [
+      ["Needs parameters", "1"],
+      ["No plan yet", "1"],
+      ["Plan requested", "1"],
+    ]) {
+      const option = group
+        .locator(".facet-option")
+        .filter({ hasText: label })
+        .first();
+      await expect(option).toBeVisible();
+      await expect(option).toContainText(count);
+    }
+    // The old name is gone rather than aliased: two words for one facet would
+    // be two filters for one set of rows.
+    await expect(page.locator("body")).not.toContainText("Waiting on a plan");
+  });
+
+  test("each blocked row says what would clear it", async ({ page }) => {
+    await mock(page, { requests: blockedBook });
+    await page.goto("/");
+
+    const row = (seq) =>
+      page.locator(".tbl-row").filter({ hasText: `#${seq}` });
+    // The caller's move: the two params the plan is short of, and the ceiling.
+    await expect(row(1).locator(".pill.info").last()).toHaveText(
+      "add symbols, stype_in · $25",
+    );
+    // No registered type speaks for the dataset. Nothing the caller can add.
+    await expect(row(2).locator(".pill.warn").last()).toHaveText(
+      "no plan for ZZZZ.UNKNOWN · $25",
+    );
+    // The ask is in, so the row is no longer "no plan yet".
+    await expect(row(3).locator(".pill.info").last()).toHaveText(
+      "new plan requested · $25",
+    );
+    // The timestamp is the tooltip, not a second line: the badge is a state,
+    // and the row already has a `filed` column.
+    await expect(row(3).locator(".pill.info").last()).toHaveAttribute(
+      "title",
+      /asked for on 14 Nov/,
+    );
+  });
+
+  test("filtering on one of them narrows to exactly that row", async ({
+    page,
+  }) => {
+    await mock(page, { requests: blockedBook });
+    await page.goto("/?show=no_plan");
+    await expect(page.locator(".tbl-row")).toHaveCount(1);
+    await expect(page.locator(".tbl-row")).toContainText("#2");
+    await expect(page).toHaveURL(/show=no_plan/);
+  });
+
+  test("the request page shows the gap and the example that would fit", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/requests/req_0a7c9d33?token=tok-read");
+
+    const section = page
+      .locator(".block")
+      .filter({ hasText: "why there is no job" });
+    // The verdict, in the server's vocabulary: `needs_params` is the thing the
+    // caller has to close, and it is a word they will see again in the API.
+    await expect(section.locator(".pill")).toContainText(["needs_params"]);
+    await expect(section).toContainText("OPRA.PILLAR");
+    // Every registered type answers, so an absent candidate is not a silence
+    // a reviewer has to go looking behind.
+    await expect(section.locator(".candidate").first()).toContainText(
+      "databento_batch_download",
+    );
+    await expect(section.locator(".candidate").first()).toContainText(
+      "missing symbols, stype_in",
+    );
+
+    // The closest fit: the caller's own params kept, the gaps as placeholders,
+    // and the server's own caveat that this is an example, not a quote.
+    const would = section.locator(".would-fit");
+    await expect(would).toContainText("the closest fit");
+    await expect(would).toContainText("OPRA.PILLAR");
+    await expect(would).toContainText("<symbols>");
+    await expect(would).toContainText("an example shape, not a quote");
+
+    // No "ask for a new plan" line here: `needs_params` is the caller's own
+    // gap, the shorter path is theirs to take, and the service refuses the ask
+    // while a plan merely wants two more fields.
+    await expect(section).not.toContainText("escalate");
+    await expect(section).not.toContainText("POST /v1/requests/");
+  });
+
+  test("a row nobody has asked about names the escalate door; one already asked does not", async ({
+    page,
+  }) => {
+    // `needs_params` is never escalated: the caller has a shorter path, and the
+    // service refuses the ask. So the line that names the door is for the row
+    // that has no plan at all.
+    await mock(page, {
+      detail: {
+        ...requestDetail,
+        facet: "no_plan",
+        facet_label: "No plan yet",
+        match: {
+          ...requestDetail.match,
+          verdict: "not_claimed",
+          plan_type: null,
+          candidates: [],
+          would_fit: undefined,
+        },
+      },
+    });
+    await page.goto("/requests/req_0a7c9d33?token=tok-read");
+    const section = page
+      .locator(".block")
+      .filter({ hasText: "why there is no job" });
+    await expect(section).toContainText("escalate");
+    await expect(section).toContainText("scope");
+
+    // Already asked: the row has a date, and the door is not offered twice.
+    await mock(page, {
+      detail: {
+        ...requestDetail,
+        facet: "requested",
+        facet_label: "Plan requested",
+        escalated_at: "2026-11-14T08:15:00Z",
+        match: { ...requestDetail.match, verdict: "not_claimed" },
+      },
+    });
+    await page.goto("/requests/req_0a7c9d33?token=tok-read");
+    await expect(section).toContainText("new plan asked for");
+    await expect(section).not.toContainText("POST /v1/requests/");
   });
 });

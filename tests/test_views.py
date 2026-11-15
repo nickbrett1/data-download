@@ -229,9 +229,12 @@ def test_dashboard_is_one_list_with_a_badge_per_row(client, db_path):
     assert by_id["seed_short"]["had_errors"]  # sqlite gives 1, not True
 
     # The blocked row says what it is waiting for, and that it is not breakage.
-    assert by_id["seed_blocked"]["facet"] == "waiting"
+    # It was seeded without a match report -- a row filed before phase 2.5 --
+    # so it lands in `no_plan`, not in a verdict nobody computed for it.
+    assert by_id["seed_blocked"]["facet"] == "no_plan"
     assert by_id["seed_blocked"]["blocked_reason"] == "awaiting_plan"
-    assert by_id["seed_blocked"]["facet_label"] == "Waiting on a plan"
+    assert by_id["seed_blocked"]["facet_label"] == "No plan yet"
+    assert by_id["seed_blocked"]["gap"] is None
 
     # No four-section names survive in the view.
     assert not {row["facet"] for row in book["rows"]} & {
@@ -256,8 +259,8 @@ def test_the_facet_index_partitions_the_rows(client, db_path):
     assert {"seed_lease", "seed_approved"} <= broken
     assert "seed_blocked" not in broken and "seed_draft" not in broken
 
-    waiting = {row["id"] for row in book["facets"]["waiting"]}
-    assert waiting == {"seed_blocked"}
+    no_plan = {row["id"] for row in book["facets"]["no_plan"]}
+    assert no_plan == {"seed_blocked"}
 
     todo = {row["id"] for row in book["facets"]["todo"]}
     assert todo == {"seed_draft"}
@@ -481,7 +484,7 @@ def test_the_detail_view_carries_what_the_list_drops(client):
     body = detail.json()
 
     assert body["id"] == request_id
-    assert body["facet"] == "waiting"
+    assert body["facet"] == "needs_params"
     assert body["label"].startswith("OPRA.PILLAR · trades")
     assert body["payload"]["why"] == INTENT_BODY["why"]
     assert body["payload"]["max_usd"] == 120
@@ -513,3 +516,148 @@ def test_the_detail_view_is_read_scope_and_404s_cleanly(client):
     missing = _detail(client, "req_nope")
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "not_found"
+
+
+# -- phase 2.5: one blocked row, three different answers -----------------------
+
+
+def _submit(client, **overrides) -> dict:
+    body = {**INTENT_BODY, **overrides}
+    response = client.post("/v1/requests", json=body, headers=auth())
+    assert response.status_code == 202, response.text
+    return response.json()
+
+
+def test_a_request_that_is_only_short_of_params_says_which_ones(client):
+    """The caller's own gap, on the row, in the words they need to close it.
+
+    `needs_params` is the one blocked verdict that is not a decision about code,
+    so the row must not read like one: the label says what is missing and the
+    gap names the type that would take it.
+    """
+    _submit(client)
+    row = _book(client)["rows"][0]
+
+    assert row["facet"] == "needs_params"
+    assert row["facet_label"] == "Needs parameters"
+    assert row["gap"]["plan_type"] == "databento_batch_download"
+    assert row["gap"]["missing"] == ["symbols", "stype_in"]
+    # The report itself does not ride on every row of the book.
+    assert "match_report_json" not in row
+
+
+def test_an_unclaimed_dataset_is_no_plan_rather_than_a_missing_param(client):
+    """Nothing registered speaks for this code, which is not the caller's fault
+    and not something more parameters can fix."""
+    _submit(
+        client,
+        intent={
+            **INTENT_BODY["intent"],
+            "dataset": "ZZZZ.UNKNOWN",
+        },
+    )
+    row = _book(client)["rows"][0]
+
+    assert row["facet"] == "no_plan"
+    assert row["facet_label"] == "No plan yet"
+    assert row["gap"]["verdict"] == "not_claimed"
+    assert row["gap"]["dataset"] == "ZZZZ.UNKNOWN"
+    assert row["gap"]["missing"] == []
+
+
+def test_a_row_someone_has_asked_a_new_plan_for_is_labelled_apart(client):
+    """Once the ask is in, the caller has no move left: the row is no longer
+    "no plan yet", it is "requested", and the two must not look the same."""
+    request_id = _submit(
+        client, intent={**INTENT_BODY["intent"], "dataset": "ZZZZ.UNKNOWN"}
+    )["request_id"]
+    escalated = client.post(
+        f"/v1/requests/{request_id}/escalate", json={}, headers=auth("tok-escalate")
+    )
+    assert escalated.status_code == 202, escalated.text
+
+    row = _book(client)["rows"][0]
+    assert row["facet"] == "requested"
+    assert row["facet_label"] == "Plan requested"
+    assert row["escalated_at"]
+
+    # The three blocked facets are three different rows, not three names for
+    # one: each of the other two must be empty here.
+    book = _book(client)
+    assert [r["id"] for r in book["facets"]["no_plan"]] == []
+    assert [r["id"] for r in book["facets"]["needs_params"]] == []
+    assert [r["id"] for r in book["facets"]["requested"]] == [row["id"]]
+
+
+def test_the_detail_page_carries_the_report_and_the_example_that_would_fit(client):
+    """The book has a badge; the row's page has room for the whole answer."""
+    request_id = _submit(client)["request_id"]
+    body = _detail(client, request_id).json()
+
+    assert body["facet"] == "needs_params"
+    report = body["match"]
+    assert report["verdict"] == "needs_params"
+    assert report["dataset"] == "OPRA.PILLAR"
+    assert report["registry"]
+    # Every registered type answers, including the ones that do not claim it:
+    # an absent candidate is a fact a reviewer would have to go looking for.
+    assert [c["plan_type"] for c in report["candidates"]] == [
+        "databento_batch_download"
+    ]
+    assert report["candidates"][0]["missing"] == ["symbols", "stype_in"]
+
+    would = report["would_fit"]
+    assert would["plan_type"] == "databento_batch_download"
+    assert would["missing"] == ["symbols", "stype_in"]
+    # The supplied params are kept, and only the gaps are placeholders.
+    assert would["params"]["dataset"] == "OPRA.PILLAR"
+    assert would["params"]["start"] == "2026-10-01"
+    assert would["params"]["symbols"] == ["<symbols>"]
+
+
+def test_the_detail_page_reports_a_value_the_schema_refused(client):
+    """`cannot_express` is the verdict a caller can least guess at, so the
+    validator's own message is carried, not a summary of it."""
+    _submit(
+        client,
+        intent={**INTENT_BODY["intent"], "symbols": [], "stype_in": "raw_symbol"},
+    )
+    body = _detail(client, _book(client)["rows"][0]["id"]).json()
+
+    assert body["facet"] == "no_plan"
+    assert body["match"]["verdict"] == "cannot_express"
+    assert body["match"].get("would_fit") is None
+    rejected = body["match"]["candidates"][0]["rejected"]
+    assert "symbols" in rejected
+    assert body["gap"]["rejected"] == ["symbols"]
+
+
+def test_a_row_filed_before_the_match_carries_no_verdict_rather_than_a_guess(client, db_path):
+    """A row stored before phase 2.5 has no match report, and the page says so.
+
+    Computing one on read would label the row with today's registry and today's
+    verdict, which is a claim about a request nobody examined at the time.
+    """
+    seed(
+        db_path,
+        [
+            {
+                "id": "req_old",
+                "state": "blocked",
+                "body_kind": "intent",
+                "plan_type": None,
+                "job_json": None,
+                "estimate_usd": None,
+                "blocked_reason": "awaiting_plan",
+                "params_json": json.dumps({"dataset": "OPRA.PILLAR"}),
+                "intent_json": json.dumps({"max_usd": 5}),
+            }
+        ],
+    )
+    book = _book(client)
+    assert book["rows"][0]["facet"] == "no_plan"
+    assert book["rows"][0]["gap"] is None
+
+    body = _detail(client, "req_old").json()
+    assert body["match"] is None
+    assert body["facet"] == "no_plan"

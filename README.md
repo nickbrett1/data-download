@@ -54,7 +54,7 @@ deliberate, because the two sides have different kinds of truth in them:
 | `v_pending` / `v_done` / `v_stuck` / `v_blocked` | the views *are* the read-model; a page is a projection of them |
 | token auth and the `read` scope | approval has no endpoint **and** no scope these pages can reach |
 | `/v1/*` | the CLI and the agents already call it; moving it would break them |
-| `_with_facet` precedence | "`running` + `lease_expired` is broken, not running" is a domain rule, not a colour |
+| `_with_facet` precedence | "`running` + `lease_expired` is broken, not running" is a domain rule, not a colour — and so is which of the three blocked facets a row lands in |
 | the plan-type registry | loaded from `plan_types/*.yaml` at startup |
 
 What moved into the browser is what only a browser needs: `$0.0412` instead of
