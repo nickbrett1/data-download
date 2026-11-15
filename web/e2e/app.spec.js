@@ -661,3 +661,58 @@ test.describe("naming a request, and opening it", () => {
     await expect(page.locator(".back-btn")).toBeVisible();
   });
 });
+
+test.describe("the bar as a Home Screen app", () => {
+  // An init script runs before the parser has made the real <html>, so a class
+  // set there lands on a throwaway element. Wait for the document instead.
+  async function markStandalone(page) {
+    await page.addInitScript(() => {
+      const add = () =>
+        document.documentElement.classList.add("ios-standalone");
+      if (document.readyState === "loading") {
+        document.addEventListener("readystatechange", add, { once: true });
+      } else {
+        add();
+      }
+    });
+  }
+
+  // iOS composites a standalone app against the viewport itself, so the sticky
+  // bar's backdrop blur lands on the bar's own text. Playwright cannot emulate
+  // `display-mode`, but it can set the class index.html sets from
+  // `navigator.standalone`, which is the same rule.
+  for (const [path, name] of [
+    ["/", "the request book"],
+    ["/plan-types", "plan types"],
+  ]) {
+    test(`${name}: the bar is opaque, with no blur`, async ({ page }) => {
+      await markStandalone(page);
+      await mock(page);
+      await page.goto(path);
+
+      // Only the standard property: Chromium does not serialise the
+      // `-webkit-` alias in computed style, so asserting on it proves nothing.
+      const bar = await page.locator(".topbar").evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+          backdrop: style.backdropFilter,
+          background: style.backgroundColor,
+        };
+      });
+
+      expect(bar.backdrop).toBe("none");
+      // `background` is a var(--bg) shorthand, so an opaque colour is the whole
+      // assertion: a percentage here is the bug coming back.
+      expect(bar.background).toBe("rgb(15, 23, 42)");
+    });
+  }
+
+  test("outside a Home Screen app the glass stays", async ({ page }) => {
+    await mock(page);
+    await page.goto("/");
+    const backdrop = await page
+      .locator(".topbar")
+      .evaluate((el) => getComputedStyle(el).backdropFilter);
+    expect(backdrop).toBe("blur(8px)");
+  });
+});
