@@ -3,6 +3,11 @@
 Every mutation returns an id and a state immediately (§7.9). No route executes,
 prices, or advances a request. Approval has no endpoint; `?wait` exists on the
 read and nowhere else.
+
+Phase 2 adds one thing inside a submit and no surface at all: the Plan's binder
+runs, the Job it emits is validated against the closed step vocabulary, hashed,
+and stored write-once. Nothing interprets it here -- phase 3 owns execution, and
+the offline dry run (`dryrun.py`) is a CLI harness this module does not import.
 """
 
 from __future__ import annotations
@@ -21,9 +26,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, errors
+from . import auth, errors, profiles
+from . import job as job_mod
 from .config import Settings, load_settings
-from .db import Store, canonical_json, payload_hash, plan_hash, utcnow
+from .db import Store, canonical_json, payload_hash, utcnow
 from .models import validate_intent, validate_plan
 from .registry import Registry, load_registry
 
@@ -191,7 +197,7 @@ def _request_payload(row: dict[str, Any]) -> dict[str, Any]:
         "state": row["state"],
         "body_kind": row["body_kind"],
         "plan_type": row["plan_type"],
-        "plan": json.loads(row["plan_json"]) if row["plan_json"] else None,
+        "job": json.loads(row["job_json"]) if row["job_json"] else None,
         "params": json.loads(row["params_json"]),
         "intent": json.loads(row["intent_json"]) if row["intent_json"] else None,
         "estimate_usd": row["estimate_usd"],
@@ -200,7 +206,7 @@ def _request_payload(row: dict[str, Any]) -> dict[str, Any]:
         "matched_profile": row["matched_profile"],
         "why": row["why"] if "why" in row.keys() else None,
         "max_usd": row["max_usd"] if "max_usd" in row.keys() else None,
-        "plan_hash": row["plan_hash"],
+        "job_hash": row["job_hash"],
         "code_ref": row["code_ref"],
         "landed_sha256": row["landed_sha256"],
         "errors": json.loads(row["errors_json"]) if row["errors_json"] else [],
@@ -318,8 +324,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="data-download",
         version="0.1.0",
         description=(
-            "Files and tracks archival download requests. Phase 1: requests are "
-            "validated and persisted, and nothing executes."
+            "Files and tracks archival download requests. Phase 2: a request's "
+            "params are bound into a Job and validated; nothing executes."
         ),
         lifespan=lifespan,
     )
@@ -371,20 +377,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         kind = body.get("kind")
         now = utcnow()
         digest = payload_hash(body)
+        # §5.6: exactly-once is opt-in, by the caller, because the caller is the
+        # only party who knows whether a repeat is a retry or a second request.
+        idempotency_key = (request.headers.get("Idempotency-Key") or "").strip() or None
+        if idempotency_key and len(idempotency_key) > 200:
+            raise errors.invalid_body("Idempotency-Key must be at most 200 characters")
 
         if kind == "plan":
             raw_type = body.get("plan_type")
-            plan_type = registry.get(raw_type) if isinstance(raw_type, str) else None
-            if plan_type is None:
+            plan = profiles.resolve(registry, raw_type)
+            if plan is None:
+                # Refused *before* anything is bound or stored: an unregistered
+                # name is not a candidate for later, it is an unknown plan.
                 raise errors.plan_type_unknown(raw_type)
-            plan = validate_plan(body, plan_type)
+            validated = validate_plan(body, plan.type)
+            # §7.2: the body carries params; the Plan's committed binder emits
+            # the Job. Binding is where "no plan, no call" becomes real -- a
+            # call the vocabulary does not model is not expressible.
+            try:
+                bound = plan.binder(validated["params"], validated["verify"])
+                job_text, job_digest = job_mod.bind_and_seal(bound)
+            except job_mod.JobInvalid as exc:
+                raise exc.as_api_error() from None
+            except (ValueError, KeyError) as exc:
+                raise errors.plan_not_valid(
+                    f"the binder for {plan.name!r} refused these params: {exc}"
+                ) from None
             row = {
                 "id": _new_id(),
                 "state": "draft",
                 "body_kind": "plan",
-                "plan_type": plan_type.name,
-                "plan_json": canonical_json(plan),
-                "params_json": canonical_json(plan["params"]),
+                "plan_type": plan.name,
+                "job_json": job_text,
+                "params_json": canonical_json(validated["params"]),
+                "idempotency_key": idempotency_key,
                 "payload_hash": digest,
                 "intent_json": None,
                 "estimate_usd": None,  # nothing prices anything this phase
@@ -392,7 +418,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "plan_origin": "adhoc",  # no profile registry exists yet
                 "matched_profile": None,
                 "code_ref": None,
-                "plan_hash": plan_hash(plan),
+                "job_hash": job_digest,
                 "lease_until": None,
                 "landed_sha256": None,
                 "errors_json": None,
@@ -401,7 +427,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "created_at": now,
                 "updated_at": now,
             }
-            event_detail = {"body_kind": "plan", "plan_type": plan_type.name}
+            event_detail = {
+                "body_kind": "plan",
+                "plan_type": plan.name,
+                "job_hash": job_digest,
+            }
         elif kind == "intent":
             validate_intent(body)
             intent_obj = body["intent"]
@@ -415,8 +445,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "state": "blocked",
                 "body_kind": "intent",
                 "plan_type": None,
-                "plan_json": None,
+                "job_json": None,
                 "params_json": canonical_json(params),
+                "idempotency_key": idempotency_key,
                 "payload_hash": digest,
                 "intent_json": canonical_json(body),
                 "estimate_usd": None,
@@ -424,7 +455,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "plan_origin": None,
                 "matched_profile": None,
                 "code_ref": None,
-                "plan_hash": None,
+                "job_hash": None,
                 "lease_until": None,
                 "landed_sha256": None,
                 "errors_json": None,
@@ -437,8 +468,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             raise errors.invalid_body("kind must be 'plan' or 'intent'")
 
-        stored, created = await store.insert_request(row=row, event_detail=event_detail)
+        stored, created, duplicate_of = await store.insert_request(
+            row=row, event_detail=event_detail
+        )
         if not created:
+            # Only reachable via a repeated Idempotency-Key: the caller said this
+            # is the same attempt, and 409 is the honest answer.
             raise errors.duplicate_request(stored["id"])
 
         return JSONResponse(
@@ -447,6 +482,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "request_id": stored["id"],
                 "state": stored["state"],
                 "blocked_reason": stored["blocked_reason"],
+                # Informational: an earlier Request with the same body. This one
+                # still exists, with its own id and its own output directory.
+                "duplicate_of": duplicate_of,
             },
         )
 
@@ -579,12 +617,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "plan_type": row["plan_type"],
                 "params": _params_of(row),
                 "intent": json.loads(row["intent_json"]) if row["intent_json"] else None,
-                "plan": json.loads(row["plan_json"]) if row["plan_json"] else None,
+                "job": json.loads(row["job_json"]) if row["job_json"] else None,
                 "max_usd": row["max_usd"],
                 "why": view["why"] if "why" in view.keys() else row["why"],
             },
             "identity": {
-                "plan_hash": row["plan_hash"],
+                "job_hash": row["job_hash"],
                 "code_ref": row["code_ref"],
                 "landed_sha256": row["landed_sha256"],
                 "errors": json.loads(row["errors_json"]) if row["errors_json"] else [],

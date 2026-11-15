@@ -2,10 +2,22 @@
 # that actually ran (all 13 G under /srv/datasets/databento carries batch
 # receipts with `customizations: {split_duration: day}`).
 #
-# This file is a phase-1 vocabulary commitment. Phase 2 reconciles the registry
-# against §3's closed step vocabulary (quote, resolve, submit, poll, download,
-# convert, verify) and settles §13 Q1 (symbology variants). Until then this
-# describes parameters only: no steps, no vendor calls, no symbology rules.
+# Reconciled in phase 2. This file stays DECLARATIVE: a param schema, a vendor,
+# and the dataset patterns it claims. It deliberately has no `steps` section --
+# steps are emitted by committed code, not declared here (the rejected design
+# made every parameter change a step change).
+#
+# The binder that turns these params into a Job is
+# `src/data_download/profiles/databento_batch_download.py`, resolved by this
+# file's `name`. The driver protocol it binds against is `interpreter.py`; this
+# Plan ships no driver in phase 2 (the offline one lives in `dryrun.py`).
+#
+# §13 Q1 is settled in the shape and not in the vendor's answer: raw_symbol,
+# parent, continuous and instrument_id differ only in what string goes in
+# `symbols`, so they are ONE Plan with a wider param space -- a difference in
+# kwargs is not a different Plan. `stype_in` is therefore a required enum, and
+# getting it wrong is a pricing question, not a registry one: the mis-priced
+# ES.FUT ticket (§11.1) read `parent` where `continuous` was meant.
 name: databento_batch_download
 version: 1
 description: >-
@@ -63,8 +75,10 @@ params_schema:
       type: string
       enum: [raw_symbol, parent, continuous, instrument_id]
       description: >-
-        How `symbols` is read. Futures series use continuous with ES.c.0;
-        the parent ES means every expiry and prices orders of magnitude more.
+        How `symbols` is read. Futures series use continuous with ES.c.0; the
+        parent ES means every expiry and prices orders of magnitude more. The
+        four values are one Plan's parameter space, not four plans: they differ
+        only in what goes in `symbols` (phase 2, §5.3).
     start:
       type: string
       pattern: "^\\d{4}-\\d{2}-\\d{2}([T ]\\d{2}:\\d{2}(:\\d{2})?(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?)?$"

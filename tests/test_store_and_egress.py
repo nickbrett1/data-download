@@ -102,7 +102,7 @@ def test_an_older_store_gains_the_new_columns_on_start(tmp_path):
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA_PATH.read_text())
     conn.execute(
-        "INSERT INTO requests (id, state, body_kind, plan_type, plan_json, "
+        "INSERT INTO requests (id, state, body_kind, plan_type, job_json, "
         "params_json, payload_hash, intent_json, estimate_usd, blocked_reason, "
         "plan_origin, why, max_usd, created_at, updated_at) VALUES "
         "('req_old', 'blocked', 'intent', NULL, NULL, '{}', 'hash-old', ?, NULL, "

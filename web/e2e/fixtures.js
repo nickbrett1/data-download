@@ -239,7 +239,7 @@ export const requestDetail = {
     why: "OPRA.PILLAR trades for the Oct expiry cycle",
   },
   identity: {
-    plan_hash: null,
+    job_hash: null,
     code_ref: null,
     landed_sha256: null,
     errors: [],

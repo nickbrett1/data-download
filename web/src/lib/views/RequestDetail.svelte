@@ -85,7 +85,7 @@
   const rawBody = $derived.by(() => {
     if (!data) return "";
     const body =
-      data.payload?.intent ?? data.payload?.plan ?? data.payload?.params;
+      data.payload?.intent ?? data.payload?.job ?? data.payload?.params;
     return body ? JSON.stringify(body, null, 2) : "";
   });
 </script>
@@ -160,10 +160,10 @@
         </details>
       {/if}
 
-      {#if data.identity?.plan_hash}
+      {#if data.identity?.job_hash}
         <p class="hash-row">
-          <span class="micro">plan hash</span>
-          <code>{data.identity.plan_hash}</code>
+          <span class="micro">job hash</span>
+          <code>{data.identity.job_hash}</code>
         </p>
       {/if}
     </DetailPanel>

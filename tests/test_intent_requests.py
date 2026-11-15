@@ -23,8 +23,8 @@ def test_intent_lands_blocked_not_draft(client):
     row = client.get(f"/v1/requests/{payload['request_id']}", headers=auth()).json()
     assert row["state"] == "blocked"
     assert row["blocked_reason"] == "awaiting_plan"
-    assert row["plan"] is None
-    assert row["plan_hash"] is None
+    assert row["job"] is None
+    assert row["job_hash"] is None
     assert row["estimate_usd"] is None
     assert row["body_kind"] == "intent"
     assert row["intent"]["max_usd"] == 120

@@ -36,7 +36,7 @@ def _seed_all(path: Path) -> None:
                 "id": "seed_approved",
                 "state": "approved",
                 "created_at": iso(-timedelta(hours=2)),
-                "plan_json": PLAN_JSON,
+                "job_json": PLAN_JSON,
                 "estimate_usd": 1.5,
             },
             # 2. running, lease expired
@@ -45,7 +45,7 @@ def _seed_all(path: Path) -> None:
                 "state": "running",
                 "created_at": iso(-timedelta(hours=3)),
                 "lease_until": iso(-timedelta(hours=1)),
-                "plan_json": PLAN_JSON,
+                "job_json": PLAN_JSON,
             },
             # 3. running, valid lease, no progress for 7h
             {
@@ -54,49 +54,49 @@ def _seed_all(path: Path) -> None:
                 "created_at": iso(-timedelta(hours=9)),
                 "updated_at": iso(-timedelta(hours=7)),
                 "lease_until": iso(timedelta(hours=1)),
-                "plan_json": PLAN_JSON,
+                "job_json": PLAN_JSON,
             },
             # 4. the same plan failing three times
             {
                 "id": "seed_fail_1",
                 "state": "failed",
                 "created_at": iso(-timedelta(hours=5)),
-                "plan_json": PLAN_JSON,
-                "plan_hash": "hash_same_plan",
+                "job_json": PLAN_JSON,
+                "job_hash": "hash_same_plan",
                 "errors_json": json.dumps([{"code": "verify_contradiction"}]),
             },
             {
                 "id": "seed_fail_2",
                 "state": "failed",
                 "created_at": iso(-timedelta(hours=4)),
-                "plan_json": PLAN_JSON,
-                "plan_hash": "hash_same_plan",
+                "job_json": PLAN_JSON,
+                "job_hash": "hash_same_plan",
                 "errors_json": json.dumps([{"code": "verify_contradiction"}]),
             },
             {
                 "id": "seed_fail_3",
                 "state": "failed",
                 "created_at": iso(-timedelta(hours=3)),
-                "plan_json": PLAN_JSON,
-                "plan_hash": "hash_same_plan",
+                "job_json": PLAN_JSON,
+                "job_hash": "hash_same_plan",
                 "errors_json": json.dumps([{"code": "verify_contradiction"}]),
             },
             # one landed with errors, to prove v_done distinguishes it
             {
                 "id": "seed_short",
                 "state": "landed_with_errors",
-                "plan_json": PLAN_JSON,
+                "job_json": PLAN_JSON,
                 "errors_json": json.dumps([{"code": "verify_shortfall"}]),
             },
             # a draft, for v_pending
-            {"id": "seed_draft", "state": "draft", "plan_json": PLAN_JSON},
+            {"id": "seed_draft", "state": "draft", "job_json": PLAN_JSON},
             # a blocked intent: not broken, so never in v_stuck
             {
                 "id": "seed_blocked",
                 "state": "blocked",
                 "body_kind": "intent",
                 "plan_type": None,
-                "plan_json": None,
+                "job_json": None,
                 "estimate_usd": None,
                 "blocked_reason": "awaiting_plan",
                 "plan_origin": None,
@@ -159,14 +159,14 @@ def test_repeat_failure_does_not_fire_at_two(client, db_path):
             {
                 "id": "two_1",
                 "state": "failed",
-                "plan_json": PLAN_JSON,
-                "plan_hash": "h2",
+                "job_json": PLAN_JSON,
+                "job_hash": "h2",
             },
             {
                 "id": "two_2",
                 "state": "failed",
-                "plan_json": PLAN_JSON,
-                "plan_hash": "h2",
+                "job_json": PLAN_JSON,
+                "job_hash": "h2",
             },
         ],
     )
@@ -377,7 +377,7 @@ def test_a_row_leads_with_the_subject_and_keeps_the_key(client, db_path):
                 "state": "blocked",
                 "body_kind": "intent",
                 "plan_type": None,
-                "plan_json": None,
+                "job_json": None,
                 "estimate_usd": None,
                 "plan_origin": None,
                 "blocked_reason": "awaiting_plan",
@@ -424,7 +424,7 @@ def test_a_row_names_the_vendor_the_dataset_belongs_to(client, db_path):
                 "state": "blocked",
                 "body_kind": "intent",
                 "plan_type": None,
-                "plan_json": None,
+                "job_json": None,
                 "estimate_usd": None,
                 "blocked_reason": "awaiting_plan",
                 "params_json": json.dumps(
@@ -454,7 +454,7 @@ def test_an_unclaimed_dataset_shows_no_vendor_rather_than_a_guess(client, db_pat
                 "state": "blocked",
                 "body_kind": "intent",
                 "plan_type": None,
-                "plan_json": None,
+                "job_json": None,
                 "estimate_usd": None,
                 "blocked_reason": "awaiting_plan",
                 "params_json": json.dumps(
@@ -486,7 +486,7 @@ def test_the_detail_view_carries_what_the_list_drops(client):
     assert body["payload"]["why"] == INTENT_BODY["why"]
     assert body["payload"]["max_usd"] == 120
     assert body["payload"]["intent"]["intent"]["dataset"] == "OPRA.PILLAR"
-    assert body["payload"]["plan"] is None
+    assert body["payload"]["job"] is None
     assert [e["event"] for e in body["events"]] == ["submitted"]
     assert body["events"][0]["actor_kind"] == "submitter"
 

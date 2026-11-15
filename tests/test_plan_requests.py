@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import time
 
 from conftest import INTENT_BODY, PLAN_BODY, auth
@@ -35,26 +36,67 @@ def test_plan_submit_returns_202_then_reads_back(client):
     assert row["state"] == "draft"
     assert row["body_kind"] == "plan"
     assert row["plan_type"] == "databento_batch_download"
-    assert row["plan"]["params"] == PLAN_BODY["params"]
-    assert row["plan"]["verify"] == {"on_failure": "quarantine"}
+    assert row["params"] == PLAN_BODY["params"]
     assert row["intent"] is None
     assert row["estimate_usd"] is None
-    assert row["plan_hash"]
+    # The Job, not the params and not the body: the Plan's binder emitted it.
+    assert row["job"]["plan"] == "databento_batch_download"
+    kinds = [step["kind"] for step in row["job"]["steps"]]
+    assert kinds == [
+        "resolve", "quote", "submit", "poll", "download", "convert", "verify",
+    ]
+    assert row["job"]["steps"][-1]["kwargs"]["on_failure"] == "quarantine"
+    assert row["job_hash"]
+
+    # §2 rule 3: the Job names its Plan and carries no code pointer.
+    assert "module" not in json.dumps(row["job"])
+    assert "/" not in row["job"]["plan"]
 
 
-def test_duplicate_returns_409_carrying_the_same_id(client):
+def test_a_re_request_creates_a_second_row_and_says_what_it_duplicates(client):
+    """§5.6: a re-request is a Request. Two ids, two rows, one job_hash."""
     first = _submit(client)
+    assert first.status_code == 202
+    assert first.json()["duplicate_of"] is None
+    first_id = first.json()["request_id"]
+
+    again = _submit(client)
+    assert again.status_code == 202, again.text
+    assert again.json()["request_id"] != first_id
+    assert again.json()["duplicate_of"] == first_id
+
+    listing = client.get("/v1/requests", headers=auth()).json()
+    assert listing["total"] == 2
+    hashes = {
+        client.get(f"/v1/requests/{r['request_id']}", headers=auth()).json()["job_hash"]
+        for r in listing["items"]
+    }
+    assert len(hashes) == 1
+
+
+def test_a_repeated_idempotency_key_is_409_naming_the_same_request(client):
+    """Exactly-once is opt-in, by the caller: only they know retry from re-request."""
+    headers = {**auth(), "Idempotency-Key": "attempt-1"}
+    first = client.post("/v1/requests", json=PLAN_BODY, headers=headers)
     assert first.status_code == 202
     request_id = first.json()["request_id"]
 
-    again = _submit(client)
+    again = client.post("/v1/requests", json=PLAN_BODY, headers=headers)
     assert again.status_code == 409
     error = again.json()["error"]
     assert error["code"] == "duplicate_request"
     assert error["request_id"] == request_id
 
+    # A *different* key is a different attempt: it creates its own row.
+    other = client.post(
+        "/v1/requests", json=PLAN_BODY, headers={**auth(), "Idempotency-Key": "attempt-2"}
+    )
+    assert other.status_code == 202
+    assert other.json()["request_id"] != request_id
 
-def test_reordered_keys_hash_identically(client):
+
+def test_reordered_keys_hash_identically_and_bind_the_same_job(client):
+    """Body key order is not content: same job_hash, and `duplicate_of` notices."""
     first = _submit(client)
     assert first.status_code == 202
 
@@ -65,9 +107,8 @@ def test_reordered_keys_hash_identically(client):
         "kind": PLAN_BODY["kind"],
     }
     again = _submit(client, reordered)
-    assert again.status_code == 409
-    assert again.json()["error"]["code"] == "duplicate_request"
-    assert again.json()["error"]["request_id"] == first.json()["request_id"]
+    assert again.status_code == 202
+    assert again.json()["duplicate_of"] == first.json()["request_id"]
 
 
 def test_unregistered_plan_type_is_422_plan_type_unknown(client):
@@ -168,7 +209,11 @@ def test_exactly_one_submitted_event(client):
     assert len(events) == 1
     assert events[0]["event"] == "submitted"
     assert events[0]["actor_kind"] == "submitter"
-    assert events[0]["detail"] == {"body_kind": "plan", "plan_type": "databento_batch_download"}
+    detail = events[0]["detail"]
+    assert detail["body_kind"] == "plan"
+    assert detail["plan_type"] == "databento_batch_download"
+    # The Job's identity is in the audit trail: what was filed, at byte level.
+    assert detail["job_hash"]
 
 
 def test_events_for_missing_request_is_404(client):
