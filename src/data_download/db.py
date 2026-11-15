@@ -306,6 +306,25 @@ class ApproveRefused(Exception):
         return f"approve_refused: {self.reason} (state={self.state})"
 
 
+class RematchRefused(Exception):
+    """A row cannot be re-matched (phase 2.6).
+
+    `not_blocked` is the important one: a row that already has a Job has
+    committed to one, and a Job is write-once. A new plan version implies a
+    different Job, which is a new Request, not an edit of this one.
+    """
+
+    REASONS = frozenset({"not_found", "not_blocked"})
+
+    def __init__(self, reason: str, state: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.state = state
+
+    def as_text(self) -> str:
+        return f"rematch_refused: {self.reason} (state={self.state})"
+
+
 class EscalateRefused(Exception):
     """A caller asked for a new plan and the answer was no (phase 2.5).
 
@@ -832,6 +851,131 @@ class Store:
                 await self.conn.execute("ROLLBACK")
                 raise
         return (await self.get_request(request_id) or row), True
+
+    # -- phase 2.6: re-running the match when the registry moves ------------
+
+    async def blocked_ids(self, ids: list[str] | None = None) -> list[str]:
+        """Every blocked Request, oldest first (or the blocked subset of `ids`).
+
+        Oldest first because that is the order a reconciliation should work in:
+        the row that has been waiting longest is the one whose caller most wants
+        an answer, and it makes the summary log read like the queue.
+        """
+        sql = "SELECT id FROM requests WHERE state = 'blocked'"
+        args: list[Any] = []
+        if ids:
+            sql += f" AND id IN ({', '.join('?' for _ in ids)})"
+            args = list(ids)
+        sql += " ORDER BY created_at ASC, id ASC"
+        async with self.conn.execute(sql, args) as cur:
+            return [str(row["id"]) for row in await cur.fetchall()]
+
+    async def rematch(
+        self,
+        request_id: str,
+        decide: Callable[[dict[str, Any]], dict[str, Any] | None],
+        *,
+        now: str | None = None,
+        dry_run: bool = False,
+    ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        """Recompute one blocked row's verdict against the registry in force.
+
+        `decide` is pure and is handed the row **as stored, inside the write
+        transaction**: it returns `None` when the stored verdict is not stale
+        (writes nothing) or a dict with the new `verdict` and `report_json`,
+        plus `job_text`, `job_digest`, `plan_type` and `code_ref` when the row
+        now binds. Keeping the match inside the transaction is deliberate: the
+        verdict is written together with the Job it justifies or not at all.
+
+        Returns `(before, after, changed)`. On a dry run nothing is written and
+        `after` is what the row *would* become, but `changed` still means "a real
+        run would write this one": the summary a person wants before a deploy
+        sweeps a hundred rows into `draft`.
+        """
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = await self._select(request_id)
+                if row is None:
+                    raise RematchRefused("not_found")
+                if row["state"] != "blocked":
+                    raise RematchRefused("not_blocked", row["state"])
+                decision = decide(row)
+                if decision is None:
+                    await self.conn.execute("ROLLBACK")
+                    return row, row, False
+
+                verdict = decision["verdict"]
+                binds = decision.get("job_text") is not None
+                if dry_run:
+                    await self.conn.execute("ROLLBACK")
+                    return (
+                        row,
+                        {
+                            **row,
+                            "state": "draft" if binds else "blocked",
+                            "match_verdict": verdict,
+                            "plan_type": decision.get("plan_type"),
+                        },
+                        True,
+                    )
+
+                if binds:
+                    await self.conn.execute(
+                        "UPDATE requests SET state = 'draft', plan_type = ?, "
+                        "job_json = ?, job_hash = ?, blocked_reason = NULL, "
+                        "plan_origin = 'rematched', code_ref = ?, "
+                        "match_verdict = ?, match_report_json = ?, updated_at = ? "
+                        "WHERE id = ? AND state = 'blocked'",
+                        (
+                            decision["plan_type"],
+                            decision["job_text"],
+                            decision["job_digest"],
+                            decision.get("code_ref"),
+                            verdict,
+                            decision["report_json"],
+                            ts,
+                            request_id,
+                        ),
+                    )
+                else:
+                    await self.conn.execute(
+                        "UPDATE requests SET match_verdict = ?, "
+                        "match_report_json = ?, updated_at = ? "
+                        "WHERE id = ? AND state = 'blocked'",
+                        (verdict, decision["report_json"], ts, request_id),
+                    )
+                # One event per row that moved. A digest-only refresh is
+                # bookkeeping and would otherwise fill the trail with entries
+                # that say "nothing happened" once per deploy.
+                if binds or row["match_verdict"] != verdict:
+                    await self._event(
+                        request_id,
+                        ts,
+                        "system",
+                        "rematched",
+                        {
+                            "from_verdict": row["match_verdict"],
+                            "to_verdict": verdict,
+                            "registry": decision.get("registry"),
+                            "bound": binds,
+                            "job_hash": decision.get("job_digest"),
+                            "plan_type": decision.get("plan_type"),
+                            # The row's provenance moves with the Job: this code
+                            # bound it, so this is the commit a claim checks.
+                            "code_ref": decision.get("code_ref"),
+                        },
+                    )
+                await self.conn.execute("COMMIT")
+            except RematchRefused:
+                await self.conn.execute("ROLLBACK")
+                raise
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        after = await self.get_request(request_id) or row
+        return row, after, True
 
     async def claim(
         self,

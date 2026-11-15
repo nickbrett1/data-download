@@ -72,6 +72,34 @@ That is also how the tests divide: `pytest` owns the contract (which row gets
 which facet, what a plan type says a parameter demands), and `web/e2e/` owns the
 render, mocking `/ui/*.json` so it needs neither Python nor a database.
 
+## When the registry moves
+
+A Request filed while nothing registered could take it sits `blocked` with a
+match report that describes the registry **at that moment**. Plans are code
+(`plan_types/*.yaml` plus its binder, baked into the image), so "we wrote a plan"
+and "a new process started" are the same event: the deploy is the trigger. On
+startup, `rematch.reconcile` walks the blocked rows, and any whose stored
+registry digest differs from the one in force is re-matched through the same
+`bind.bind_intent` the API uses. A row that now matches binds and becomes an
+ordinary `draft` to approve (`plan_origin: rematched`); a row that is closer but
+still short gets a fresh verdict and the page says which fields are missing.
+
+The digest covers more than `name:version` — it is
+`name:version:fingerprint(params_schema, datasets)` — so editing a YAML without
+bumping its version still invalidates stored verdicts. The pass is idempotent
+(equal digests write nothing) and never touches a row that already has a Job.
+
+The same pass, by hand, when you want to see what a deploy would do:
+
+```
+python3 -m data_download.rematch [request_id ...] [--dry-run] [--force] \
+    [--plan-types-dir plan_types] [--db /data/data-download.db]
+```
+
+`--dry-run` prints what a deploy would sweep; `--force` re-matches even when the
+digest is unchanged. Note that a plan type added to a *running* container is
+invisible until it restarts — the image is the registry.
+
 ## Secret scanning
 
 Every commit is scanned for credentials by `gitleaks`, and CI scans the

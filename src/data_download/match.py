@@ -55,15 +55,37 @@ VERDICTS = (MATCHED, NEEDS_PARAMS, CANNOT_EXPRESS, NOT_CLAIMED)
 _IDENTICAL = ("dataset", "schema", "symbols", "stype_in")
 
 
+def _fingerprint(entry: PlanType) -> str:
+    """Everything about one type that changes what `attempt` would answer.
+
+    The version is the promise, but a promise is not a mechanism: a schema or a
+    dataset pattern edited without a bump changes the verdict just the same, and
+    a digest that only counted versions would keep certifying the old answer
+    (phase 2.6 reconciles on a change of digest, so this is what decides whether
+    a row is re-examined).
+    """
+    payload = {
+        "name": entry.name,
+        "version": entry.version,
+        "params_schema": entry.params_schema,
+        "datasets": sorted(entry.datasets),
+    }
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def registry_digest(registry: Registry) -> str:
     """Which registry this verdict was computed against, in one short string.
 
-    Names and versions, not file contents: the question a reviewer asks later is
-    "had we any plan that claimed this dataset then?", and a bump to 2 answers
-    it. Recorded in every report so an old verdict is not read as a claim about
-    today's registry.
+    Recorded in every report so an old verdict is not read as a claim about
+    today's registry -- and compared at start (phase 2.6) to decide which rows
+    are worth re-examining. It covers what the match actually reads: the name,
+    the version, the params schema and the claimed dataset patterns.
     """
-    pairs = sorted(f"{entry.name}:{entry.version}" for entry in registry.all())
+    pairs = sorted(
+        f"{entry.name}:{entry.version}:{_fingerprint(entry)}"
+        for entry in registry.all()
+    )
     digest = hashlib.sha256("\n".join(pairs).encode("utf-8")).hexdigest()
     return digest[:16]
 

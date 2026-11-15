@@ -28,7 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, errors, match, profiles
+from . import auth, bind, errors, match, profiles, rematch
 from . import job as job_mod
 from .config import Settings, load_settings
 from .db import EscalateRefused, Store, canonical_json, payload_hash, utcnow
@@ -120,21 +120,26 @@ def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
     it is stuck in (`running` + `lease_expired` is *broken*, not *running*), and
     `blocked` outranks nothing but is not breakage - it has its own labels.
 
-    A blocked row is split three ways, in the order of who moves next (§2.5):
-    escalated first, because once someone has asked for a plan the caller's
-    options are spent; then `needs_params`, which is the caller's own gap; then
-    `no_plan`, which is a decision about code. A row stored before the match
-    existed has no verdict, and `no_plan` is the honest reading of that: it has
-    no plan, and nobody asked for one. Backfilling a verdict now would date it
-    to the moment of the scrape rather than the moment of the request.
+    A blocked row is split three ways, by who moves next (§2.5): the caller's
+    own gap (`needs_params`), a decision about code that has been asked for
+    (`requested`), and one that has not (`no_plan`). `needs_params` comes first
+    because it is the cheapest move and the one a caller can make without
+    waiting for anybody. A row stored before the match existed has no verdict,
+    and `no_plan` is the honest reading of that: it has no plan, and nobody has
+    asked for one. Inventing a verdict at read time would date it to the read.
     """
     if row.get("stuck_condition"):
         facet = "broken"
     elif row.get("state") == "blocked":
-        if row.get("escalated_at"):
-            facet = "requested"
-        elif row.get("match_verdict") == match.NEEDS_PARAMS:
+        # `needs_params` outranks `requested`, and the reconciliation pass is
+        # why: a row escalated as `not_claimed` whose new verdict is "add two
+        # fields" has its short path back, and a label saying "plan requested"
+        # would hide it. Nothing collides at submit time -- `escalate` refuses
+        # while any candidate is merely short of params.
+        if row.get("match_verdict") == match.NEEDS_PARAMS:
             facet = "needs_params"
+        elif row.get("escalated_at"):
+            facet = "requested"
         else:
             facet = "no_plan"
     elif row.get("state") in ("draft", "approved"):
@@ -463,6 +468,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await store.connect()
             app.state.store = store
             log.info("request store ready at %s", settings.db_path)
+            # Phase 2.6: a verdict is a claim about a particular registry, and
+            # a plan arrives with code -- so "a plan that would have matched
+            # now exists" is exactly this moment. Rows whose report was
+            # computed against a different digest are re-examined before the
+            # app serves anything; ones that now match bind.
+            try:
+                summary = await rematch.reconcile(
+                    store, registry, code_ref=settings.code_ref
+                )
+                rematch.log_summary(summary)
+            except Exception as exc:  # noqa: BLE001 - never block a start on it
+                log.error("rematch pass failed at start: %s", exc)
         except Exception as exc:  # noqa: BLE001 - the reason is reported, not raised
             # Up but broken is a real state: /healthz stays a liveness check that
             # does not touch the DB, so a store fault does not restart-loop the
@@ -601,61 +618,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if key in intent_obj
             }
             # The match decides whether this Request needs a plan at all, and
-            # says why. It is a schema comparison over the registry -- pure,
-            # cheap, and the same answer every time.
-            report = match.attempt(intent_obj, registry)
+            # says why; a match binds, so there is nothing to ask a human and
+            # nothing to invent. Matching and binding live in `bind.py` because
+            # the reconciliation pass at start (phase 2.6) must bind exactly the
+            # same way -- one implementation, or the two drift on which verify
+            # policy a Job nobody chose gets bound with.
+            try:
+                bound = bind.bind_intent(registry, body)
+            except bind.InvalidVerify as exc:
+                raise errors.plan_not_valid(str(exc)) from None
+            report = bound.report
             report_text = match.as_json(report)
-            job_text = job_digest = None
-            plan_type = None
-            if report["verdict"] == match.MATCHED:
-                plan = profiles.resolve(registry, report["plan_type"])
-                chosen = next(
-                    (
-                        c
-                        for c in report["candidates"]
-                        if c["plan_type"] == report["plan_type"]
-                    ),
-                    {},
-                )
-                if plan is not None:
-                    # The intent supplied everything the plan declares, so there
-                    # is nothing to ask a human and nothing to invent: bind it.
-                    # `verify` is empty here and the plan's own default applies;
-                    # a caller who wants to choose says so by filing a plan.
-                    # An intent carries no `verify`, and a Job cannot be bound
-                    # without one. The default is the conservative policy: a
-                    # failed verification quarantines, never commits, so a
-                    # matched intent can never land half-verified bytes.
-                    verify = body.get("verify") or {}
-                    on_failure = (
-                        verify.get("on_failure") if isinstance(verify, dict) else None
-                    )
-                    if on_failure is None:
-                        allowed = plan.type.on_failure_allowed
-                        on_failure = (
-                            "quarantine"
-                            if "quarantine" in allowed
-                            else sorted(allowed)[0]
-                        )
-                    elif on_failure not in plan.type.on_failure_allowed:
-                        raise errors.plan_not_valid(
-                            f"verify.on_failure {on_failure!r} is not allowed for "
-                            f"plan_type {plan.name!r}"
-                        )
-                    try:
-                        bound = plan.binder(
-                            dict(chosen.get("params") or {}),
-                            {"on_failure": on_failure},
-                        )
-                        job_text, job_digest = job_mod.bind_and_seal(bound)
-                        plan_type = plan.name
-                    except (job_mod.JobInvalid, ValueError, KeyError) as exc:
-                        # A binder that refuses params its own schema accepted is
-                        # a plan defect, not the caller's: record it and stay
-                        # blocked rather than blaming the request.
-                        report["verdict"] = match.CANNOT_EXPRESS
-                        report["error"] = f"binder refused: {exc}"
-                        report_text = match.as_json(report)
+            job_text = bound.job_text
+            job_digest = bound.job_digest
+            plan_type = bound.plan_type
             row = {
                 "id": _new_id(),
                 "state": "draft" if job_text else "blocked",
