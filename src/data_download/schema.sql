@@ -6,7 +6,7 @@
 -- NOT NULL. `estimate_usd` is always NULL this phase because nothing prices
 -- anything.
 --
--- Columns §8.1 carries that this phase does not need yet (`actual_usd`, `owner`,
+-- Columns §8.1 carries that this phase does not need yet (`actual_usd`,
 -- `sdk_version`, `blocked_since`, `author_attempts`) are not columns here; they
 -- arrive with the phases that use them.
 --
@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS requests (
   matched_profile  TEXT,
   code_ref         TEXT,                   -- git sha; phase 3
   job_hash         TEXT,                   -- derived: sha256(canonical(job_json))
+  owner            TEXT,                   -- the claimant: host:pid:uuid (§8.2)
   lease_until      TEXT,                   -- phase 3
   landed_sha256    TEXT,                   -- phase 5
   errors_json      TEXT,
@@ -65,7 +66,11 @@ CREATE TABLE IF NOT EXISTS events (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   request_id   TEXT NOT NULL REFERENCES requests(id),
   ts           TEXT NOT NULL,
-  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('submitter','runner','system')),
+  -- `submitter` is the API caller (phase 1), `human` is the CLI approver
+  -- (phase 3), `runner` is the claim. §8.1 prints three names (`human`/`agent`/
+  -- `runner`); the record needed a fourth for "an API caller" and keeping it
+  -- says less than calling every submit `human` would wrongly claim.
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('submitter','human','agent','runner','system')),
   event        TEXT NOT NULL,
   detail_json  TEXT
 );
@@ -83,8 +88,9 @@ CREATE INDEX IF NOT EXISTS idx_events_request_id    ON events(request_id, id);
 -- Read surface (§7.8). The dashboard issues only SELECTs against these views.
 -- ---------------------------------------------------------------------------
 
--- What is waiting on me. `approved_unclaimed` has no `owner` column to inspect
--- yet (that arrives with the claim in phase 3), so it is simply "approved".
+-- What is waiting on me. Since phase 3 an `approved` row has `owner IS NULL`
+-- by construction -- `claim` moves it to `running`, `release` clears both owner
+-- and lease -- so `approved_unclaimed` is exact rather than assumed.
 CREATE VIEW IF NOT EXISTS v_pending AS
 SELECT id,
        state,

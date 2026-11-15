@@ -26,7 +26,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, errors, profiles
+from . import auth, coderef, errors, profiles
 from . import job as job_mod
 from .config import Settings, load_settings
 from .db import Store, canonical_json, payload_hash, utcnow
@@ -302,6 +302,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.registry = registry
         app.state.store = None
         app.state.store_error = None
+        # Resolved once per process, not per request: a long-lived service must
+        # not record two commits for one deployment (phase 3 order §5).
+        app.state.code_ref = coderef.resolve_and_log()
 
         store = Store(settings.db_path)
         try:
@@ -417,7 +420,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "blocked_reason": None,
                 "plan_origin": "adhoc",  # no profile registry exists yet
                 "matched_profile": None,
-                "code_ref": None,
+                "code_ref": getattr(request.app.state, "code_ref", None),
                 "job_hash": job_digest,
                 "lease_until": None,
                 "landed_sha256": None,

@@ -11,11 +11,14 @@ import hashlib
 import json
 import logging
 import sqlite3
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
+
+from . import coderef
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +34,12 @@ WRITE_PRAGMAS = (
 def utcnow() -> str:
     """ISO-8601 UTC, seconds precision, `Z` suffix - sortable and julianday-safe."""
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def shift_seconds(iso: str, seconds: int) -> str:
+    """`lease_until` = now + the lease, in the same fixed format as `utcnow`."""
+    moment = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    return (moment + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def canonical_json(value: Any) -> str:
@@ -60,6 +69,9 @@ def job_hash(job_bytes: str) -> str:
 ADDED_COLUMNS = (
     ("requests", "why", "TEXT"),
     ("requests", "max_usd", "REAL"),
+    # Phase 3: the claimant (§8.2). Nullable, like the rest of this tuple, and
+    # for the same reason -- the store may already hold rows.
+    ("requests", "owner", "TEXT"),
 )
 
 
@@ -103,6 +115,7 @@ CREATE TABLE requests_phase2 (
   matched_profile  TEXT,
   code_ref         TEXT,
   job_hash         TEXT,
+  owner            TEXT,
   lease_until      TEXT,
   landed_sha256    TEXT,
   errors_json      TEXT,
@@ -128,6 +141,51 @@ _PHASE2_COLUMNS = (
     "matched_profile, code_ref, job_hash, lease_until, landed_sha256, "
     "errors_json, why, max_usd, created_at, updated_at"
 )
+
+
+# The phase-3 rebuild: `events.actor_kind` gains `human` (the CLI approver).
+# SQLite cannot widen a CHECK in place, so this is the same create/copy/drop/
+# rename the phase-2 rebuild uses. No value is rewritten -- `submitter` still
+# means "an API caller", and relabelling every past submit as a human approval-
+# adjacent act would be a worse record than the one we have.
+EVENTS_TABLE_DDL = """
+CREATE TABLE events_phase3 (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id   TEXT NOT NULL REFERENCES requests(id),
+  ts           TEXT NOT NULL,
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('submitter','human','agent','runner','system')),
+  event        TEXT NOT NULL,
+  detail_json  TEXT
+)
+"""
+
+
+async def _migrate_events(conn: aiosqlite.Connection) -> None:
+    async with conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'"
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:  # a fresh database: `executescript` will create it
+        return
+    if "'human'" in (row["sql"] or ""):
+        return
+    log.info("rebuilding events: actor_kind gains 'human'")
+    await conn.execute("PRAGMA foreign_keys=OFF")
+    await conn.execute("BEGIN IMMEDIATE")
+    try:
+        await conn.execute(EVENTS_TABLE_DDL)
+        await conn.execute(
+            "INSERT INTO events_phase3 (id, request_id, ts, actor_kind, event, detail_json) "
+            "SELECT id, request_id, ts, actor_kind, event, detail_json FROM events"
+        )
+        await conn.execute("DROP TABLE events")
+        await conn.execute("ALTER TABLE events_phase3 RENAME TO events")
+        await conn.execute("COMMIT")
+    except Exception:
+        await conn.execute("ROLLBACK")
+        raise
+    finally:
+        await conn.execute("PRAGMA foreign_keys=ON")
 
 
 def _needs_rebuild(columns: set[str], indexes: list[tuple[str, int, str]]) -> bool:
@@ -194,6 +252,68 @@ async def _migrate_requests(conn: aiosqlite.Connection) -> None:
         await conn.execute("PRAGMA foreign_keys=ON")
 
 
+# The lease a claim takes by default. Policy, not a literal in the statement:
+# phase 2 learned this with `MAX_POLLS`, and the same rule applies before it can
+# calcify. Overridable per call so the exit test does not need a 15-minute sleep.
+LEASE_SECONDS = 900
+
+
+class ApproveRefused(Exception):
+    """`approve` said no, with one of a closed set of reasons (phase 3 §2)."""
+
+    REASONS = frozenset({"not_found", "blocked", "wrong_state", "job_missing"})
+
+    def __init__(self, reason: str, state: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.state = state
+
+    def as_text(self) -> str:
+        return f"approve_refused: {self.reason} (state={self.state})"
+
+
+class ClaimRefused(Exception):
+    """The claim lost, and why -- so neither caller has to invent a reason.
+
+    Returning `None` from `claim()` would push the diagnosis onto a CLI and a
+    runner that would each write their own, which is how two vocabularies for
+    one fact happen.
+    """
+
+    REASONS = frozenset(
+        {
+            "not_found",
+            "blocked",
+            "draft",
+            "settled",
+            "leased",
+            "code_ref_unresolved",
+            "code_ref_unknown",
+        }
+    )
+
+    def __init__(
+        self,
+        reason: str,
+        state: str | None = None,
+        lease_until: str | None = None,
+        code_ref: str | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.state = state
+        self.lease_until = lease_until
+        self.code_ref = code_ref
+
+    def as_text(self) -> str:
+        parts = [f"claim_refused: {self.reason}", f"state={self.state}"]
+        if self.lease_until:
+            parts.append(f"lease_until={self.lease_until}")
+        if self.code_ref:
+            parts.append(f"code_ref={self.code_ref}")
+        return " ".join(parts)
+
+
 class Store:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -210,6 +330,7 @@ class Store:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
         await _add_missing_columns(conn)
         await _migrate_requests(conn)
+        await _migrate_events(conn)
         await conn.executescript(schema)
         self._conn = conn
 
@@ -390,6 +511,214 @@ class Store:
             except Exception:
                 await self.conn.execute("ROLLBACK")
                 raise
+
+    # -- phase 3: approval, the claim, the lease (§8.2) --------------------
+
+    async def _select(self, request_id: str) -> dict[str, Any] | None:
+        async with self.conn.execute(
+            "SELECT * FROM requests WHERE id = ?", (request_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def _event(
+        self,
+        request_id: str,
+        ts: str,
+        actor_kind: str,
+        event: str,
+        detail: dict[str, Any],
+    ) -> None:
+        """Append one event. Always called inside the caller's transaction.
+
+        A claim whose event is missing is an unauditable spend and there is no
+        correct way to repair it, so state and event commit together or not at
+        all (phase 3 order §3).
+        """
+        await self.conn.execute(
+            "INSERT INTO events (request_id, ts, actor_kind, event, detail_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (request_id, ts, actor_kind, event, canonical_json(detail)),
+        )
+
+    async def approve(
+        self,
+        request_id: str,
+        actor: str,
+        note: str | None = None,
+        *,
+        now: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """`draft` -> `approved`. Returns `(row, changed)`.
+
+        Approving an already-approved row is a **no-op with no second event**: a
+        retried CLI call must not be able to inflate the record, and one
+        approval is one row or the audit trail is not an audit trail.
+        """
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = await self._select(request_id)
+                if row is None:
+                    raise ApproveRefused("not_found")
+                state = row["state"]
+                if state == "approved":
+                    await self.conn.execute("ROLLBACK")
+                    return row, False
+                if state == "blocked":
+                    raise ApproveRefused("blocked", state)
+                if state != "draft":
+                    raise ApproveRefused("wrong_state", state)
+                if not row["job_json"]:
+                    # The CHECK forbids it; a hand-edited store is not bound by
+                    # a CHECK enforced when the row was written.
+                    raise ApproveRefused("job_missing", state)
+                await self.conn.execute(
+                    "UPDATE requests SET state = 'approved', updated_at = ? "
+                    "WHERE id = ? AND state = 'draft'",
+                    (ts, request_id),
+                )
+                await self._event(
+                    request_id,
+                    ts,
+                    "human",
+                    "approved",
+                    {"actor": actor, "note": note, "job_hash": row["job_hash"]},
+                )
+                await self.conn.execute("COMMIT")
+            except ApproveRefused:
+                await self.conn.execute("ROLLBACK")
+                raise
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        return (await self.get_request(request_id) or row), True
+
+    async def claim(
+        self,
+        request_id: str,
+        owner: str,
+        *,
+        lease_seconds: int | None = None,
+        now: str | None = None,
+        code_ref_checker: Callable[[str], bool | None] | None = None,
+    ) -> dict[str, Any]:
+        """Take the lease on an approved (or abandoned) row -- one statement.
+
+        Reclaim is **not a second mechanism**: a claim on an expired lease is the
+        same CAS, so there is no window between a sweeper and a claim in which
+        two claimants can both believe the row is theirs. There is no sweeper.
+
+        Refusals are typed (`ClaimRefused`), because the callers are a CLI and a
+        runner and a bare `None` would make each of them invent a vocabulary for
+        the same fact.
+        """
+        lease = LEASE_SECONDS if lease_seconds is None else lease_seconds
+        ts = now or utcnow()
+        until = shift_seconds(ts, lease)
+        checker: Callable[[str], bool | None] = (
+            coderef.is_commit if code_ref_checker is None else code_ref_checker
+        )
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = await self._select(request_id)
+                if row is None:
+                    raise ClaimRefused("not_found")
+                state = row["state"]
+                expired = (
+                    state == "running"
+                    and bool(row["lease_until"])
+                    and str(row["lease_until"]) < ts
+                )
+                if state == "approved" or expired:
+                    self._refuse_unless_committed(row, checker)
+                    async with self.conn.execute(
+                        "UPDATE requests "
+                        "SET state = 'running', owner = ?, lease_until = ?, updated_at = ? "
+                        "WHERE id = ? AND ( state = 'approved' "
+                        "   OR ( state = 'running' AND lease_until IS NOT NULL "
+                        "        AND julianday(lease_until) < julianday(?) ) )",
+                        (owner, until, ts, request_id, ts),
+                    ) as cur:
+                        won = cur.rowcount == 1
+                    if not won:  # lost to another process between our read and here
+                        fresh = await self._select(request_id) or row
+                        raise ClaimRefused(
+                            "leased", fresh["state"], fresh["lease_until"]
+                        )
+                    await self._event(
+                        request_id,
+                        ts,
+                        "runner",
+                        "claimed",
+                        {"owner": owner, "lease_until": until},
+                    )
+                    await self.conn.execute("COMMIT")
+                else:
+                    reason = {"blocked": "blocked", "draft": "draft"}.get(
+                        state, "leased" if state == "running" else "settled"
+                    )
+                    # The `except ClaimRefused` below rolls back; doing it here
+                    # too is a second rollback on a closed transaction.
+                    raise ClaimRefused(reason, state, row["lease_until"])
+            except ClaimRefused:
+                await self.conn.execute("ROLLBACK")
+                raise
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        return await self.get_request(request_id) or {}
+
+    @staticmethod
+    def _refuse_unless_committed(
+        row: dict[str, Any], checker: Callable[[str], bool | None]
+    ) -> None:
+        """§4.1's "only committed code may spend", at the moment it bites."""
+        sha = row.get("code_ref")
+        if not sha:
+            raise ClaimRefused("code_ref_unresolved", row["state"])
+        # `None` means *cannot tell*, not *not committed*: the image has no
+        # checkout and its sha is the build arg. Recorded, not guessed at.
+        if checker(str(sha)) is False:
+            raise ClaimRefused("code_ref_unknown", row["state"], code_ref=str(sha))
+
+    async def release(
+        self,
+        request_id: str,
+        owner: str,
+        *,
+        reason: str | None = None,
+        now: str | None = None,
+    ) -> bool:
+        """Give the row back, without waiting out a lease.
+
+        The `AND owner = ?` is load-bearing: a runner that lost its lease to a
+        reclaim must not be able to release the *new* claimant's row.
+        """
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                async with self.conn.execute(
+                    "UPDATE requests "
+                    "SET state = 'approved', owner = NULL, lease_until = NULL, updated_at = ? "
+                    "WHERE id = ? AND state = 'running' AND owner = ?",
+                    (ts, request_id, owner),
+                ) as cur:
+                    released = cur.rowcount == 1
+                if not released:
+                    await self.conn.execute("ROLLBACK")
+                    return False
+                await self._event(
+                    request_id, ts, "runner", "released", {"owner": owner, "reason": reason}
+                )
+                await self.conn.execute("COMMIT")
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        return True
 
     # -- long poll ---------------------------------------------------------
 
