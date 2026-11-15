@@ -19,7 +19,7 @@
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import FilterPanel from "$lib/components/nb/FilterPanel.svelte";
   import { getView, withToken } from "$lib/api";
-  import { filed, stateTone, usd, whyItMatters } from "$lib/format";
+  import { filed, stateTone, whyItMatters } from "$lib/format";
 
   const FACET_LABELS = {
     broken: "Broken",
@@ -95,10 +95,13 @@
     return data.rows.filter((row) => row.facet === show);
   });
 
+  // No estimate column yet. `estimate_usd` is NULL on every row until a phase
+  // prices something, so the column was a dash from top to bottom -- an empty
+  // cell pretending to be a fact. The detail page still shows the estimate and
+  // the ceiling, and the column comes back the day there is a number in it.
   const columns = [
     { label: "request", width: "minmax(11rem, 1.6fr)" },
     { label: "state", width: "7.5rem" },
-    { label: "estimate", align: "end" },
     { label: "filed", align: "end" },
     { label: "why it matters", width: "minmax(10rem, 1.7fr)" },
   ];
@@ -171,7 +174,6 @@
             ><span class="pill {stateTone(request.state)}">{request.state}</span
             ></span
           >
-          <span class="num">{usd(request.estimate_usd)}</span>
           <span class="num filed">{filed(request.created_at)}</span>
           <span>
             {#if why}

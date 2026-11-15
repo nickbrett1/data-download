@@ -38,21 +38,22 @@ test.describe("the request book", () => {
     await expect(page.locator(".tbl-head .col-label")).toHaveText([
       "request",
       "state",
-      "estimate",
       "filed",
       "why it matters",
     ]);
 
-    // Five columns of a grid share one template, which is what makes `$0.0412`
-    // sit under `$0.0412` rather than wherever the previous cell ended.
+    // Four columns of a grid share one template, which is what makes the
+    // numeric column line up rather than land wherever the previous cell ended.
     const template = await page
       .locator(".tbl-row")
       .first()
       .evaluate((el) => getComputedStyle(el).gridTemplateColumns);
-    expect(template.split(" ").length).toBe(5);
+    expect(template.split(" ").length).toBe(4);
 
     const first = page.locator(".tbl-row").first();
-    await expect(first).toContainText("$0.0412");
+    // No estimate column: every row is unpriced this phase, so a column of
+    // dashes was an empty cell dressed as a fact.
+    await expect(first).not.toContainText("$0.0412");
     // When it was filed, in a form a person reads. Not "1h 4m": an age answers
     // a question nobody asked and has to be converted back into a clock.
     await expect(first.locator(".filed")).toHaveText("14 Nov 23:10");
