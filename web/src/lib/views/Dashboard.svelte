@@ -167,11 +167,7 @@
                  id survives only as the tooltip. The link's `::after` covers
                  the row, so the whole line is the target rather than the three
                  words in it. -->
-            <a
-              class="req"
-              href={`/requests/${request.id}`}
-              title={request.id}
-            >
+            <a class="req" href={`/requests/${request.id}`} title={request.id}>
               <span class="req-num">#{request.seq}</span>
               <span class="req-subject">{request.label}</span>
             </a>

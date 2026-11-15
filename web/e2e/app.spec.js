@@ -17,7 +17,10 @@ import {
 // `token` is seeded into localStorage rather than put in the URL, because that
 // is how the app holds it now: the shell is public and every request carries
 // the token in an Authorization header. A test that wants no token passes "".
-async function mock(page, { requests, types, detail, token = "tok-read" } = {}) {
+async function mock(
+  page,
+  { requests, types, detail, token = "tok-read" } = {},
+) {
   await page.addInitScript((value) => {
     if (value) localStorage.setItem("data_download.read_token", value);
     else localStorage.removeItem("data_download.read_token");
@@ -174,9 +177,9 @@ test.describe("the request book", () => {
     // screenshotted as a token.
     const links = page.locator('a[href="/plan-types"]');
     expect(await links.count()).toBeGreaterThan(0);
-    const hrefs = await page.locator("a[href]").evaluateAll((els) =>
-      els.map((el) => el.getAttribute("href")),
-    );
+    const hrefs = await page
+      .locator("a[href]")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("href")));
     expect(hrefs.filter((href) => href.includes("token="))).toEqual([]);
     await expect(page).not.toHaveURL(/token=/);
   });

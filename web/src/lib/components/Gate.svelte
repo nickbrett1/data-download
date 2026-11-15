@@ -55,8 +55,8 @@
   </form>
 
   <p class="hint gate-note">
-    A link with <code>#token=…</code> works too — the fragment is never sent to
-    the server, so it is the safe way to hand one over.
+    A link with <code>#token=…</code> works too — the fragment is never sent to the
+    server, so it is the safe way to hand one over.
   </p>
 </div>
 
