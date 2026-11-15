@@ -189,7 +189,12 @@ steps:
           exit 0
         fi
         docker buildx create --bootstrap --name "$$BUILDX_BUILDER_NAME" >/dev/null
+        # `GIT_SHA` is how a container can say which code it is running: the
+        # image has no `.git`, so `data_download.coderef` cannot ask, and an
+        # unset value means the store records `code_ref` NULL and every claim is
+        # refused `code_ref_unresolved`. It is the build arg, not a guess.
         docker buildx build --builder "$$BUILDX_BUILDER_NAME" --platform linux/amd64 \
+          --build-arg GIT_SHA=$$BUILDKITE_COMMIT \
           --cache-from type=registry,ref=$$CACHE_REF \
           --cache-to type=registry,ref=$$CACHE_REF,mode=max \
           --label org.opencontainers.image.revision=$$BUILDKITE_COMMIT \

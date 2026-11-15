@@ -41,9 +41,8 @@ WORKDIR /app
 # The commit this image was built from (§4.1's `code_ref`). An image has no
 # `.git`, so this is the only way the deployment can say which code is running;
 # unset means the store records NULL and a claim refuses it, which is honest
-# rather than guessing. The pipeline does not pass it yet (genproj owns
-# `.buildkite/pipeline.yml`) -- wire `--build-arg GIT_SHA=$BUILDKITE_COMMIT`
-# when it can.
+# rather than guessing. The pipeline passes `--build-arg GIT_SHA=$BUILDKITE_COMMIT`
+# (genproj owns `.buildkite/pipeline.yml`, so a regeneration must keep that line).
 ARG GIT_SHA
 ENV DATA_DOWNLOAD_CODE_REF=${GIT_SHA}
 # Link the GHCR container package to its GitHub repo on push. GHCR auto-links
