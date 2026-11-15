@@ -6,7 +6,9 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
-from data_download.db import Store
+import aiosqlite
+
+from data_download.db import Store, _payload_hash_is_unique
 
 TS = "2026-11-14T00:00:00Z"
 
@@ -205,6 +207,95 @@ def test_the_migration_is_idempotent(tmp_path):
 
     assert dict(first) == dict(second)
     assert {"job_json", "job_hash"} <= _columns(path)
+
+
+VIEWS_OVER_PHASE1 = """
+CREATE VIEW v_pending AS SELECT id, state FROM requests WHERE state = 'draft';
+CREATE VIEW v_done AS SELECT id FROM requests WHERE state = 'succeeded';
+CREATE VIEW v_stuck AS SELECT e.id, e.event FROM events e;
+"""
+
+
+def test_a_deployed_store_migrates_with_its_views_still_standing(tmp_path):
+    """The shape that shipped a 503: a phase-1 table *with* views over it.
+
+    With `legacy_alter_table` off SQLite re-parses every view during a RENAME,
+    so `ALTER TABLE requests_phase2 RENAME TO requests` died on the views left
+    standing over the `requests` the rebuild had just dropped -- `error in view
+    v_pending: no such table: main.requests`, three retries, then a store that
+    never opened. Every other test here starts from a table with no views, which
+    is why none of them saw it.
+    """
+    path = tmp_path / "deployed.db"
+    _phase1_store(path)
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(VIEWS_OVER_PHASE1)
+        conn.commit()
+    finally:
+        conn.close()
+
+    _connect(path)
+
+    columns = _columns(path)
+    assert {"job_json", "job_hash"} <= columns
+    assert not {"plan_json", "plan_hash"} & columns
+    assert _row(path)["job_hash"] == "hash-1"
+
+    conn = sqlite3.connect(path)
+    try:
+        # The five views are back, on the new columns, and they answer.
+        assert conn.execute("SELECT COUNT(*) FROM v_requests").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM v_stuck").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_the_events_rebuild_also_survives_standing_views(tmp_path):
+    """`v_stuck` reads `events`; its presence used to be enough to fail the RENAME."""
+    path = tmp_path / "deployed.db"
+    _phase1_store(path)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE VIEW v_stuck AS SELECT id, event FROM events")
+        conn.commit()
+    finally:
+        conn.close()
+
+    _connect(path)
+
+    conn = sqlite3.connect(path)
+    try:
+        # The widened CHECK is the whole point of that rebuild.
+        conn.execute(
+            "INSERT INTO events (request_id, ts, actor_kind, event) "
+            "VALUES ('req_old', ?, 'human', 'approved')",
+            (TS,),
+        )
+        conn.commit()
+        kinds = [r[0] for r in conn.execute("SELECT actor_kind FROM events")]
+        assert "human" in kinds
+        assert conn.execute(
+            "SELECT SQL FROM sqlite_master WHERE type='table' AND name='events'"
+        ).fetchone()[0].count("'human'") == 1
+    finally:
+        conn.close()
+
+
+def test_the_primary_key_is_not_mistaken_for_a_unique_payload_hash(tmp_path):
+    """A `TEXT PRIMARY KEY` makes a unique index too; the columns decide."""
+    path = tmp_path / "fresh.db"
+    _connect(path)
+
+    async def ask() -> bool:
+        conn = await aiosqlite.connect(path)
+        conn.row_factory = aiosqlite.Row
+        try:
+            return await _payload_hash_is_unique(conn)
+        finally:
+            await conn.close()
+
+    assert asyncio.run(ask()) is False
 
 
 def test_a_fresh_store_is_already_the_new_shape(tmp_path):

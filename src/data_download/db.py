@@ -135,10 +135,14 @@ CREATE TABLE requests_phase2 (
 )
 """
 
+# `owner` is in this list even though a phase-1 table has no such column: the
+# deployed store does, because `_add_missing_columns` ran on it before any
+# rebuild could, and a lease holder must not vanish because a column the copy
+# forgot was quietly reset to NULL.
 _PHASE2_COLUMNS = (
     "id, state, body_kind, plan_type, job_json, params_json, payload_hash, "
     "idempotency_key, intent_json, estimate_usd, blocked_reason, plan_origin, "
-    "matched_profile, code_ref, job_hash, lease_until, landed_sha256, "
+    "matched_profile, code_ref, job_hash, owner, lease_until, landed_sha256, "
     "errors_json, why, max_usd, created_at, updated_at"
 )
 
@@ -170,6 +174,9 @@ async def _migrate_events(conn: aiosqlite.Connection) -> None:
     if "'human'" in (row["sql"] or ""):
         return
     log.info("rebuilding events: actor_kind gains 'human'")
+    # Same reason as the requests rebuild: `v_stuck` reads `events`, and the
+    # RENAME re-parses it. See the comment in `_migrate_requests`.
+    await _drop_views(conn)
     await conn.execute("PRAGMA foreign_keys=OFF")
     await conn.execute("BEGIN IMMEDIATE")
     try:
@@ -188,16 +195,33 @@ async def _migrate_events(conn: aiosqlite.Connection) -> None:
         await conn.execute("PRAGMA foreign_keys=ON")
 
 
-def _needs_rebuild(columns: set[str], indexes: list[tuple[str, int, str]]) -> bool:
+async def _payload_hash_is_unique(conn: aiosqlite.Connection) -> bool:
+    """True when a UNIQUE index covers `payload_hash` and nothing else.
+
+    Asking `index_list` alone was not enough to mean this: a table's
+    `TEXT PRIMARY KEY` also produces a unique autoindex, and "a unique autoindex
+    exists" is then true of every store, including the ones this migration has
+    already fixed. The columns decide it.
+    """
+    async with conn.execute("PRAGMA index_list(requests)") as cur:
+        indexes = await cur.fetchall()
+    for row in indexes:
+        if not int(row["unique"]):
+            continue
+        async with conn.execute(f'PRAGMA index_info("{row["name"]}")') as info:
+            columns = [r["name"] for r in await info.fetchall()]
+        if columns == ["payload_hash"]:
+            return True
+    return False
+
+
+def _needs_rebuild(columns: set[str], payload_hash_unique: bool) -> bool:
     """True when the table is still phase 1's shape (§5.6)."""
     if "plan_json" in columns or "plan_hash" in columns:
         return True
     if "job_json" not in columns:
         return True
-    # A UNIQUE index over exactly (payload_hash,) with SQLite's table-constraint
-    # origin is the constraint this migration drops.
-    return any(unique and origin == "u" and name.startswith("sqlite_autoindex")
-               for name, unique, origin in indexes)
+    return payload_hash_unique
 
 
 async def _migrate_requests(conn: aiosqlite.Connection) -> None:
@@ -206,19 +230,19 @@ async def _migrate_requests(conn: aiosqlite.Connection) -> None:
     if not columns:  # a fresh database: the schema will create the new shape
         return
 
-    async with conn.execute("PRAGMA index_list(requests)") as cur:
-        indexes = [
-            (row["name"], int(row["unique"]), row["origin"])
-            for row in await cur.fetchall()
-        ]
-    # Only an autoindex that covers payload_hash means "payload_hash is UNIQUE",
-    # but a phase-1 table's only unique autoindex is on payload_hash, and the
-    # table-level rename check catches the rest.
-    if not _needs_rebuild(columns, indexes):
+    if not _needs_rebuild(columns, await _payload_hash_is_unique(conn)):
         return
 
     log.info("rebuilding requests: plan_json/plan_hash -> job_json/job_hash, "
              "payload_hash loses UNIQUE")
+    # The views go first, and this is the bug that cost a deploy: with
+    # `legacy_alter_table` off (the default) SQLite re-parses every view during
+    # a RENAME, so `ALTER TABLE requests_phase2 RENAME TO requests` fails on the
+    # views left standing over the `requests` this transaction just dropped --
+    # `error in view v_pending: no such table: main.requests`, on a database
+    # with nothing wrong with it. A view is a query: dropping it loses nothing,
+    # and `_apply_schema` puts all five back a few statements later.
+    await _drop_views(conn)
     # DROP TABLE requests with foreign_keys=ON would fire the events FK, and the
     # pragma is a no-op inside a transaction - so it goes first, outside it.
     await conn.execute("PRAGMA foreign_keys=OFF")
@@ -340,6 +364,12 @@ async def _apply_schema(conn: aiosqlite.Connection) -> None:
         except sqlite3.Error as exc:
             headline = statement.lstrip("\n-").splitlines()[0][:90]
             raise sqlite3.OperationalError(f"{exc} [in: {headline}]") from exc
+
+
+async def _drop_views(conn: aiosqlite.Connection) -> None:
+    """Throw the five read-surface views away; `_apply_schema` recreates them."""
+    for name in VIEW_NAMES:
+        await conn.execute(f"DROP VIEW IF EXISTS {name}")
 
 
 async def _heal_views(conn: aiosqlite.Connection) -> None:
