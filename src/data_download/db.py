@@ -735,12 +735,18 @@ class Store:
         note: str | None = None,
         *,
         now: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """`draft` -> `approved`. Returns `(row, changed)`.
 
         Approving an already-approved row is a **no-op with no second event**: a
         retried CLI call must not be able to inflate the record, and one
         approval is one row or the audit trail is not an audit trail.
+
+        `context` is recorded as-is beside the actor, note and job hash. The CLI
+        passes nothing; the HTTP door passes `{"via": "http", "token": <sha256
+        prefix>}`, so an approval can be told apart from a shell one and two
+        browsers apart from each other without either credential being stored.
         """
         ts = now or utcnow()
         async with self._write_lock:
@@ -771,7 +777,12 @@ class Store:
                     ts,
                     "human",
                     "approved",
-                    {"actor": actor, "note": note, "job_hash": row["job_hash"]},
+                    {
+                        "actor": actor,
+                        "note": note,
+                        "job_hash": row["job_hash"],
+                        **(context or {}),
+                    },
                 )
                 await self.conn.execute("COMMIT")
             except ApproveRefused:

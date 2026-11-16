@@ -5,13 +5,17 @@
    * The list is a list of keys -- `#7`, what was asked for, and a badge for why
    * it is interesting. This is the answer to clicking one: the human `why`, the
    * body the caller actually sent, the identity columns, and the append-only
-   * trail. Read scope, GET only, and nothing on this page can change a request:
-   * approval is still a CLI verb with no endpoint here.
+   * trail.
+   *
+   * Reading takes no credential and changes nothing. The page has exactly one
+   * verb -- approve, on a `draft` row -- and it is not free: it needs the
+   * `approve` token, which no agent holds and which a bare token never gets.
    *
    * The id is shown in full and in mono, because this is the page where you copy
    * it into a curl. Everywhere else it is a tooltip, because a key is not a name.
    */
   import AppMark from "$lib/components/AppMark.svelte";
+  import ApproveCard from "$lib/components/ApproveCard.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DetailPanel from "$lib/components/nb/DetailPanel.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
@@ -38,17 +42,20 @@
   let data = $state(null);
   let failure = $state("");
 
+  async function load(signal) {
+    try {
+      data = await getView(`/ui/request/${encodeURIComponent(id)}.json`, {
+        signal,
+      });
+      failure = "";
+    } catch (error) {
+      if (error.name !== "AbortError") failure = error.message;
+    }
+  }
+
   $effect(() => {
     const controller = new AbortController();
-    getView(`/ui/request/${encodeURIComponent(id)}.json`, {
-      signal: controller.signal,
-    })
-      .then((body) => {
-        data = body;
-      })
-      .catch((error) => {
-        if (error.name !== "AbortError") failure = error.message;
-      });
+    load(controller.signal);
     return () => controller.abort();
   });
 
@@ -168,6 +175,18 @@
       {meta}
       pill={{ label: data.state, tone: stateTone(data.state) }}
     >
+      {#if data.state === "draft"}
+        <!-- The one verb on this page. Rendered only where it can be used: a
+             row that is already approved gets no control, because a second
+             approval is a no-op and a disabled button would be a promise the
+             page cannot keep. -->
+        <ApproveCard
+          requestId={data.id}
+          maxUsd={data.max_usd}
+          onapproved={() => load()}
+        />
+      {/if}
+
       <section class="block">
         <p class="micro">why</p>
         {#if data.payload?.why}
@@ -279,10 +298,9 @@
             {/if}
 
             {#if !data.escalated_at && match.verdict !== "needs_params"}
-              <!-- Not a button: this page holds a read token and can do nothing,
-                 and a disabled control would be a promise the page cannot keep.
-                 It is the fact that matters -- who asks for a new plan, and
-                 through what door. -->
+              <!-- Not a button, and deliberately: asking for new code is a
+                 request to a different owner, not a click on a read page. The
+                 fact that matters is who asks, and through what door. -->
               <p class="quiet note">
                 A new plan is asked for with
                 <code>POST /v1/requests/{data.id}/escalate</code>, by a token

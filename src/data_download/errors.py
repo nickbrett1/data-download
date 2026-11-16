@@ -90,3 +90,26 @@ def store_unavailable(message: str = "the request store is unavailable") -> ApiE
 
 def not_found(message: str) -> ApiError:
     return ApiError(404, NOT_FOUND, message)
+
+
+def approve_refused(reason: str, state: object) -> ApiError:
+    """A refusal from `Store.approve`, carrying the CLI's closed set of reasons.
+
+    `blocked` means there is no Job to approve (§7.9.2); `wrong_state` means the
+    row is history; `job_missing` is a `draft` with no `job_json`, which the
+    CHECK forbids and a hand-edited store can still hold. The reason is the same
+    vocabulary the CLI prints, so one refusal has one name whichever door it
+    came through.
+    """
+    messages = {
+        "blocked": "this request has no Job; there is nothing to approve",
+        "wrong_state": "this request is not waiting for approval",
+        "job_missing": "this request has no stored Job to approve",
+    }
+    return ApiError(
+        409,
+        "approve_refused",
+        messages.get(reason, "the request could not be approved"),
+        reason=reason,
+        state=state,
+    )

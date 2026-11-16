@@ -326,6 +326,55 @@ function blockedRow(seq, state) {
   return { ...base, seq, ...state };
 }
 
+// The page behind a `draft`: a bound Job, a ceiling, and one thing the reader
+// can do about it. `match` is null because a bound row has nothing to explain --
+// the verdict already did its work.
+export const draftDetail = {
+  ...requestDetail,
+  id: "req_draft01",
+  seq: 6,
+  label: "databento_batch_download",
+  state: "draft",
+  facet: "todo",
+  facet_label: "To approve",
+  blocked_reason: null,
+  max_usd: 5,
+  why: "test row: futures trades, ES continuous, two days",
+  payload: {
+    body_kind: "plan",
+    plan_type: "databento_batch_download",
+    params: {
+      dataset: "GLBX.MDP3",
+      schema: "trades",
+      symbols: ["ES.c.0"],
+      stype_in: "continuous",
+      start: "2026-11-04",
+      end: "2026-11-06",
+    },
+    intent: null,
+    plan: null,
+    max_usd: 5,
+    why: "test row: futures trades, ES continuous, two days",
+  },
+  match: null,
+  identity: {
+    job_hash:
+      "a3d57f9bf1dc2af76782b6b0fecd8cf701d1575742aa9cd5ce84814b8763df1e",
+    code_ref: "07bda478",
+    landed_sha256: null,
+    errors: [],
+  },
+  events: [
+    {
+      id: 1,
+      ts: "2026-11-15T23:42:33Z",
+      actor_kind: "submitter",
+      event: "submitted",
+      detail: { body_kind: "plan", plan_type: "databento_batch_download" },
+    },
+  ],
+};
+
 export const blockedBook = (() => {
   const rows = [
     blockedRow(1, {}),

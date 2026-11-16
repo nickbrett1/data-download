@@ -7,8 +7,9 @@
    * So the views stay the semantic truth on the server and this page flattens
    * them, where the interesting condition is a badge instead of a partition.
    *
-   * Nothing here can approve or change a request: approval has no endpoint, and
-   * this page is a public read-only projection of the store.
+   * Nothing here can approve or change a request: this page is a public
+   * read-only projection of the store, and the one verb the app has lives on a
+   * single request's page, behind an `approve` token no agent holds.
    * That fact shapes the page -- there is no button, and no line of prose
    * saying so either: a reader who came to look at the book does not need to be
    * told what the book cannot do.

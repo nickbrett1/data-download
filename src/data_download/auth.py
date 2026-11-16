@@ -1,10 +1,17 @@
 """Bearer-token authentication and server-side scope enforcement (§7.3).
 
 The design names three scopes; `escalate` is the fourth (phase 2.5) and exists
-because asking for a new plan is a different act from filing a request. Endpoints
-use `submit`, `read` and `escalate`; `approve` is never granted by any endpoint
-(it is a CLI verb) and `deploy` has no verb yet. A token's scopes
-come from `DATA_DOWNLOAD_API_TOKENS`; the check is here, not by convention.
+because asking for a new plan is a different act from filing a request.
+
+`approve` is the fifth and the only one that spends. It guarded a CLI verb for
+all of phase 3, and since the UI gained an approve button it guards a route too
+(`POST /v1/requests/{id}/approve`). What has not changed is the part that
+matters: a bare token never gets `approve`, no agent is issued one, and the
+scope opens exactly one route, so reaching it is a deliberate act rather than a
+side effect of being allowed to file. `deploy` has no verb yet.
+
+A token's scopes come from `DATA_DOWNLOAD_API_TOKENS`; the check is here, not by
+convention.
 
 A token comes from the `Authorization` header and from nowhere else. The query
 string used to be accepted for the HTML pages, because a browser navigation

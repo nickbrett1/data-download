@@ -117,13 +117,46 @@ Append `deploy/homepage-services.yaml` to your Homepage `services.yaml`
 (and enable the `homepage` Docker provider) to show a health widget for the
 service.
 
-**Never put a token in `href`.** There is nothing to authenticate: the UI is a
+**Never put a token in `href`.** Reading needs no credential: the UI is a
 public read-only projection (see the main README, "What is public, and what is
 not"). A `homepage.href=?token=…` would write a live credential into a Docker
 label, the compose file, and every proxy log and screenshot of the dashboard —
-and since the UI ignores tokens, it would buy nothing.
+and since nothing on the read path uses tokens, it would buy nothing.
 
-## 6. Networking notes
+## 6. Approving a request
+
+Approving spends money, so it is the one thing a token can do from the UI. The
+token needs the `approve` scope, which a bare token never gets and which no
+agent is issued. Add one to `.env` beside this compose file:
+
+```bash
+# keep the agent's token, add one that can only approve
+DATA_DOWNLOAD_API_TOKENS="<agent-token>:submit+read;<new-token>:approve"
+```
+
+Generate `<new-token>` on the host (`openssl rand -hex 32`), then apply it —
+**`--force-recreate`, not a restart**: watchtower and `docker restart` reuse the
+container's existing config and will not re-read `.env`.
+
+```bash
+docker compose up -d --force-recreate
+```
+
+Open a request in `draft` and paste the token once, with your name; the browser
+keeps it in `localStorage` for that origin. It is sent as
+`Authorization: Bearer …` on the one `POST`, never in a URL. Approving is two
+clicks with the ceiling in between, and the record shows a `human` event with
+the actor you typed, the job hash, `via: http`, and a 12-character fingerprint
+of the token so two devices can be told apart without either being stored.
+
+The CLI still works, and is the way in when the token is missing or lost:
+
+```bash
+docker exec -it data-download python -m data_download.approve \
+  <request_id> --actor nick --note "cheap window"
+```
+
+## 7. Networking notes
 
 - Network mode is `bridge`.
 - External networks: this service joins `ai_proxy`, created and managed outside this compose file (genproj emits `networks: { <name>: { external: true } }`). Sibling containers reach it by container name on that network.
@@ -138,13 +171,13 @@ and since the UI ignores tokens, it would buy nothing.
   side of `publishPort`), so `127.0.0.1:3002:3000` produces
   `http://<hostname>:3002/` — never the container port.
 
-## 7. Data mounts
+## 8. Data mounts
 
 Configure `dataMounts` in the genproj configuration to mount host directories
 into the container, e.g. `[{ "hostPath": "/volume1/marketdata", "containerPath": "/data", "readOnly": true }]`.
 They are emitted into the compose `volumes:` section (read-only by default).
 
-## 8. Healthchecks, env vars and system packages
+## 9. Healthchecks, env vars and system packages
 
 All three are config-driven on the `docker-container` capability — the
 generated Dockerfile, compose file and Homepage widget stay consistent:

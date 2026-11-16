@@ -73,11 +73,9 @@ second server, and `/v1/*` never moved.
 
 The UI is **public**: `/`, `/plan-types`, `/requests/<id>` and the `/ui/*.json`
 view-models they read all open with no credential. That is a decision, not an
-omission. Everything here is a GET of a projection — a request book, the
-registry, an append-only trail — and there is no verb behind them: approval has
-no endpoint, and `submit` and `escalate` are tokens that live with machines.
-So "can you reach port 8820" is the whole read trust model, and the port is
-expected to be on the LAN or the tailnet.
+omission. Everything they show is a GET of a projection — a request book, the
+registry, an append-only trail — so "can you reach port 8820" is the whole read
+trust model, and the port is expected to be on the LAN or the tailnet.
 
 A lock was tried here and removed. It cost a live read token in a Homepage
 tile's Docker label (and four world-readable backups of it), a rotation, and a
@@ -90,7 +88,20 @@ matter:
 | `GET /v1/*` | `read` or `submit` in an `Authorization` header |
 | `POST /v1/requests` | `submit` |
 | `POST /v1/requests/{id}/escalate` | `escalate` |
-| approval | no HTTP door at all; a CLI verb |
+| `POST /v1/requests/{id}/approve` | `approve` — the one verb on the UI, and a CLI verb (`python -m data_download.approve`) |
+
+Approval started as a shell command with no route at all, on the argument that a
+button on a web page is the hand-edit problem with better typography. That
+argument rested on a dashboard that opened the store `mode=ro` in a container
+holding no credentials — a page that could not have approved anything. That
+container was never built, and the read surface is now this app's own
+view-models, so the choice became "a route with a scope check, or a `docker
+exec` with none" — and the shell command is the weaker of the two: it
+authenticates nothing, logs nothing, and records whatever `--actor` was typed.
+It was overruled. What was kept: `approve` is never granted by a bare token and
+no agent holds one, so the route is a human door on a machine key; the token
+travels in a header, never a URL; and the button is two clicks with the ceiling
+between them. The page it sits on is still the only page with a control.
 
 No URL anywhere carries a token, and `auth.py` has no query-string path: one
 way in, so one thing to audit. `DATA_DOWNLOAD_API_TOKENS` is a list of

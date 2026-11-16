@@ -6,12 +6,15 @@
  * app does not reimplement any of that; it fetches the same view-models the
  * Jinja templates used to be handed, and draws them.
  *
- * There is no credential here, by design. The pages and their view-models are a
+ * Reading takes no credential, by design: the pages and their view-models are a
  * public read-only projection -- there is no verb behind them -- so "can you
- * reach the port" is the whole trust model. The tokens that can *do* something
- * (`submit`, `escalate`) belong to machines and never come near a browser.
- * An attempt to put a token in a URL was removed for that reason: a URL is a
- * thing that gets copied into labels, logs and history.
+ * reach the port" is the whole trust model for reading.
+ *
+ * Writing is one thing, and it is not reading. `POST /v1/requests/{id}/approve`
+ * spends money, so it needs the `approve` token in an `Authorization` header.
+ * It is never in a URL: a URL is a thing that gets copied into labels, logs and
+ * history, and that is exactly how a credential leaked the last time one was
+ * put in one.
  */
 
 export async function getView(path, { signal } = {}) {
@@ -22,4 +25,27 @@ export async function getView(path, { signal } = {}) {
     throw error;
   }
   return res.json();
+}
+
+export async function postJson(path, body, { token } = {}) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body ?? {}),
+  });
+  // The error envelope is the server's, and its message is the useful part:
+  // `insufficient_scope` tells you the token cannot approve, not that it 403'd.
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    const error = new Error(
+      payload?.error?.message ?? `The server answered ${res.status}.`,
+    );
+    error.status = res.status;
+    error.code = payload?.error?.code ?? null;
+    throw error;
+  }
+  return payload;
 }

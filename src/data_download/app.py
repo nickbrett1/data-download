@@ -13,6 +13,7 @@ the offline dry run (`dryrun.py`) is a CLI harness this module does not import.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -31,7 +32,14 @@ from fastapi.staticfiles import StaticFiles
 from . import auth, bind, errors, match, profiles, rematch
 from . import job as job_mod
 from .config import Settings, load_settings
-from .db import EscalateRefused, Store, canonical_json, payload_hash, utcnow
+from .db import (
+    ApproveRefused,
+    EscalateRefused,
+    Store,
+    canonical_json,
+    payload_hash,
+    utcnow,
+)
 from .models import validate_intent, validate_plan
 from .registry import Registry, load_registry
 
@@ -745,6 +753,77 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.post("/v1/requests/{request_id}/approve")
+    async def approve_request(request: Request, request_id: str) -> JSONResponse:
+        """Approve one request: the door the CLI verb never had.
+
+        §7.4 and §7.8.3 argued against this route, and the argument has been
+        overruled deliberately rather than quietly. It rested on a dashboard
+        that opened the store `mode=ro` in a container with no credentials, so
+        a button on it could not have approved anything even if one existed.
+        That container was never built: the read surface is now this process's
+        own view-models, in the same process that owns the writer. The choice
+        was therefore never "safe page or unsafe page" -- it was "a route with
+        a scope check, or a `docker exec` with no authz at all", and the shell
+        command is the weaker of the two: it authenticates nothing, leaves no
+        request log, and records whatever `--actor` the operator typed.
+
+        What survives from the old argument, because it was right: `approve` is
+        never granted by a bare token and no agent holds it (`config.py`), so
+        the route is a human door even though it is a machine door. And the
+        approval is still recorded as one event, with `job_hash`, so "one
+        approval is one row" holds however the answer arrives.
+
+        `actor` is required and is still a claim -- the token proves *someone*
+        holding the approve key, not *who*. A fingerprint of the token is
+        recorded beside it so two devices can be told apart without storing
+        either.
+        """
+        token, _ = auth.require_scope(request, "approve")
+        store = await _store(request)
+
+        raw = await request.body()
+        body: dict[str, Any] = {}
+        if raw.strip():
+            try:
+                body = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise errors.invalid_body("body is not valid JSON") from None
+            if not isinstance(body, dict):
+                raise errors.invalid_body("body must be a JSON object")
+        actor = body.get("actor")
+        if not isinstance(actor, str) or not actor.strip():
+            raise errors.invalid_body(
+                "actor is required: an approval records who asked for the spend"
+            )
+        note = body.get("note")
+        if note is not None and not isinstance(note, str):
+            raise errors.invalid_body("note must be a string")
+
+        fingerprint = hashlib.sha256(token.encode()).hexdigest()[:12]
+        try:
+            row, changed = await store.approve(
+                request_id,
+                actor.strip(),
+                note,
+                context={"via": "http", "token": fingerprint},
+            )
+        except ApproveRefused as exc:
+            if exc.reason == "not_found":
+                raise errors.not_found(f"no request with id {request_id!r}") from None
+            raise errors.approve_refused(exc.reason, exc.state) from None
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "request_id": row["id"],
+                "state": row["state"],
+                "job_hash": row["job_hash"],
+                # False for a second approval: idempotent, and no second event.
+                "approved": changed,
+            },
+        )
+
     # -- reads -------------------------------------------------------------
 
     @app.get("/v1/requests")
@@ -833,12 +912,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     #
     # The pages and their view-models are **public**, and deliberately so. What
     # they show is a read-only projection: a request book, a registry, an
-    # append-only trail. There is no verb here -- approval has no endpoint, and
-    # `submit` and `escalate` are separate tokens that live with the agents --
-    # so a lock on this screen would protect the least valuable thing in the
-    # system with the most fragile mechanism in it. It used to have one, and the
-    # cost was a live credential in a Docker label, a rotation, and a bookmark
-    # that stopped working.
+    # append-only trail. The one verb the app has -- `approve` -- is a `/v1`
+    # route carrying an `approve` token that no agent holds, and the page that
+    # offers it sends the token in a header, never in a URL. So gating the reads
+    # would protect the least valuable thing in the system with the most fragile
+    # mechanism in it; it was tried, and the cost was a live credential in a
+    # Docker label, a rotation, and a bookmark that stopped working.
     #
     # The door that matters is the one in front of `/v1/*`, which still needs a
     # token in an `Authorization` header. "Can reach port 8820" is the trust

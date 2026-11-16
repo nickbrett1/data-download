@@ -33,6 +33,18 @@ export function usd(value) {
   return `$${Number(value).toFixed(4)}`;
 }
 
+/** A ceiling, not a price: `$5`, `$5.50`, `$120`.
+ *
+ * Four decimals belong on a quote -- 4c and 4.9c are different purchases -- and
+ * nowhere near the sentence "approve up to…", where nobody authorises
+ * `$5.0000`. Same number, different question, so a second formatter. */
+export function bound(value) {
+  if (value === null || value === undefined) return "—";
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return `$${amount.toFixed(2).replace(/\.00$/, "")}`;
+}
+
 /** When a request was filed, as a person reads a clock: `14 Nov 23:41`.
  * Local time on purpose -- the reader is the one who filed it, and the service
  * stores UTC (`Z`), so a raw timestamp would be an hour or two out in the very

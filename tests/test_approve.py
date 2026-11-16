@@ -1,8 +1,12 @@
-"""Approval is a verb, not a route (phase 3 order §2).
+"""Approval: `draft` -> `approved`, one human event, and nothing else.
 
-The state machine starts moving here: `draft` -> `approved`, one human event,
-and nothing else. Approval of a `blocked` row is refused because there is no Job
-to approve -- that row is waiting on a plan, not on a person (§7.9.4).
+The state machine starts moving here. Approval of a `blocked` row is refused
+because there is no Job to approve -- that row is waiting on a plan, not on a
+person (§7.9.4).
+
+Approval began as a CLI verb with no route at all (phase 3, §7.4). It now has
+both, deliberately: see the comment above the HTTP tests for why the argument
+against a route stopped holding, and what of it was kept.
 """
 
 from __future__ import annotations
@@ -197,7 +201,124 @@ def test_the_cli_exit_codes_are_the_contract(client, settings):
     assert "not_found" in missing.stderr
 
 
-def test_the_cli_is_not_a_route(client):
-    """§7.4: no approve endpoint, and therefore no token that could reach one."""
-    paths = {route.path for route in client.app.routes}
-    assert not any("approve" in path for path in paths)
+# -- the route, and the argument it overrules ------------------------------
+#
+# `test_the_cli_is_not_a_route` used to assert that no approve path existed at
+# all (§7.4, §7.8.3). That argument rested on a read surface that opened the
+# store `mode=ro` in a credential-free container, so a button on it could not
+# have approved anything. That container was never built -- the read surface is
+# the writer's own process -- so the choice became "a route with a scope check
+# or a `docker exec` with no authz", and the shell command lost.
+
+
+def _approve_http(client, request_id, **kwargs):
+    body = {"actor": "nick", **kwargs}
+    return client.post(
+        f"/v1/requests/{request_id}/approve",
+        json=body,
+        headers=auth("tok-approve"),
+    )
+
+
+def test_the_route_approves_a_draft_and_records_a_human_event(client, settings):
+    request_id = _file(client)
+    before = client.get(f"/v1/requests/{request_id}", headers=auth()).json()
+
+    response = _approve_http(client, request_id, note="cheap window")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body == {
+        "request_id": request_id,
+        "state": "approved",
+        "job_hash": before["job_hash"],
+        "approved": True,
+    }
+
+    approved = [e for e in _events(settings.db_path, request_id) if e["event"] == "approved"]
+    assert len(approved) == 1
+    assert approved[0]["actor_kind"] == "human"
+    detail = json.loads(approved[0]["detail_json"])
+    assert detail["actor"] == "nick"
+    assert detail["note"] == "cheap window"
+    assert detail["job_hash"] == before["job_hash"]
+    # How the approval arrived, without either credential being stored.
+    assert detail["via"] == "http"
+    assert len(detail["token"]) == 12
+
+
+def test_the_fingerprint_is_not_the_token(client, settings):
+    request_id = _file(client)
+    assert _approve_http(client, request_id).status_code == 200
+    approved = [e for e in _events(settings.db_path, request_id) if e["event"] == "approved"]
+    assert "tok-approve" not in approved[0]["detail_json"]
+
+
+def test_a_second_approval_through_the_route_writes_nothing(client, settings):
+    request_id = _file(client)
+    assert _approve_http(client, request_id).json()["approved"] is True
+    again = _approve_http(client, request_id)
+    assert again.status_code == 200
+    assert again.json()["approved"] is False
+    assert len([e for e in _events(settings.db_path, request_id) if e["event"] == "approved"]) == 1
+
+
+@pytest.mark.parametrize("token", ["tok-submit", "tok-read", "tok-escalate"])
+def test_only_the_approve_scope_can_approve(client, token):
+    """The route is a machine door on a human key: no other scope opens it."""
+    request_id = _file(client)
+    response = client.post(
+        f"/v1/requests/{request_id}/approve",
+        json={"actor": "nick"},
+        headers=auth(token),
+    )
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "insufficient_scope"
+    assert client.get(f"/v1/requests/{request_id}", headers=auth()).json()["state"] == "draft"
+
+
+def test_the_route_needs_a_token_at_all(client):
+    request_id = _file(client)
+    response = client.post(
+        f"/v1/requests/{request_id}/approve", json={"actor": "nick"}
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthenticated"
+
+
+def test_a_bare_token_never_gets_approve():
+    """The invariant behind the route: an unnamed token is a machine token, and
+    a machine token cannot approve (§7.3, `config.DEFAULT_SCOPES`)."""
+    from data_download.config import parse_tokens
+
+    assert "approve" not in parse_tokens("a-bare-token")["a-bare-token"]
+
+
+@pytest.mark.parametrize("body", [{}, {"actor": "   "}, {"actor": 7}])
+def test_an_approval_without_an_actor_is_refused(client, body):
+    """The token says someone holds the key; the actor says who. An approval
+    with neither is an anonymous spend, so it is refused before the store."""
+    request_id = _file(client)
+    response = client.post(
+        f"/v1/requests/{request_id}/approve",
+        json=body,
+        headers=auth("tok-approve"),
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_body"
+    assert client.get(f"/v1/requests/{request_id}", headers=auth()).json()["state"] == "draft"
+
+
+def test_the_route_refuses_a_blocked_row_with_the_cli_vocabulary(client, settings):
+    request_id = _file(client, INTENT_BODY)
+    response = _approve_http(client, request_id)
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "approve_refused"
+    assert error["reason"] == "blocked"
+    assert error["state"] == "blocked"
+
+
+def test_the_route_404s_an_unknown_id(client):
+    response = _approve_http(client, "req_nope")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"

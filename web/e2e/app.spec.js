@@ -6,6 +6,7 @@ test.use({ timezoneId: "UTC" });
 import {
   blockedBook,
   dashboard,
+  draftDetail,
   emptyBook,
   planTypes,
   requestDetail,
@@ -692,6 +693,128 @@ test.describe("naming a request, and opening it", () => {
     await page.reload();
     await expect(page.locator(".detail-title")).toContainText("#4 ·");
     await expect(page.locator(".back-btn")).toBeVisible();
+  });
+});
+
+test.describe("approving a request", () => {
+  // The page used to have no verb at all. It has exactly one now, and it is the
+  // one that spends money: the route needs the `approve` token, the token never
+  // travels in a URL, and the ceiling is read before the commit.
+  const TOKEN = "tok-approve";
+  const tokenField = (page) => page.locator('.approve input[type="password"]');
+  const actorField = (page) =>
+    page.locator('.approve input[type="text"]').first();
+  const noteField = (page) =>
+    page.locator('.approve input[type="text"]').nth(1);
+  const approveButton = (page) => page.locator(".approve .btn.primary");
+
+  async function fillCredentials(page, token = TOKEN, actor = "nick") {
+    await tokenField(page).fill(token);
+    await actorField(page).fill(actor);
+  }
+
+  async function interceptApprove(page, status = 200, body = null) {
+    const seen = [];
+    await page.route("**/v1/requests/**/approve", async (route) => {
+      seen.push({
+        headers: route.request().headers(),
+        body: route.request().postDataJSON(),
+      });
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          body ?? {
+            request_id: "req_draft01",
+            state: "approved",
+            job_hash: "a3d57f9b",
+            approved: true,
+          },
+        ),
+      });
+    });
+    return seen;
+  }
+
+  test("a draft row cannot be approved until the key and a name are there", async ({
+    page,
+  }) => {
+    const seen = await interceptApprove(page);
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+
+    const button = approveButton(page);
+    await expect(button).toBeDisabled();
+
+    await tokenField(page).fill(TOKEN);
+    await expect(button).toBeDisabled(); // a token is not a person
+
+    await actorField(page).fill("nick");
+    await expect(button).toBeEnabled();
+    await expect(button).toContainText("$5");
+    await expect(seen).toHaveLength(0);
+  });
+
+  test("the ceiling is read between the click and the spend", async ({
+    page,
+  }) => {
+    const seen = await interceptApprove(page);
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+
+    await fillCredentials(page);
+    await noteField(page).fill("ES two days");
+    await approveButton(page).click();
+
+    // First click asks; it does not post.
+    await expect(page.locator(".approve .ask")).toContainText("$5");
+    expect(seen).toHaveLength(0);
+
+    await approveButton(page).click();
+    await expect.poll(() => seen.length).toBe(1);
+    expect(seen[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(seen[0].body).toEqual({ actor: "nick", note: "ES two days" });
+
+    // The key is kept for next time; it is never put in the URL.
+    const stored = await page.evaluate(() =>
+      window.localStorage.getItem("data-download.approve-token"),
+    );
+    expect(stored).toBe(TOKEN);
+    await expect(page).not.toHaveURL(/token=/);
+  });
+
+  test("a refusal is the server's, in the server's words", async ({ page }) => {
+    await interceptApprove(page, 403, {
+      error: {
+        code: "insufficient_scope",
+        message: "token lacks the 'approve' scope (granted: submit, read)",
+      },
+    });
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+
+    await fillCredentials(page, "tok-submit");
+    await approveButton(page).click();
+    await approveButton(page).click();
+
+    await expect(page.locator(".approve .failure")).toContainText(
+      "token lacks the 'approve' scope",
+    );
+  });
+
+  test("an approved row has nothing to click", async ({ page }) => {
+    await mock(page, {
+      detail: { ...draftDetail, state: "approved" },
+    });
+    await page.goto("/requests/req_draft01");
+    await expect(page.locator(".approve")).toHaveCount(0);
+    await expect(page.locator(".detail-header .pill")).toHaveText("approved");
+  });
+
+  test("a blocked row has nothing to click either", async ({ page }) => {
+    await mock(page);
+    await page.goto("/requests/req_0a7c9d33");
+    await expect(page.locator(".approve")).toHaveCount(0);
   });
 });
 
