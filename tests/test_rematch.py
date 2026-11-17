@@ -149,7 +149,7 @@ def test_the_bound_row_is_then_ordinary_work_to_approve(client, db_path):
     book = client.get("/ui/dashboard.json", headers=auth("tok-read")).json()
     row = next(r for r in book["rows"] if r["id"] == request_id)
     assert row["facet"] == "todo"
-    assert row["facet_label"] == "To approve"
+    assert row["facet_label"] == "Approval"
 
 
 def test_a_second_pass_writes_nothing_at_all(client, db_path):

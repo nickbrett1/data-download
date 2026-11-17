@@ -118,10 +118,7 @@ test.describe("the request book", () => {
     await mock(page);
     await page.goto("/");
 
-    await page
-      .locator(".facet-option")
-      .filter({ hasText: "To approve" })
-      .click();
+    await page.locator(".facet-option").filter({ hasText: "Approval" }).click();
     await expect(page).toHaveURL(/show=todo/);
     await expect(page.locator(".tbl-row")).toHaveCount(1);
     await expect(page.locator(".tbl-row")).toContainText("#3");

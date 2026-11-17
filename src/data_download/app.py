@@ -103,7 +103,12 @@ FACET_LABELS = {
     "needs_params": "Needs parameters",
     "no_plan": "No plan yet",
     "requested": "Plan requested",
-    "todo": "To approve",
+    # A bucket, not a row: it holds a `draft` waiting on a person *and* an
+    # `approved` one no worker has claimed. "Awaiting approval" would be true of
+    # half of it and false of the other half, so the label names the stage --
+    # which is also why a draft row can say "Awaiting approval" without the two
+    # words meaning the same thing twice.
+    "todo": "Approval",
     "working": "Running",
     "done": "Finished",
     # Not in FACET_ORDER, because a state this code has never heard of is a

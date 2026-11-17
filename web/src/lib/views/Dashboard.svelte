@@ -31,7 +31,7 @@
     needs_params: "Needs parameters",
     no_plan: "No plan yet",
     requested: "Plan requested",
-    todo: "To approve",
+    todo: "Approval",
     working: "Running",
     done: "Finished",
     other: "Other",
