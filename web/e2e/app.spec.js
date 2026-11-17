@@ -64,7 +64,7 @@ test.describe("the request book", () => {
     // When it was filed, in a form a person reads. Not "1h 4m": an age answers
     // a question nobody asked and has to be converted back into a clock.
     await expect(first.locator(".filed")).toHaveText("14 Nov 23:10");
-    await expect(first.locator(".pill")).toHaveText("succeeded");
+    await expect(first.locator(".pill")).toHaveText("Succeeded");
   });
 
   test("a stuck condition outranks the state it is stuck in", async ({
@@ -76,7 +76,7 @@ test.describe("the request book", () => {
     // The second row filed: `running`, and stuck.
     const running = page.locator(".tbl-row").nth(1);
     // The row's state is `running`; the badge says why it is worth looking at.
-    await expect(running.locator(".pill").first()).toHaveText("running");
+    await expect(running.locator(".pill").first()).toHaveText("Running");
     await expect(running.locator(".pill.bad")).toHaveText("lease_expired");
     await expect(running.locator(".pill.warn")).toHaveCount(0);
   });
@@ -138,6 +138,39 @@ test.describe("the request book", () => {
     await page.locator(".facet-option").filter({ hasText: "Running" }).click();
     await expect(page).not.toHaveURL(/show=/);
     await expect(page.locator(".tbl-row")).toHaveCount(5);
+  });
+
+  test("an unapproved row says what approving it would cost", async ({
+    page,
+  }) => {
+    // This row used to say it twice: the pill read `draft` and the next column
+    // read `needs approval`. One fact, two spellings -- and `draft` was the
+    // wrong one, since a draft is unsubmitted and editable and this row is
+    // neither. The state now names what is being waited on; the second column
+    // carries the fact the state cannot: the ceiling.
+    const draft = {
+      ...dashboard.rows[2],
+      // A keyed `each` is what makes the table correct and what makes a copied
+      // id a crash: the row needs its own.
+      id: "req_draft06",
+      seq: 6,
+      state: "draft",
+      max_usd: 5,
+      approved_unclaimed: false,
+    };
+    await mock(page, {
+      requests: {
+        ...dashboard,
+        rows: [...dashboard.rows, draft],
+        total: dashboard.total + 1,
+      },
+    });
+    await page.goto("/");
+
+    const row = page.locator(".tbl-row").filter({ hasText: "#6" });
+    await expect(row.locator(".pill").first()).toHaveText("Awaiting approval");
+    await expect(row.locator(".pill.info").last()).toHaveText("$5 ceiling");
+    await expect(page.locator("body")).not.toContainText("needs approval");
   });
 
   test("a filter nobody knows about falls back to everything", async ({
@@ -665,7 +698,7 @@ test.describe("naming a request, and opening it", () => {
     await expect(page.locator(".detail-title")).toHaveText(
       "#4 · OPRA.PILLAR · trades · 2026-10-01→2026-10-08",
     );
-    await expect(page.locator(".detail-header .pill")).toHaveText("blocked");
+    await expect(page.locator(".detail-header .pill")).toHaveText("Blocked");
 
     // The two things the list could not show: the human sentence, and the key
     // in full, because this is the page where someone copies it into a curl.
@@ -808,7 +841,7 @@ test.describe("approving a request", () => {
     });
     await page.goto("/requests/req_draft01");
     await expect(page.locator(".approve")).toHaveCount(0);
-    await expect(page.locator(".detail-header .pill")).toHaveText("approved");
+    await expect(page.locator(".detail-header .pill")).toHaveText("Approved");
   });
 
   test("a blocked row has nothing to click either", async ({ page }) => {

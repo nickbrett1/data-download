@@ -25,6 +25,30 @@ export function stateTone(state) {
   return TONES[state] ?? "";
 }
 
+/** The state, as a person reads it. The stored value is the API's word and
+ * stays that way in the database, the CHECK constraint and the JSON; it is
+ * only ever *shown* through this map.
+ *
+ * `draft` is the one that was actively misleading: everywhere else a draft is
+ * unsubmitted and editable, and this row is submitted, immutable, bound to a
+ * plan and priced -- it is waiting for someone to authorise the spend. So it
+ * says `awaiting approval`, which also gives `approved` the partner it never
+ * had. A word this map has never heard of renders as itself, because a state
+ * added later should look odd, not vanish. */
+const STATE_LABELS = {
+  draft: "Awaiting approval",
+  approved: "Approved",
+  blocked: "Blocked",
+  running: "Running",
+  succeeded: "Succeeded",
+  landed_with_errors: "Landed with errors",
+  failed: "Failed",
+};
+
+export function stateLabel(state) {
+  return STATE_LABELS[state] ?? state;
+}
+
 /** `$0.0412`, or an em dash. A price that rounds to `$0.04` hides the difference
  * between a plan that costs 4c and one that costs 4.9c, which is the whole
  * reason the column exists. */
@@ -136,9 +160,24 @@ export function whyItMatters(row) {
   }
   if (BLOCKED_FACETS.has(row.facet)) return blockedMove(row);
   if (row.facet === "todo") {
+    // The state pill already carries the verb for a draft -- "awaiting
+    // approval" -- so repeating it here was one fact in two spellings. This
+    // column is for what the state does *not* say: what the approval would
+    // authorise. `unclaimed` stays, because an approved row nobody picked up
+    // is an anomaly, not a restatement of `approved`.
+    if (row.approved_unclaimed) {
+      return {
+        text: "unclaimed",
+        tone: "info",
+        title: "approved, but no worker has claimed it",
+      };
+    }
+    const cap = bound(row.max_usd);
+    if (cap === "—") return null;
     return {
-      text: row.approved_unclaimed ? "unclaimed" : "needs approval",
+      text: `${cap} ceiling`,
       tone: "info",
+      title: "approving authorises spend up to this ceiling",
     };
   }
   if (row.facet === "done" && row.had_errors) {

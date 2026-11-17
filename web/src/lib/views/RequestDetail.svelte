@@ -20,7 +20,7 @@
   import DetailPanel from "$lib/components/nb/DetailPanel.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import { getView } from "$lib/api";
-  import { age, filed, stateTone, usd } from "$lib/format";
+  import { age, filed, stateLabel, stateTone, usd } from "$lib/format";
 
   // The three blocked facets are the same state and three different answers to
   // "what next", so the meta row asks the question the label answers.
@@ -63,7 +63,7 @@
     if (!data) return [];
     const rows = [
       { label: "request id", value: data.id, isCode: true },
-      { label: "state", value: data.state },
+      { label: "state", value: stateLabel(data.state) },
       {
         label: BLOCKED.has(data.facet) ? "waiting on" : "why it matters",
         value: data.facet_label,
@@ -173,7 +173,7 @@
     <DetailPanel
       title={`#${data.seq} · ${data.label}`}
       {meta}
-      pill={{ label: data.state, tone: stateTone(data.state) }}
+      pill={{ label: stateLabel(data.state), tone: stateTone(data.state) }}
     >
       {#if data.state === "draft"}
         <!-- The one verb on this page. Rendered only where it can be used: a

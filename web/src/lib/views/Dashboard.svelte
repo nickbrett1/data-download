@@ -20,7 +20,7 @@
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import FilterPanel from "$lib/components/nb/FilterPanel.svelte";
   import { getView } from "$lib/api";
-  import { filed, stateTone, whyItMatters } from "$lib/format";
+  import { filed, stateLabel, stateTone, whyItMatters } from "$lib/format";
 
   const FACET_LABELS = {
     broken: "Broken",
@@ -174,7 +174,8 @@
             <span class="req-vendor">{request.vendor || "—"}</span>
           </span>
           <span
-            ><span class="pill {stateTone(request.state)}">{request.state}</span
+            ><span class="pill {stateTone(request.state)}"
+              >{stateLabel(request.state)}</span
             ></span
           >
           <span class="num filed">{filed(request.created_at)}</span>
