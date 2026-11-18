@@ -20,7 +20,7 @@
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import FilterPanel from "$lib/components/nb/FilterPanel.svelte";
   import { getView } from "$lib/api";
-  import { filed, stateLabel, stateTone, whyItMatters } from "$lib/format";
+  import { filed, stateDetail, stateLabel, stateTone } from "$lib/format";
 
   const FACET_LABELS = {
     broken: "Broken",
@@ -106,11 +106,15 @@
   // prices something, so the column was a dash from top to bottom -- an empty
   // cell pretending to be a fact. The detail page still shows the estimate and
   // the ceiling, and the column comes back the day there is a number in it.
+  // Three columns, because there are three questions a row answers: what is it,
+  // where is it, when was it asked for. A fourth -- "why it matters" -- was
+  // tried and removed: on a finished row it repeated the badge or said nothing,
+  // and its useful half (what a blocked row is short of) is a qualification of
+  // the state, so it lives under the badge now. See `stateDetail`.
   const columns = [
-    { label: "request", width: "minmax(11rem, 1.6fr)" },
-    { label: "state", width: "7.5rem" },
+    { label: "request", width: "minmax(11rem, 1.9fr)" },
+    { label: "state", width: "minmax(9rem, 0.9fr)" },
     { label: "filed", align: "end" },
-    { label: "why it matters", width: "minmax(10rem, 1.7fr)" },
   ];
 </script>
 
@@ -159,7 +163,7 @@
         emptyMessage="No requests yet."
       >
         {#snippet row(request)}
-          {@const why = whyItMatters(request)}
+          {@const detail = stateDetail(request)}
           <span>
             <!-- A name, not a key. The id is opaque by design -- it is the
                  durable handle, not a label -- so the row leads with `#seq` and
@@ -173,21 +177,21 @@
             </a>
             <span class="req-vendor">{request.vendor || "—"}</span>
           </span>
-          <span
-            ><span class="pill {stateTone(request.state)}"
+          <!-- The badge, and under it the one thing the badge cannot say: what a
+               blocked row is short of, whether an approved row was ever claimed,
+               or the ceiling a draft is asking to authorise. Most rows have
+               nothing to add, and say nothing rather than showing a dash. -->
+          <span class="state">
+            <span class="pill {stateTone(request.state)}"
               >{stateLabel(request.state)}</span
-            ></span
-          >
-          <span class="num filed">{filed(request.created_at)}</span>
-          <span>
-            {#if why}
-              <span class="pill {why.tone}" title={why.title ?? ""}
-                >{why.text}</span
+            >
+            {#if detail}
+              <span class="detail {detail.tone}" title={detail.title ?? ""}
+                >{detail.text}</span
               >
-            {:else}
-              <span class="quiet">—</span>
             {/if}
           </span>
+          <span class="num filed">{filed(request.created_at)}</span>
         {/snippet}
       </DataTable>
     {:else if show === "all"}
@@ -282,5 +286,41 @@
   .filed {
     color: var(--ink-dim);
     white-space: nowrap;
+  }
+
+  /* The badge and its detail share a cell, so they stack rather than fight for
+     the same line. `min-width: 0` is what lets the detail clip instead of
+     pushing the `filed` column off the grid. */
+  .state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  /* Small, quiet, and clipped: this is a qualifier, not a second headline. The
+     colour is the whole signal a second pill used to carry -- a stuck `running`
+     row must not look like an ordinary one. */
+  .detail {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--ink-muted);
+  }
+
+  .detail.info {
+    color: var(--accent);
+  }
+
+  .detail.warn {
+    color: var(--warn);
+  }
+
+  .detail.bad {
+    color: var(--bad);
   }
 </style>

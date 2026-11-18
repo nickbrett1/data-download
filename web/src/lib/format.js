@@ -95,29 +95,20 @@ export function age(seconds) {
   return `${Math.floor(total / 86400)}d ${Math.floor((total % 86400) / 3600)}h`;
 }
 
-/** The ceiling, appended to whatever the badge says: the answer's price is
- * part of the answer, and the row has no column for it (see Dashboard). */
-function withCap(text, row) {
-  if (row.max_usd === null || row.max_usd === undefined) return text;
-  return `${text} · $${Number(row.max_usd).toFixed(0)}`;
-}
-
 /** A blocked row says whose move it is.
  *
  * `needs_params` is something the caller can act on this minute ("add symbols,
  * stype_in"); `no_plan` is a decision about code; `requested` is that decision
- * already asked for. Three badges, because they were one badge -- "waiting on a
- * plan" -- and that one word hid the only question a reader has: what do I do?
+ * already asked for. Three answers, because they used to be one word --
+ * "waiting on a plan" -- and that word hid the only question a reader has:
+ * what do I do?
  */
 function blockedMove(row) {
   const gap = row.gap ?? {};
   if (row.facet === "needs_params") {
     const missing = gap.missing ?? [];
-    const text = missing.length
-      ? `add ${missing.join(", ")}`
-      : "add missing params";
     return {
-      text: withCap(text, row),
+      text: missing.length ? `add ${missing.join(", ")}` : "add missing params",
       tone: "info",
       title: gap.plan_type
         ? `${gap.plan_type} already takes this dataset; these params are what it is short of`
@@ -129,28 +120,40 @@ function blockedMove(row) {
     // better than "we have nothing", and it is not fixable by more fields.
     if ((gap.rejected ?? []).length) {
       return {
-        text: withCap(`rejects ${gap.rejected.join(", ")}`, row),
+        text: `rejects ${gap.rejected.join(", ")}`,
         tone: "warn",
         title: gap.plan_type
           ? `${gap.plan_type} rejected a value this request sent`
           : "",
       };
     }
-    const text = gap.dataset ? `no plan for ${gap.dataset}` : "no plan yet";
-    return { text: withCap(text, row), tone: "warn" };
+    return {
+      text: gap.dataset ? `no plan for ${gap.dataset}` : "no plan yet",
+      tone: "warn",
+    };
   }
   return {
-    text: withCap("new plan requested", row),
+    text: "new plan requested",
     tone: "info",
     title: row.escalated_at ? `asked for on ${filed(row.escalated_at)}` : "",
   };
 }
 
-/** The one sentence under a state badge: why this row is worth looking at.
+/** The half-line under a state badge: the state, more specifically.
+ *
+ * This used to be a second pill in its own column called "why it matters",
+ * which promised more than it delivered -- on a finished row it either said
+ * nothing or said `landed with errors` underneath a pill already reading
+ * `Landed with errors`. But the blocked answers were the one place on the page
+ * that said *what to do*, so the information stays and the column goes: every
+ * value here is a qualification of the state beside it, so it belongs in the
+ * same cell. `request | state | filed` is what is left.
+ *
+ * `tone` is the only colour in the cell, and it is what the second pill used to
+ * carry: a stuck `running` row has to look wrong, not like a normal running one.
  * Mirrors the precedence in `_with_facet` -- a stuck condition outranks the
- * state it is stuck in, and `blocked` is split by who moves next, not by the
- * state it is in. */
-export function whyItMatters(row) {
+ * state it is stuck in, and `blocked` is split by who moves next. */
+export function stateDetail(row) {
   if (row.facet === "broken") {
     return {
       text: row.stuck_condition,
@@ -160,11 +163,10 @@ export function whyItMatters(row) {
   }
   if (BLOCKED_FACETS.has(row.facet)) return blockedMove(row);
   if (row.facet === "todo") {
-    // The state pill already carries the verb for a draft -- "awaiting
-    // approval" -- so repeating it here was one fact in two spellings. This
-    // column is for what the state does *not* say: what the approval would
-    // authorise. `unclaimed` stays, because an approved row nobody picked up
-    // is an anomaly, not a restatement of `approved`.
+    // An approved row nobody picked up is an anomaly, not a restatement of
+    // `approved`, so it is said. A draft says what approval would authorise,
+    // because the state already carries the verb and this is the number the
+    // reader is being asked to authorise.
     if (row.approved_unclaimed) {
       return {
         text: "unclaimed",
@@ -175,13 +177,11 @@ export function whyItMatters(row) {
     const cap = bound(row.max_usd);
     if (cap === "—") return null;
     return {
-      text: `${cap} ceiling`,
-      tone: "info",
+      text: `up to ${cap}`,
+      tone: "",
       title: "approving authorises spend up to this ceiling",
     };
   }
-  if (row.facet === "done" && row.had_errors) {
-    return { text: "landed with errors", tone: "warn" };
-  }
+  // `landed with errors` is deliberately absent: the badge says it.
   return null;
 }

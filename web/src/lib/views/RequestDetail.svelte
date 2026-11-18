@@ -65,7 +65,10 @@
       { label: "request id", value: data.id, isCode: true },
       { label: "state", value: stateLabel(data.state) },
       {
-        label: BLOCKED.has(data.facet) ? "waiting on" : "why it matters",
+        // The dashboard column of this name was removed for promising more
+        // than it could deliver; here the value really is "where this row sits
+        // in the book", so it says that.
+        label: BLOCKED.has(data.facet) ? "waiting on" : "in the book",
         value: data.facet_label,
       },
     ];

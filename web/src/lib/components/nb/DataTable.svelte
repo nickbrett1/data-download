@@ -3,8 +3,8 @@
    * DataTable — a column-aligned table of records.
    *
    * Generalised from data-download, which has two of them: the request book
-   * (id · state · type · estimate · age · why it matters) and the plan-type
-   * parameter schema (parameter · type · constraints · what it means). Both
+   * (request · state · filed) and the plan-type parameter schema
+   * (parameter · type · constraints · what it means). Both
    * wanted the same three things that a ranked list does not give:
    *
    *   - columns that line up down the page, so `$0.0412` sits under `$0.0412`

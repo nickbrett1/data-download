@@ -70,20 +70,23 @@ test.describe("the request book", () => {
     await page.goto("/");
 
     await expect(page.locator(".tbl-row")).toHaveCount(5);
+    // Three columns. A fourth, "why it matters", was removed: on a finished row
+    // it either repeated the badge or rendered a dash, and the one part that
+    // mattered -- what a blocked row is short of -- is a qualification of the
+    // state, so it sits under the badge now.
     await expect(page.locator(".tbl-head .col-label")).toHaveText([
       "request",
       "state",
       "filed",
-      "why it matters",
     ]);
 
-    // Four columns of a grid share one template, which is what makes the
+    // The columns of a grid share one template, which is what makes the
     // numeric column line up rather than land wherever the previous cell ended.
     const template = await page
       .locator(".tbl-row")
       .first()
       .evaluate((el) => getComputedStyle(el).gridTemplateColumns);
-    expect(template.split(" ").length).toBe(4);
+    expect(template.split(" ").length).toBe(3);
 
     const first = page.locator(".tbl-row").first();
     // No estimate column: every row is unpriced this phase, so a column of
@@ -103,10 +106,15 @@ test.describe("the request book", () => {
 
     // The second row filed: `running`, and stuck.
     const running = page.locator(".tbl-row").nth(1);
-    // The row's state is `running`; the badge says why it is worth looking at.
-    await expect(running.locator(".pill").first()).toHaveText("Running");
-    await expect(running.locator(".pill.bad")).toHaveText("lease_expired");
-    await expect(running.locator(".pill.warn")).toHaveCount(0);
+    // The badge says `running`; the line under it is the fact that makes the
+    // row wrong. One pill, not two: a running row is not in a second state, it
+    // is in the one state with a problem.
+    await expect(running.locator(".pill")).toHaveCount(1);
+    await expect(running.locator(".pill")).toHaveText("Running");
+    await expect(running.locator(".state .detail")).toHaveText("lease_expired");
+    // And it is coloured as a fault, which is the whole reason the detail line
+    // carries a tone -- otherwise a stuck row looks like an ordinary one.
+    await expect(running.locator(".state .detail")).toHaveClass(/\bbad\b/);
   });
 
   test("the facet is one choice from N, drawn as a histogram", async ({
@@ -171,8 +179,8 @@ test.describe("the request book", () => {
     // This row used to say it twice: the pill read `draft` and the next column
     // read `needs approval`. One fact, two spellings -- and `draft` was the
     // wrong one, since a draft is unsubmitted and editable and this row is
-    // neither. The state now names what is being waited on; the second column
-    // carries the fact the state cannot: the ceiling.
+    // neither. The badge now names what is being waited on; the line under it
+    // carries the fact the badge cannot: what approving would authorise.
     const draft = {
       ...dashboard.rows[2],
       // A keyed `each` is what makes the table correct and what makes a copied
@@ -193,8 +201,9 @@ test.describe("the request book", () => {
     await page.goto("/");
 
     const row = page.locator(".tbl-row").filter({ hasText: "#6" });
-    await expect(row.locator(".pill").first()).toHaveText("Awaiting approval");
-    await expect(row.locator(".pill.info").last()).toHaveText("$5 ceiling");
+    await expect(row.locator(".pill")).toHaveCount(1);
+    await expect(row.locator(".pill")).toHaveText("Awaiting approval");
+    await expect(row.locator(".state .detail")).toHaveText("up to $5");
     await expect(page.locator("body")).not.toContainText("needs approval");
   });
 
@@ -1002,21 +1011,27 @@ test.describe("a request that is waiting, in three different ways", () => {
 
     const row = (seq) =>
       page.locator(".tbl-row").filter({ hasText: `#${seq}` });
-    // The caller's move: the two params the plan is short of, and the ceiling.
-    await expect(row(1).locator(".pill.info").last()).toHaveText(
-      "add symbols, stype_in · $25",
+    // All three are `blocked`, so all three badges say the same word; the line
+    // under it is what tells them apart, and it is the only place on the page
+    // that says what would clear the row.
+    for (const seq of [1, 2, 3]) {
+      await expect(row(seq).locator(".pill")).toHaveText("Blocked");
+    }
+    // The caller's move: the two params the plan is short of.
+    await expect(row(1).locator(".state .detail")).toHaveText(
+      "add symbols, stype_in",
     );
     // No registered type speaks for the dataset. Nothing the caller can add.
-    await expect(row(2).locator(".pill.warn").last()).toHaveText(
-      "no plan for ZZZZ.UNKNOWN · $25",
+    await expect(row(2).locator(".state .detail")).toHaveText(
+      "no plan for ZZZZ.UNKNOWN",
     );
     // The ask is in, so the row is no longer "no plan yet".
-    await expect(row(3).locator(".pill.info").last()).toHaveText(
-      "new plan requested · $25",
+    await expect(row(3).locator(".state .detail")).toHaveText(
+      "new plan requested",
     );
-    // The timestamp is the tooltip, not a second line: the badge is a state,
-    // and the row already has a `filed` column.
-    await expect(row(3).locator(".pill.info").last()).toHaveAttribute(
+    // The timestamp is the tooltip, not a second line: the detail is what
+    // clears the row, and the row already has a `filed` column.
+    await expect(row(3).locator(".state .detail")).toHaveAttribute(
       "title",
       /asked for on 14 Nov/,
     );
