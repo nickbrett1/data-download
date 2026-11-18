@@ -13,8 +13,15 @@ services:
     container_name: data-download
     restart: unless-stopped
 
+    # Loopback only, deliberately. `tailscale serve` on the host is the ONLY
+    # ingress: it proxies to 127.0.0.1:8820, so the container sees the bridge
+    # gateway and can believe the identity header Serve injects. Publishing on
+    # 0.0.0.0 re-opens approval: a connection to any address local to the host
+    # (its LAN IP, its tailnet IP) is re-originated by Docker's port forward and
+    # arrives from that same gateway, so any tailnet peer could forge
+    # Tailscale-User-Login and approve spend. See deploy/README.md §6.
     ports:
-      - "0.0.0.0:8820:8820"
+      - "127.0.0.1:8820:8820"
 
     environment:
       # Set your environment variables here or in a NAS-side .env file
@@ -32,9 +39,8 @@ services:
       - "homepage.group=Services"
       - "homepage.name=data-download"
       # The serve URL, not the host and port: `tailscale serve` is what adds
-      # the identity header the approve door needs, and it only does that for
-      # requests it proxies. A link to ryzen:8820 is a link to a page whose
-      # button cannot work.
+      # the identity header the approve door needs, and with the port bound to
+      # loopback above, a link to ryzen:8820 does not load at all.
       - "homepage.href=https://ryzen.tail86fd19.ts.net/"
       - "homepage.widget.type=customapi"
       - "homepage.widget.url=http://localhost:8820/healthz"

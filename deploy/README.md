@@ -118,11 +118,12 @@ Append `deploy/homepage-services.yaml` to your Homepage `services.yaml`
 service.
 
 **Point the `href` at the serve URL.** `https://<node>.<tailnet>.ts.net/`, not
-`http://<host>:8820/`. The host-and-port link still reads (the read projection
-is public), but its approve button cannot work: only `tailscale serve` adds the
-identity header, and only for requests it proxies. The widget URL stays on
-loopback — Homepage is server-side, so `http://localhost:8820/healthz` is
-reaching the published port on the NAS, and `/healthz` needs no identity.
+`http://<host>:8820/`. The host-and-port link does not work at all any more:
+§6 publishes the port on loopback only, so `http://<host>:8820/` is refused from
+every other machine, and only `tailscale serve` can reach the app. The widget
+URL stays on loopback — Homepage is server-side on the host, so
+`http://localhost:8820/healthz` reaches the published port, and `/healthz` needs
+no identity.
 
 **Never put a token in `href`.** Reading needs no credential: the UI is a
 public read-only projection (see the main README, "What is public, and what is
@@ -141,21 +142,36 @@ that header only from a loopback peer, then checks the login against
 
 That means two things have to be true, and both are a line of config.
 
-**Serve is the only thing that reaches the container on loopback.** The check is
-the *peer address*, so a request that arrives from the LAN, from a sibling
-container, or from a rebound domain is refused even though it reached the same
-process — the header is only believed from `127.0.0.1`. Publishing on loopback
-is still the better default, because it keeps the read surface off the LAN too:
+**Serve is the only thing that reaches the container.** The check is the *peer
+address*, and the trust is only as good as the claim that nothing else can
+manufacture that address. So the port is published on loopback and nothing else:
 
 ```yaml
     ports:
       - "127.0.0.1:8820:8820"
 ```
 
-If you publish on `0.0.0.0` instead (this compose file does, so the Homepage
-tile at `http://ryzen:8820/` keeps working), reading still works from the LAN
-and approval still only works through Serve — but the read projection is then
-as reachable as the port is, which is the trade the main README describes.
+**Do not "fix" this to `0.0.0.0` to make a host-and-port link work.** That was
+tried, and it re-opened approval completely. Published on all interfaces, the
+port also listens on the tailnet interface, and a connection to any address that
+is *local to the host* — the node's tailnet IP, its LAN IP — is re-originated by
+Docker's port forward and reaches the container from the bridge gateway. It then
+arrives looking exactly like the Serve hop, and the gateway is trusted. Measured
+on the real deployment, from another tailnet member with no `tailscale serve`
+anywhere in the path:
+
+```bash
+NODE_IP=$(tailscale ip -4 ryzen)
+curl -H "Tailscale-User-Login: you@example.com" "http://$NODE_IP:8820/v1/whoami"
+# -> HTTP 200 {"login":"you@example.com","approver":true}
+```
+
+Anyone on the tailnet could approve spend as anyone else. Loopback binding cuts
+it at the socket: there is no listener to accept the forged header, and the
+connection is refused before HTTP exists. The cost is that the read projection
+is only reachable through Serve too — no more `http://<host>:8820/` from the
+LAN. That is the intended trade; a public read view is not worth a forgeable
+approval.
 
 **Your login is named in the allowlist** — in `.env` beside the compose file:
 
@@ -185,7 +201,7 @@ three different hops that can go wrong and only one of them is a setting.
 
 | what the page says | what is actually wrong |
 | --- | --- |
-| `no Tailscale-User-Login header: this request arrived from 192.168.1.40 directly` | you used the host and port (`ryzen:8820`), not the serve URL. Being *on* the tailnet adds nothing — the header comes from `tailscale serve`, not from the network |
+| `no Tailscale-User-Login header: this request arrived from 172.18.0.1 directly` | the request reached the container through the host's port forward with no Serve in front of it — a `curl` on the host itself, or an old bookmark that has not started failing yet. Open the serve URL instead. Being *on* the tailnet adds nothing: the header comes from `tailscale serve`, not from the network |
 | `a Tailscale-User-Login header arrived from 172.17.0.1, which is not a hop this service trusts` | Serve is working, but Docker's port forward re-originated the connection: the container sees the bridge gateway, not loopback. Add that address to `DATA_DOWNLOAD_TRUSTED_PROXIES` |
 | `this tailnet login is not named in DATA_DOWNLOAD_APPROVERS` | both hops are fine; the login is not on the allowlist |
 
@@ -202,19 +218,24 @@ DATA_DOWNLOAD_TRUSTED_PROXIES=172.17.0.1
 #    (network_mode: host, so Serve's connection really is loopback)
 ```
 
-If you take option 1, bind the published port to loopback
-(`127.0.0.1:8820:8820`): the trust in that address is only justified while
-nothing else can reach the container through it.
+Option 1 only holds while the port is bound to loopback — see above. The trust
+in the gateway address is the trust in "the only path that produces that peer
+is the host's own port forward", and publishing on `0.0.0.0` breaks that
+sentence.
 
 `DATA_DOWNLOAD_APPROVERS` unset means **nobody** may approve: the door fails
 closed rather than treating "has a tailnet" as "may spend". Funnel (public)
 traffic carries no identity header at all, so approval cannot work over Funnel
 by construction.
 
-`DATA_DOWNLOAD_APPROVERS` unset means **nobody** may approve: the door fails
-closed rather than treating "has a tailnet" as "may spend". Funnel (public)
-traffic carries no identity header at all, so approval cannot work over Funnel
-by construction.
+**What the allowlist cannot tell you: `approver` is per *login*, not per device.**
+`tailscale serve` reports the login that owns the node, so every node registered
+to the same person presents the same value — a laptop, a phone, a build box, and
+an unattended agent all read as `approver: true`. On a single-user tailnet that
+is the honest description of who may spend. If the tailnet ever grows a second
+human or a shared device, the allowlist is not the mechanism that separates
+them: use a per-user login, and remember that tagged devices carry no login at
+all (so they can never approve).
 
 The old `approve` token and the `;…:approve` entry in
 `DATA_DOWNLOAD_API_TOKENS` are gone from this file: the scope is still accepted

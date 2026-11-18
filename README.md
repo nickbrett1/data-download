@@ -74,8 +74,10 @@ second server, and `/v1/*` never moved.
 The UI is **public**: `/`, `/plan-types`, `/requests/<id>` and the `/ui/*.json`
 view-models they read all open with no credential. That is a decision, not an
 omission. Everything they show is a GET of a projection — a request book, the
-registry, an append-only trail — so "can you reach port 8820" is the whole read
-trust model, and the port is expected to be on the LAN or the tailnet.
+registry, an append-only trail — so "can you reach the serve URL" is the whole
+read trust model. The port itself is published on loopback and fronted by
+`tailscale serve`; exposing it on the LAN would make approval forgeable, which
+is why the read view lost its LAN door (see `deploy/README.md` §6).
 
 A lock was tried here and removed. It cost a live read token in a Homepage
 tile's Docker label (and four world-readable backups of it), a rotation, and a
