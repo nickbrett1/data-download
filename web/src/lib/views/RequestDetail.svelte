@@ -72,13 +72,16 @@
         value: data.facet_label,
       },
     ];
-    // Approved and nobody has taken it. This is the one place it is said in
-    // full: the book says `unclaimed` under the badge, and it is no longer a
-    // stuck condition -- money authorised and waiting for a worker is a queue,
-    // not a fault -- so the detail page is where "and nothing is running it"
-    // gets its sentence.
+    // Approved and nobody has taken it. The same words the book uses under the
+    // badge, because a reader who clicked through from `no worker has it yet`
+    // should find that sentence here, not a second vocabulary for it. It is no
+    // longer a stuck condition -- money authorised and waiting for a worker is
+    // a queue, not a fault -- so this is where it is stated in full.
     if (data.approved_unclaimed) {
-      rows.push({ label: "claimed", value: "no — nothing is running it yet" });
+      rows.push({
+        label: "worker",
+        value: "none — no worker has picked it up",
+      });
     }
     if (data.blocked_reason) {
       rows.push({

@@ -173,6 +173,24 @@ test.describe("the request book", () => {
     await expect(page.locator(".tbl-row")).toHaveCount(5);
   });
 
+  test("an approved row says it is approved, and that nothing has it", async ({
+    page,
+  }) => {
+    // Two words for two different questions, and they must not look like rival
+    // answers to one. The badge answers "where is this"; the line under it
+    // answers "what is missing". It used to say the participle `unclaimed`,
+    // which beside a badge reading `Approved` read as a contradiction -- the
+    // reader's question was "so which is it?".
+    await mock(page);
+    await page.goto("/");
+
+    const row = page.locator(".tbl-row").filter({ hasText: "#3" });
+    await expect(row.locator(".pill")).toHaveText("Approved");
+    await expect(row.locator(".state .detail")).toHaveText(
+      "no worker has it yet",
+    );
+  });
+
   test("an unapproved row says what approving it would cost", async ({
     page,
   }) => {
@@ -906,11 +924,17 @@ test.describe("approving a request", () => {
 
   test("an approved row has nothing to click", async ({ page }) => {
     await mock(page, {
-      detail: { ...draftDetail, state: "approved" },
+      detail: { ...draftDetail, state: "approved", approved_unclaimed: true },
     });
     await page.goto("/requests/req_draft01");
     await expect(page.locator(".approve")).toHaveCount(0);
     await expect(page.locator(".detail-header .pill")).toHaveText("Approved");
+    // The book's sentence, in full, on the page it was clicked through to. A
+    // different vocabulary here would be a second answer to one question.
+    await expect(page.locator(".meta-grid")).toContainText("worker");
+    await expect(page.locator(".meta-grid")).toContainText(
+      "none — no worker has picked it up",
+    );
   });
 
   test("a blocked row has nothing to click either", async ({ page }) => {

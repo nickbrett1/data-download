@@ -167,11 +167,17 @@ export function stateDetail(row) {
     // `approved`, so it is said. A draft says what approval would authorise,
     // because the state already carries the verb and this is the number the
     // reader is being asked to authorise.
+    //
+    // The word is a sentence, not `unclaimed`. Beside a badge reading
+    // `Approved`, a bare participle looks like a rival state -- "so is it
+    // approved or unclaimed?" -- and answering that in a tooltip nobody opens
+    // is not answering it. This says what is missing without competing with
+    // the badge for the answer.
     if (row.approved_unclaimed) {
       return {
-        text: "unclaimed",
+        text: "no worker has it yet",
         tone: "info",
-        title: "approved, but no worker has claimed it",
+        title: "approved, but nothing has claimed it: no run is in progress",
       };
     }
     const cap = bound(row.max_usd);
