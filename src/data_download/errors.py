@@ -35,6 +35,13 @@ STORE_UNAVAILABLE = "store_unavailable"
 # refused with; `not_found` is the read-surface answer.
 NOT_FOUND = "not_found"
 
+# Not §7.4's either. `approve` is the one verb that spends, so its refusals get
+# their own names rather than being folded into `unauthenticated`: "no token"
+# and "no tailnet identity" are different repairs, and a reader of the response
+# should not have to guess which one they are looking at.
+NOT_ATTESTED = "not_attested"
+NOT_AN_APPROVER = "not_an_approver"
+
 
 def invalid_body(message: str) -> ApiError:
     return ApiError(400, INVALID_BODY, message)
@@ -49,6 +56,28 @@ def insufficient_scope(required: str, granted: frozenset[str]) -> ApiError:
         403,
         INSUFFICIENT_SCOPE,
         f"token lacks the '{required}' scope (granted: {', '.join(sorted(granted)) or 'none'})",
+    )
+
+
+def not_attested() -> ApiError:
+    return ApiError(
+        403,
+        NOT_ATTESTED,
+        "approval is authorised by the tailnet identity `tailscale serve` asserts, "
+        "and this request did not arrive through it: no Tailscale-User-Login "
+        "header from a loopback peer. Open the page at the serve URL.",
+    )
+
+
+def not_an_approver() -> ApiError:
+    # The login is deliberately not echoed: it is header input, and the operator
+    # can see their own name in `tailscale status` without this response
+    # repeating an unvetted string back at them.
+    return ApiError(
+        403,
+        NOT_AN_APPROVER,
+        "this tailnet login is not named in DATA_DOWNLOAD_APPROVERS, "
+        "so it may read but not approve",
     )
 
 

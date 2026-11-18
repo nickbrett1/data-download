@@ -125,31 +125,74 @@ and since nothing on the read path uses tokens, it would buy nothing.
 
 ## 6. Approving a request
 
-Approving spends money, so it is the one thing a token can do from the UI. The
-token needs the `approve` scope, which a bare token never gets and which no
-agent is issued. Add one to `.env` beside this compose file:
+Approving spends money, so it is the one verb the UI offers — and it is
+authorised by **who you are**, not by a secret. `tailscale serve` terminates the
+tailnet connection on this host and proxies to the container on loopback,
+adding `Tailscale-User-Login` for the peer it just authenticated. The app trusts
+that header only from a loopback peer, then checks the login against
+`DATA_DOWNLOAD_APPROVERS`.
 
-```bash
-# keep the agent's token, add one that can only approve
-DATA_DOWNLOAD_API_TOKENS="<agent-token>:submit+read;<new-token>:approve"
+That means two things have to be true, and both are a line of config.
+
+**Serve is the only thing that reaches the container on loopback.** The check is
+the *peer address*, so a request that arrives from the LAN, from a sibling
+container, or from a rebound domain is refused even though it reached the same
+process — the header is only believed from `127.0.0.1`. Publishing on loopback
+is still the better default, because it keeps the read surface off the LAN too:
+
+```yaml
+    ports:
+      - "127.0.0.1:8820:8820"
 ```
 
-Generate `<new-token>` on the host (`openssl rand -hex 32`), then apply it —
-**`--force-recreate`, not a restart**: watchtower and `docker restart` reuse the
-container's existing config and will not re-read `.env`.
+If you publish on `0.0.0.0` instead (this compose file does, so the Homepage
+tile at `http://ryzen:8820/` keeps working), reading still works from the LAN
+and approval still only works through Serve — but the read projection is then
+as reachable as the port is, which is the trade the main README describes.
+
+**Your login is named in the allowlist** — in `.env` beside the compose file:
 
 ```bash
+DATA_DOWNLOAD_APPROVERS="you@example.com"
+```
+
+Then have Serve front it, and apply the env — **`--force-recreate`, not a
+restart**: watchtower and `docker restart` reuse the container's existing config
+and will not re-read `.env`.
+
+```bash
+sudo tailscale serve --bg 8820          # https://<nas>.<tailnet>.ts.net → 127.0.0.1:8820
+sudo tailscale serve status
 docker compose up -d --force-recreate
 ```
 
-Open a request in `draft` and paste the token once, with your name; the browser
-keeps it in `localStorage` for that origin. It is sent as
-`Authorization: Bearer …` on the one `POST`, never in a URL. Approving is two
-clicks with the ceiling in between, and the record shows a `human` event with
-the actor you typed, the job hash, `via: http`, and a 12-character fingerprint
-of the token so two devices can be told apart without either being stored.
+Open a request at the serve URL. The card names the login Serve asserted and
+offers one button; approving is two clicks with the ceiling between them, and
+the record shows a `human` event with that login as the actor, the job hash and
+`via: serve`.
 
-The CLI still works, and is the way in when the token is missing or lost:
+Three failure modes, each with its own sentence on the page:
+
+| what you see | what is true |
+| --- | --- |
+| "did not arrive through it" | the page was reached by IP, not by the serve URL — or Serve is not running |
+| "may read but not approve" | you are through Serve, but that login is not in `DATA_DOWNLOAD_APPROVERS` |
+| the button is missing entirely | same two cases; the card renders no verb it cannot honour |
+
+`DATA_DOWNLOAD_APPROVERS` unset means **nobody** may approve: the door fails
+closed rather than treating "has a tailnet" as "may spend". Funnel (public)
+traffic carries no identity header at all, so approval cannot work over Funnel
+by construction.
+
+The old `approve` token and the `;…:approve` entry in
+`DATA_DOWNLOAD_API_TOKENS` are gone from this file: the scope is still accepted
+so an existing `.env` starts, it logs a warning, and it gates nothing. Delete it
+when you next touch the file.
+
+### The CLI, when the UI is not the tool you want
+
+A shell on the host is still a door — a local one, with no route and no
+identity, which is exactly why it is not the default:
 
 ```bash
 docker exec -it data-download python -m data_download.approve \

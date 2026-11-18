@@ -10,12 +10,17 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+# `approve` is knowingly still in the set and gates nothing: approval is now
+# authorised by the tailnet identity `tailscale serve` asserts (`auth.py`), so
+# the scope was retired. It stays parseable because a deployed `.env` names it,
+# and rejecting the file would drop *every* token in it -- turning one dead word
+# into an outage. `parse_tokens` warns when it sees one.
 KNOWN_SCOPES = frozenset({"submit", "read", "escalate", "approve", "deploy"})
 
-# A bare token (not JSON, no `:scopes` suffix) gets this. Neither `escalate` nor
-# `approve` is granted implicitly: `approve` is human-CLI-only (§7.3), and
-# `escalate` asks for new code, so a token that can file a request cannot also
-# ask for the registry to grow without somebody naming that in its scopes.
+# A bare token (not JSON, no `:scopes` suffix) gets this. `escalate` is not
+# granted implicitly: it asks for new code, so a token that can file a request
+# cannot also ask for the registry to grow without somebody naming that in its
+# scopes.
 DEFAULT_SCOPES = frozenset({"submit", "read"})
 
 
@@ -25,6 +30,9 @@ class Settings:
     tokens: dict[str, frozenset[str]] = field(default_factory=dict)
     plan_types_dir: Path | None = None
     port: int = 8820
+    # The tailnet logins allowed to approve, lowercased. Empty means nobody:
+    # the door fails closed rather than treating "has a tailnet" as "may spend".
+    approvers: frozenset[str] = field(default_factory=frozenset)
     # The commit this process runs (§4.1). Resolved here rather than in the app
     # so a test can name it, and so the one resolution per process is visible in
     # the settings rather than hidden in a lifespan side effect.
@@ -63,13 +71,15 @@ def parse_tokens(raw: str | None) -> dict[str, frozenset[str]]:
     * delimited list:         ``tok-a:submit+read;tok-b:read``
     * a single bare token:    ``6d7a99...``  (=> submit + read)
 
-    `approve` is only ever granted by naming it explicitly in the JSON form.
+    A scope this module does not know still fails the whole file, deliberately:
+    a typo that silently narrowed a token would be worse than a loud refusal.
+    `approve` is the one exception -- known, and inert (see `KNOWN_SCOPES`).
     """
     if not raw or not raw.strip():
         return {}
     raw = raw.strip()
     if raw.startswith("{"):
-        return _parse_json_tokens(raw)
+        return _warn_inert_approve(_parse_json_tokens(raw))
 
     tokens: dict[str, frozenset[str]] = {}
     for entry in raw.replace(";", ",").split(","):
@@ -85,7 +95,36 @@ def parse_tokens(raw: str | None) -> dict[str, frozenset[str]]:
             tokens[token] = frozenset(s.lower() for s in items)
         else:
             tokens[entry] = DEFAULT_SCOPES
+    return _warn_inert_approve(tokens)
+
+
+def _warn_inert_approve(tokens: dict[str, frozenset[str]]) -> dict[str, frozenset[str]]:
+    """Say so when a token still asks for the retired `approve` scope.
+
+    Silence here would leave an operator believing a credential still guards
+    the spend. It guards nothing; the tailnet login does.
+    """
+    for token, scopes in tokens.items():
+        if "approve" in scopes:
+            log.warning(
+                "a token (…%s) asks for `approve`, which no longer guards anything "
+                "- approval is authorised by DATA_DOWNLOAD_APPROVERS over "
+                "`tailscale serve`. Safe to delete from the env.",
+                token[-4:],
+            )
     return tokens
+
+
+def parse_approvers(raw: str | None) -> frozenset[str]:
+    """Parse `DATA_DOWNLOAD_APPROVERS`: logins, comma or whitespace separated.
+
+    Lowercased on both sides of the comparison, because an IdP that reports
+    `Nick@Example.com` today and `nick@example.com` tomorrow must not silently
+    lock the only approver out of the door.
+    """
+    if not raw:
+        return frozenset()
+    return frozenset(part.strip().lower() for part in raw.replace(",", " ").split() if part.strip())
 
 
 def find_plan_types_dir(explicit: str | Path | None = None) -> Path | None:
@@ -128,6 +167,15 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         log.error("DATA_DOWNLOAD_API_TOKENS is unusable (%s) - no token will authenticate", exc)
         tokens = {}
 
+    approvers = parse_approvers(env.get("DATA_DOWNLOAD_APPROVERS"))
+    if not approvers:
+        # Loud, for the same reason the in-memory store is: a door that refuses
+        # every approval looks like a bug in the button, not a missing setting.
+        log.warning(
+            "DATA_DOWNLOAD_APPROVERS is unset - no tailnet login may approve. "
+            "Set it to your login (e.g. you@example.com) to enable the button."
+        )
+
     from .coderef import resolve as resolve_code_ref
 
     port_raw = (env.get("PORT") or "8820").strip()
@@ -144,6 +192,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         tokens=tokens,
         plan_types_dir=find_plan_types_dir(env.get("DATA_DOWNLOAD_PLAN_TYPES_DIR")),
         port=port,
+        approvers=approvers,
         code_ref=resolve_code_ref(env),
     )
 

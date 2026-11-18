@@ -26,7 +26,7 @@ CODE_REF = coderef.resolve(env={}) or "0" * 40
 TOKENS = {
     "tok-submit": frozenset({"submit", "read"}),
     "tok-read": frozenset({"read"}),
-    "tok-approve": frozenset({"approve"}),
+    "tok-submit-only": frozenset({"submit"}),
     "tok-escalate": frozenset({"submit", "read", "escalate"}),
 }
 
@@ -60,6 +60,16 @@ def auth(token: str = "tok-submit") -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+# The one login allowed to approve, and the header `tailscale serve` would have
+# added for it.
+APPROVERS = frozenset({"nick@example.com"})
+
+
+def served(login: str = "nick@example.com") -> dict[str, str]:
+    """The headers Serve puts on a request it proxied for `login`."""
+    return {"Tailscale-User-Login": login}
+
+
 def iso(delta: timedelta = timedelta(0)) -> str:
     return (datetime.now(UTC) + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -75,6 +85,7 @@ def settings(db_path: Path) -> Settings:
         db_path=str(db_path),
         tokens=TOKENS,
         plan_types_dir=PLAN_TYPES_DIR,
+        approvers=APPROVERS,
         code_ref=CODE_REF,
     )
 
@@ -98,8 +109,12 @@ def built_web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def client(settings: Settings):
+    # The peer address is Serve's: `require_approver` only trusts the identity
+    # header from loopback, so a suite that arrived from anywhere else could
+    # never exercise the approve door -- and, more usefully, a test that forgets
+    # to say who is calling gets a refusal rather than a silent pass.
     app = create_app(settings)
-    with TestClient(app) as test_client:
+    with TestClient(app, client=("127.0.0.1", 51234)) as test_client:
         yield test_client
 
 

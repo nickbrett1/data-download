@@ -11,41 +11,51 @@
  * reach the port" is the whole trust model for reading.
  *
  * Writing is one thing, and it is not reading. `POST /v1/requests/{id}/approve`
- * spends money, so it needs the `approve` token in an `Authorization` header.
- * It is never in a URL: a URL is a thing that gets copied into labels, logs and
- * history, and that is exactly how a credential leaked the last time one was
- * put in one.
+ * spends money, so it needs the login `tailscale serve` asserts on the loopback
+ * hop. There is no token to send and nothing this module could add: the
+ * credential is the hop itself, so `postJson` has no auth option at all. A
+ * header written here would be a second, self-declared identity -- which the
+ * route refuses.
  */
+
+/** The server's own sentence about a refusal, and the code to branch on.
+ *
+ * One envelope, one reader: `{"error": {"code", "message"}}` is what every
+ * route returns, and its message is written for a person ("not named in
+ * DATA_DOWNLOAD_APPROVERS", "no Tailscale-User-Login…"). Inventing a generic
+ * string here would throw away the only part worth showing. */
+async function refusal(res) {
+  const payload = await res.json().catch(() => null);
+  return {
+    message: payload?.error?.message ?? `The server answered ${res.status}.`,
+    code: payload?.error?.code ?? null,
+  };
+}
 
 export async function getView(path, { signal } = {}) {
   const res = await fetch(path, { signal });
   if (!res.ok) {
-    const error = new Error(`The server answered ${res.status}.`);
+    const { message, code } = await refusal(res);
+    const error = new Error(message);
     error.status = res.status;
+    error.code = code;
     throw error;
   }
   return res.json();
 }
 
-export async function postJson(path, body, { token } = {}) {
+export async function postJson(path, body) {
   const res = await fetch(path, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
-  // The error envelope is the server's, and its message is the useful part:
-  // `insufficient_scope` tells you the token cannot approve, not that it 403'd.
-  const payload = await res.json().catch(() => null);
   if (!res.ok) {
-    const error = new Error(
-      payload?.error?.message ?? `The server answered ${res.status}.`,
-    );
+    const { message, code } = await refusal(res);
+    const error = new Error(message);
     error.status = res.status;
-    error.code = payload?.error?.code ?? null;
+    error.code = code;
     throw error;
   }
-  return payload;
+  return res.json();
 }

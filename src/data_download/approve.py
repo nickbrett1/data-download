@@ -1,8 +1,11 @@
 """Approve a request (`python -m data_download.approve`).
 
-**A verb, not a route** (§7.4). `approve` scope exists and a bare token never
-gets it, so an HTTP endpoint would be one token away from being an agent's
-approve. A CLI has no route table entry, no token and no egress.
+A verb as well as a route (§7.4). The route (`POST /v1/requests/{id}/approve`)
+is the one with an identity: it answers only a loopback peer carrying the login
+`tailscale serve` asserted, checked against `DATA_DOWNLOAD_APPROVERS`. This verb
+is the local door -- a shell on the host, no route, no credential, no identity,
+and therefore no record of who beyond `--actor`. It is kept for the case the UI
+cannot serve: a broken Serve config, or a script.
 
     python -m data_download.approve <request_id> --actor nick --note "cheap window"
 

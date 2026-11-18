@@ -13,7 +13,6 @@ the offline dry run (`dryrun.py`) is a CLI harness this module does not import.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -758,6 +757,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/v1/whoami")
+    async def whoami(request: Request) -> JSONResponse:
+        """Who `tailscale serve` says is calling, and whether that login may spend.
+
+        The approve button's readiness check, and the reason it can be one: the
+        page must not offer a verb the door will refuse, and it cannot work out
+        the answer for itself -- only the loopback hop knows who is on the other
+        side of the tunnel. Two refusals are distinguishable on purpose: no
+        attestation at all is an error (403), not-an-approver is an answer
+        (200 with `approver: false`), because the second reader is signed in and
+        needs to be told why the button is off, not shown a failure.
+        """
+        login = auth.tailnet_login(request)
+        if login is None:
+            raise errors.not_attested()
+        allowed = login.lower() in request.app.state.settings.approvers
+        return JSONResponse(content={"login": login, "approver": allowed})
+
     @app.post("/v1/requests/{request_id}/approve")
     async def approve_request(request: Request, request_id: str) -> JSONResponse:
         """Approve one request: the door the CLI verb never had.
@@ -773,18 +790,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         command is the weaker of the two: it authenticates nothing, leaves no
         request log, and records whatever `--actor` the operator typed.
 
-        What survives from the old argument, because it was right: `approve` is
-        never granted by a bare token and no agent holds it (`config.py`), so
-        the route is a human door even though it is a machine door. And the
-        approval is still recorded as one event, with `job_hash`, so "one
-        approval is one row" holds however the answer arrives.
+        What has changed since: the token is gone, and the door is a person.
+        Approval is authorised by the login `tailscale serve` asserts on the
+        loopback hop in front of this process, checked against
+        `DATA_DOWNLOAD_APPROVERS` (`auth.require_approver`). That is a better
+        answer than the token for both questions it was being asked: it names
+        *who* rather than *someone holding a secret*, and it cannot be spent by
+        a page in the approver's own browser, because a cross-origin POST has no
+        way to arrive from Serve's loopback hop.
 
-        `actor` is required and is still a claim -- the token proves *someone*
-        holding the approve key, not *who*. A fingerprint of the token is
-        recorded beside it so two devices can be told apart without storing
-        either.
+        `actor` in the body is refused rather than ignored. The attested login
+        is the actor; a second, self-declared one would be a second way in, and
+        the record would have to choose which to believe.
         """
-        token, _ = auth.require_scope(request, "approve")
+        actor = auth.require_approver(request)
         store = await _store(request)
 
         raw = await request.body()
@@ -796,22 +815,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise errors.invalid_body("body is not valid JSON") from None
             if not isinstance(body, dict):
                 raise errors.invalid_body("body must be a JSON object")
-        actor = body.get("actor")
-        if not isinstance(actor, str) or not actor.strip():
+        if body.get("actor") is not None:
             raise errors.invalid_body(
-                "actor is required: an approval records who asked for the spend"
+                "actor is not accepted: the approver is the tailnet login "
+                "`tailscale serve` asserts, so it cannot be declared in the body"
             )
         note = body.get("note")
         if note is not None and not isinstance(note, str):
             raise errors.invalid_body("note must be a string")
 
-        fingerprint = hashlib.sha256(token.encode()).hexdigest()[:12]
         try:
             row, changed = await store.approve(
                 request_id,
-                actor.strip(),
+                actor,
                 note,
-                context={"via": "http", "token": fingerprint},
+                context={"via": "serve"},
             )
         except ApproveRefused as exc:
             if exc.reason == "not_found":
@@ -918,11 +936,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # The pages and their view-models are **public**, and deliberately so. What
     # they show is a read-only projection: a request book, a registry, an
     # append-only trail. The one verb the app has -- `approve` -- is a `/v1`
-    # route carrying an `approve` token that no agent holds, and the page that
-    # offers it sends the token in a header, never in a URL. So gating the reads
-    # would protect the least valuable thing in the system with the most fragile
-    # mechanism in it; it was tried, and the cost was a live credential in a
-    # Docker label, a rotation, and a bookmark that stopped working.
+    # route that only answers a loopback peer carrying the login `tailscale
+    # serve` asserted, so no page and no agent can reach it. Gating the reads
+    # instead would protect the least valuable thing in the system with the most
+    # fragile mechanism in it; it was tried, and the cost was a live credential
+    # in a Docker label, a rotation, and a bookmark that stopped working.
     #
     # The door that matters is the one in front of `/v1/*`, which still needs a
     # token in an `Authorization` header. "Can reach port 8820" is the trust

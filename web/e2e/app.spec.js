@@ -14,7 +14,36 @@ import {
 
 // Resource-type routing, not a URL glob: `**/stats` would also match the
 // document navigation and hand the browser JSON instead of the app.
-async function mock(page, { requests, types, detail } = {}) {
+// What the server says the tailnet hop asserted. Overridable per test: the
+// approve card's whole behaviour is a function of this answer.
+const SERVED = { login: "nick@example.com", approver: true };
+
+async function mock(
+  page,
+  { requests, types, detail, who, whoStatus = 200 } = {},
+) {
+  await page.route(
+    "**/v1/whoami",
+    (route) =>
+      route.fulfill({
+        status: whoStatus,
+        contentType: "application/json",
+        body: JSON.stringify(
+          whoStatus === 200
+            ? (who ?? SERVED)
+            : {
+                error: {
+                  code: "not_attested",
+                  message:
+                    "approval is authorised by the tailnet identity " +
+                    "`tailscale serve` asserts, and this request did not arrive " +
+                    "through it",
+                },
+              },
+        ),
+      }),
+    { times: 99 },
+  );
   await page.route(
     "**/ui/**",
     (route) => {
@@ -728,20 +757,11 @@ test.describe("naming a request, and opening it", () => {
 
 test.describe("approving a request", () => {
   // The page used to have no verb at all. It has exactly one now, and it is the
-  // one that spends money: the route needs the `approve` token, the token never
-  // travels in a URL, and the ceiling is read before the commit.
-  const TOKEN = "tok-approve";
-  const tokenField = (page) => page.locator('.approve input[type="password"]');
-  const actorField = (page) =>
-    page.locator('.approve input[type="text"]').first();
-  const noteField = (page) =>
-    page.locator('.approve input[type="text"]').nth(1);
+  // one that spends money. It asked for an `approve` token and a name; it now
+  // asks the server who the tailnet hop says you are, so the card can neither
+  // leak a secret nor be handed one.
+  const noteField = (page) => page.locator('.approve input[type="text"]');
   const approveButton = (page) => page.locator(".approve .btn.primary");
-
-  async function fillCredentials(page, token = TOKEN, actor = "nick") {
-    await tokenField(page).fill(token);
-    await actorField(page).fill(actor);
-  }
 
   async function interceptApprove(page, status = 200, body = null) {
     const seen = [];
@@ -766,23 +786,20 @@ test.describe("approving a request", () => {
     return seen;
   }
 
-  test("a draft row cannot be approved until the key and a name are there", async ({
-    page,
-  }) => {
-    const seen = await interceptApprove(page);
+  test("the card names the approver and asks for nothing", async ({ page }) => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    const button = approveButton(page);
-    await expect(button).toBeDisabled();
-
-    await tokenField(page).fill(TOKEN);
-    await expect(button).toBeDisabled(); // a token is not a person
-
-    await actorField(page).fill("nick");
-    await expect(button).toBeEnabled();
-    await expect(button).toContainText("$5");
-    await expect(seen).toHaveLength(0);
+    await expect(page.locator(".approve .who")).toContainText(
+      "Approving as nick@example.com.",
+    );
+    // No credential field and no name field: both would be a second identity.
+    await expect(page.locator('.approve input[type="password"]')).toHaveCount(
+      0,
+    );
+    await expect(page.locator(".approve .fields label")).toHaveCount(1);
+    await expect(approveButton(page)).toBeEnabled();
+    await expect(approveButton(page)).toContainText("$5");
   });
 
   test("the ceiling is read between the click and the spend", async ({
@@ -792,7 +809,6 @@ test.describe("approving a request", () => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    await fillCredentials(page);
     await noteField(page).fill("ES two days");
     await approveButton(page).click();
 
@@ -802,33 +818,81 @@ test.describe("approving a request", () => {
 
     await approveButton(page).click();
     await expect.poll(() => seen.length).toBe(1);
-    expect(seen[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
-    expect(seen[0].body).toEqual({ actor: "nick", note: "ES two days" });
-
-    // The key is kept for next time; it is never put in the URL.
-    const stored = await page.evaluate(() =>
-      window.localStorage.getItem("data-download.approve-token"),
-    );
-    expect(stored).toBe(TOKEN);
+    // No credential travels: the route would refuse one anyway.
+    expect(seen[0].headers.authorization).toBeUndefined();
+    expect(seen[0].body).toEqual({ note: "ES two days" });
     await expect(page).not.toHaveURL(/token=/);
+  });
+
+  test("the token this card used to ask for is scrubbed from the browser", async ({
+    page,
+  }) => {
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+    await page.evaluate(() => {
+      window.localStorage.setItem("data-download.approve-token", "tok-approve");
+      window.localStorage.setItem("data-download.actor", "nick");
+    });
+    await page.reload();
+
+    // A secret left in storage after its door was removed reads as live. The
+    // page that asked for it is the page that deletes it.
+    const left = await page.evaluate(() => [
+      window.localStorage.getItem("data-download.approve-token"),
+      window.localStorage.getItem("data-download.actor"),
+    ]);
+    expect(left).toEqual([null, null]);
   });
 
   test("a refusal is the server's, in the server's words", async ({ page }) => {
     await interceptApprove(page, 403, {
       error: {
-        code: "insufficient_scope",
-        message: "token lacks the 'approve' scope (granted: submit, read)",
+        code: "not_an_approver",
+        message:
+          "this tailnet login is not named in DATA_DOWNLOAD_APPROVERS, " +
+          "so it may read but not approve",
       },
     });
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    await fillCredentials(page, "tok-submit");
     await approveButton(page).click();
     await approveButton(page).click();
 
     await expect(page.locator(".approve .failure")).toContainText(
-      "token lacks the 'approve' scope",
+      "not named in DATA_DOWNLOAD_APPROVERS",
+    );
+  });
+
+  test("a login that may read but not spend gets no button", async ({
+    page,
+  }) => {
+    await mock(page, {
+      detail: draftDetail,
+      who: { login: "someone-else@example.com", approver: false },
+    });
+    await page.goto("/requests/req_draft01");
+
+    await expect(page.locator(".approve .who")).toContainText(
+      "Approving as someone-else@example.com.",
+    );
+    await expect(page.locator(".approve .who")).toContainText(
+      "may read but not approve",
+    );
+    await expect(approveButton(page)).toHaveCount(0);
+  });
+
+  test("a page that did not come through serve offers no verb", async ({
+    page,
+  }) => {
+    await mock(page, { detail: draftDetail, whoStatus: 403 });
+    await page.goto("/requests/req_draft01");
+
+    // Not a disabled button: nothing here could be fixed by clicking, so the
+    // only honest thing to render is why.
+    await expect(approveButton(page)).toHaveCount(0);
+    await expect(page.locator(".approve .failure")).toContainText(
+      "did not arrive through it",
     );
   });
 

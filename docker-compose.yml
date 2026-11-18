@@ -21,6 +21,9 @@ services:
       # (genproj never commits secrets). See .env.example.
       DATA_DOWNLOAD_DB: ${DATA_DOWNLOAD_DB}
       DATA_DOWNLOAD_API_TOKENS: ${DATA_DOWNLOAD_API_TOKENS}
+      # The tailnet logins allowed to approve. Unset means nobody can: approval
+      # is authorised by the identity `tailscale serve` asserts, not by a token.
+      DATA_DOWNLOAD_APPROVERS: ${DATA_DOWNLOAD_APPROVERS:-}
     labels:
       - "homepage.group=Services"
       - "homepage.name=data-download"

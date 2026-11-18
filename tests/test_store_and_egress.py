@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from conftest import auth
 from data_download.app import create_app
-from data_download.config import Settings, load_settings, parse_tokens
+from data_download.config import Settings, load_settings, parse_approvers, parse_tokens
 from data_download.db import Store, payload_hash
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -120,13 +120,35 @@ def test_token_parsing_forms():
         "tok-a": frozenset({"submit"}),
         "tok-b": frozenset({"read"}),
     }
-    # approve is never implied by a bare token
-    assert "approve" not in parse_tokens("bare")["bare"]
+    # A retired scope is still *parseable*, so a deployed .env written for the
+    # old approve token does not fail as a whole and take the agent's token with
+    # it -- but it grants nothing.
+    assert parse_tokens("tok-a:approve") == {"tok-a": frozenset({"approve"})}
 
 
 def test_bad_token_config_does_not_crash_startup():
     settings = load_settings({"DATA_DOWNLOAD_API_TOKENS": "{not json", "DATA_DOWNLOAD_DB": ":memory:"})
     assert settings.tokens == {}
+
+
+def test_approvers_are_parsed_from_one_line_and_compared_lowercased():
+    assert parse_approvers(None) == frozenset()
+    assert parse_approvers("   ") == frozenset()
+    assert parse_approvers("nick@example.com") == frozenset({"nick@example.com"})
+    assert parse_approvers("Nick@Example.com, other@example.com") == frozenset(
+        {"nick@example.com", "other@example.com"}
+    )
+    # Whitespace is as good a separator as a comma: this is a line in a .env.
+    assert parse_approvers("a@example.com  b@example.com") == frozenset(
+        {"a@example.com", "b@example.com"}
+    )
+
+
+def test_an_unset_approver_list_is_an_empty_one_not_a_crash():
+    """Fail closed, and say so at startup: a door that refuses everybody looks
+    like a broken button unless the log names the missing setting."""
+    settings = load_settings({"DATA_DOWNLOAD_DB": ":memory:"})
+    assert settings.approvers == frozenset()
 
 
 def test_unset_db_path_falls_back_to_memory(monkeypatch):

@@ -7,50 +7,28 @@
    * `mode=ro` in a container holding no credentials — a page that could not
    * have approved anything. That container was never built; the read surface is
    * now this app's own view-models, served by the process that owns the writer.
-   * So the choice was never "safe page or unsafe page", it was "a route with a
-   * scope check, or a `docker exec` with none".
+   * So the choice was never "safe page or unsafe page", it was "a route with an
+   * identity check, or a `docker exec` with none".
    *
-   * What was kept from that argument, because it was right:
-   *   - the token is `approve`-scoped, is never granted by a bare token, and no
-   *     agent holds one, so this is a human door even on a machine route;
-   *   - the token travels in an `Authorization` header, never in a URL;
-   *   - approving is two clicks, with the ceiling between them, so a mis-tap on
-   *     a phone cannot spend anything;
-   *   - the page still cannot do anything else. No edit, no cancel, no escalate.
+   * The check has been through two shapes. It was an `approve`-scoped token
+   * pasted into this card; it is now the login `tailscale serve` asserts on the
+   * loopback hop, which the server checks against `DATA_DOWNLOAD_APPROVERS`.
+   * What that buys: the card cannot be talked into a spend by being pasted a
+   * secret, and a page in some other tab has no way to arrive from Serve's hop.
    *
-   * The token is kept in this browser's localStorage: one paste per device. It
-   * is not fetched, not embedded, and never sent anywhere but this app's own
-   * `/v1` route.
+   * What survived from the token version, because it was right: approving is
+   * two clicks with the ceiling between them, so a mis-tap on a phone cannot
+   * spend anything; and the page still cannot do anything else.
+   *
+   * This card no longer asks who you are, because it does not have to. It asks
+   * the server (`/v1/whoami`), which is the only party that knows: the identity
+   * is on the far side of a tunnel this page cannot see.
    */
-  import { postJson } from "$lib/api";
+  import { getView, postJson } from "$lib/api";
   import { bound } from "$lib/format";
 
   let { requestId, maxUsd = null, onapproved } = $props();
 
-  const TOKEN_KEY = "data-download.approve-token";
-  const ACTOR_KEY = "data-download.actor";
-
-  function read(key) {
-    try {
-      return window.localStorage.getItem(key) ?? "";
-    } catch {
-      // A browser that refuses storage still gets a working form; the token
-      // just has to be pasted again next time.
-      return "";
-    }
-  }
-
-  function write(key, value) {
-    try {
-      if (value) window.localStorage.setItem(key, value);
-      else window.localStorage.removeItem(key);
-    } catch {
-      /* storage is a convenience, not a requirement */
-    }
-  }
-
-  let token = $state("");
-  let actor = $state("");
   let note = $state("");
   // idle -> confirm -> busy; `confirm` exists so the amount is read before the
   // commit, and `busy` so a double-click cannot post twice.
@@ -58,30 +36,49 @@
   let failure = $state("");
   let done = $state(false);
 
+  // `who` is null until the server answers. `whoFailure` is the refusal the
+  // server sent when it could not tell — a request that never came through
+  // Serve. They are different states on purpose: "I do not know who you are" is
+  // not "I know who you are and you may not spend".
+  let who = $state(null);
+  let whoFailure = $state("");
+
   $effect(() => {
-    token = read(TOKEN_KEY);
-    actor = read(ACTOR_KEY);
+    const controller = new AbortController();
+    getView("/v1/whoami", { signal: controller.signal })
+      .then((body) => {
+        who = body;
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") whoFailure = error.message;
+      });
+    forgetPastedToken();
+    return () => controller.abort();
   });
+
+  /** The token this card used to ask for is gone from the server, so a copy
+   * sitting in this browser's storage is a live-looking secret with no purpose.
+   * Delete it once, on the page that asked for it. */
+  function forgetPastedToken() {
+    try {
+      window.localStorage.removeItem("data-download.approve-token");
+      window.localStorage.removeItem("data-download.actor");
+    } catch {
+      /* a browser that refuses storage has nothing to forget */
+    }
+  }
 
   const ceiling =
     maxUsd === null || maxUsd === undefined ? null : bound(maxUsd);
-  const ready = $derived(token.trim().length > 0 && actor.trim().length > 0);
-
-  function saveCredentials() {
-    write(TOKEN_KEY, token.trim());
-    write(ACTOR_KEY, actor.trim());
-  }
+  const ready = $derived(who?.approver === true);
 
   async function approve() {
     stage = "busy";
     failure = "";
     try {
-      saveCredentials();
-      await postJson(
-        `/v1/requests/${encodeURIComponent(requestId)}/approve`,
-        { actor: actor.trim(), note: note.trim() || null },
-        { token: token.trim() },
-      );
+      await postJson(`/v1/requests/${encodeURIComponent(requestId)}/approve`, {
+        note: note.trim() || null,
+      });
       done = true;
       onapproved?.();
     } catch (error) {
@@ -126,57 +123,48 @@
         Cancel
       </button>
     </div>
+  {:else if whoFailure}
+    <!-- No identity, so there is no verb to offer: not a disabled button, which
+         would promise that something here could be fixed by clicking. -->
+    <p class="failure">{whoFailure}</p>
+  {:else if !who}
+    <p class="quiet">Asking the server who this door thinks you are…</p>
   {:else}
-    <div class="fields">
-      <label>
-        <span class="micro">approving token</span>
-        <input
-          type="password"
-          bind:value={token}
-          placeholder="paste the approve token"
-          autocomplete="off"
-          spellcheck="false"
-        />
-      </label>
-      <label>
-        <span class="micro">as</span>
-        <input
-          type="text"
-          bind:value={actor}
-          placeholder="your name"
-          autocomplete="off"
-          spellcheck="false"
-        />
-      </label>
-      <label class="wide">
-        <span class="micro">note <span class="opt">(optional)</span></span>
-        <input
-          type="text"
-          bind:value={note}
-          placeholder="why this window is worth the money"
-          autocomplete="off"
-        />
-      </label>
-    </div>
-    <div class="row">
-      <button
-        class="btn primary"
-        type="button"
-        disabled={!ready || stage === "busy"}
-        onclick={() => {
-          failure = "";
-          stage = "confirm";
-        }}
-      >
-        Approve{ceiling ? ` up to ${ceiling}` : ""}
-      </button>
-      {#if !ready}
-        <span class="quiet hint"
-          >Needs the approve token and a name: an approval records who asked for
-          the spend.</span
+    <p class="who">
+      Approving as <strong>{who.login}</strong>.
+      {#if !who.approver}
+        <span class="quiet"
+          >That login may read but not approve: it is not named in
+          <code>DATA_DOWNLOAD_APPROVERS</code>.</span
         >
       {/if}
-    </div>
+    </p>
+    {#if ready}
+      <div class="fields">
+        <label>
+          <span class="micro">note <span class="opt">(optional)</span></span>
+          <input
+            type="text"
+            bind:value={note}
+            placeholder="why this window is worth the money"
+            autocomplete="off"
+          />
+        </label>
+      </div>
+      <div class="row">
+        <button
+          class="btn primary"
+          type="button"
+          disabled={stage === "busy"}
+          onclick={() => {
+            failure = "";
+            stage = "confirm";
+          }}
+        >
+          Approve{ceiling ? ` up to ${ceiling}` : ""}
+        </button>
+      </div>
+    {/if}
   {/if}
   {#if failure}
     <p class="failure">{failure}</p>
@@ -195,9 +183,16 @@
     color: var(--ink);
   }
 
+  .who {
+    margin: 8px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink);
+  }
+
   .fields {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
     gap: 10px;
     margin: 8px 0 12px;
   }
@@ -206,10 +201,6 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-  }
-
-  .fields .wide {
-    grid-column: 1 / -1;
   }
 
   .fields input {
@@ -237,11 +228,6 @@
     flex-wrap: wrap;
   }
 
-  .hint {
-    font-size: 11px;
-    max-width: 34ch;
-  }
-
   .note {
     margin: 8px 0 0;
     font-size: 12px;
@@ -252,11 +238,5 @@
     margin: 10px 0 0;
     font-size: 12px;
     color: var(--bad);
-  }
-
-  @media (max-width: 620px) {
-    .fields {
-      grid-template-columns: 1fr;
-    }
   }
 </style>

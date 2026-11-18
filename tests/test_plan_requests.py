@@ -192,12 +192,19 @@ def test_read_only_token_cannot_submit(client):
     assert response.json()["error"]["code"] == "insufficient_scope"
 
 
-def test_submit_token_and_approve_only_token_cannot_read(client):
+def test_a_token_without_read_cannot_read(client):
+    """Scopes are additive and named: `submit` alone is a door that writes and
+    cannot look. (The old second half of this test used an `approve`-only token;
+    that scope is retired, so the token with no `read` is now a submit-only
+    one.)"""
     submitted = _submit(client)
     request_id = submitted.json()["request_id"]
 
-    assert client.get("/v1/requests", headers=auth("tok-approve")).status_code == 403
-    assert client.get(f"/v1/requests/{request_id}", headers=auth("tok-approve")).status_code == 403
+    assert client.get("/v1/requests", headers=auth("tok-submit-only")).status_code == 403
+    assert (
+        client.get(f"/v1/requests/{request_id}", headers=auth("tok-submit-only")).status_code
+        == 403
+    )
 
 
 def test_missing_request_is_404_not_found(client):

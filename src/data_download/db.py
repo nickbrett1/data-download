@@ -744,9 +744,9 @@ class Store:
         approval is one row or the audit trail is not an audit trail.
 
         `context` is recorded as-is beside the actor, note and job hash. The CLI
-        passes nothing; the HTTP door passes `{"via": "http", "token": <sha256
-        prefix>}`, so an approval can be told apart from a shell one and two
-        browsers apart from each other without either credential being stored.
+        passes nothing; the HTTP door passes `{"via": "serve"}`, so an approval
+        can be told apart from a shell one. There is no credential to
+        fingerprint any more: the actor *is* the tailnet login Serve asserted.
         """
         ts = now or utcnow()
         async with self._write_lock:
