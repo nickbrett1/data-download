@@ -31,7 +31,11 @@ services:
     labels:
       - "homepage.group=Services"
       - "homepage.name=data-download"
-      - "homepage.href=http://ryzen:8820/"
+      # The serve URL, not the host and port: `tailscale serve` is what adds
+      # the identity header the approve door needs, and it only does that for
+      # requests it proxies. A link to ryzen:8820 is a link to a page whose
+      # button cannot work.
+      - "homepage.href=https://ryzen.tail86fd19.ts.net/"
       - "homepage.widget.type=customapi"
       - "homepage.widget.url=http://localhost:8820/healthz"
       - "homepage.widget.mappings[0].field=status"

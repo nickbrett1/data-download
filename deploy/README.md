@@ -117,6 +117,13 @@ Append `deploy/homepage-services.yaml` to your Homepage `services.yaml`
 (and enable the `homepage` Docker provider) to show a health widget for the
 service.
 
+**Point the `href` at the serve URL.** `https://<node>.<tailnet>.ts.net/`, not
+`http://<host>:8820/`. The host-and-port link still reads (the read projection
+is public), but its approve button cannot work: only `tailscale serve` adds the
+identity header, and only for requests it proxies. The widget URL stays on
+loopback — Homepage is server-side, so `http://localhost:8820/healthz` is
+reaching the published port on the NAS, and `/healthz` needs no identity.
+
 **Never put a token in `href`.** Reading needs no credential: the UI is a
 public read-only projection (see the main README, "What is public, and what is
 not"). A `homepage.href=?token=…` would write a live credential into a Docker
