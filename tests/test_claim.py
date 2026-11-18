@@ -220,13 +220,28 @@ def test_v_stuck_reports_an_expired_lease_only_once_it_has_expired(client, setti
     assert [r["request_id"] for r in expired] == [request_id]
 
 
-def test_v_stuck_reports_an_approved_row_nobody_claimed(client, settings):
+def test_an_approved_row_nobody_claimed_is_a_queue_not_breakage(client, settings):
+    """It used to be a stuck condition, behind a 900 s claim window.
+
+    The window is gone and so is the condition: an approved row is unclaimed
+    from the moment it is approved until a claim takes it, which `v_pending`
+    says straight away. Nothing here needs to age first, and nothing here is
+    broken -- which is why the dashboard shows it under "Approval" rather than
+    counting it among the faults.
+    """
     request_id = _approved(client, settings)
-    _run(_exec(settings.db_path, "UPDATE requests SET created_at = ? WHERE id = ?",
-               (shift_seconds(iso(), -3600), request_id)))
+
     stuck = _run(_call(settings.db_path, "view", "v_stuck"))
-    unclaimed = [r for r in stuck if r["condition"] == "approved_unclaimed"]
-    assert [r["request_id"] for r in unclaimed] == [request_id]
+    assert [r for r in stuck if r["condition"] == "approved_unclaimed"] == []
+
+    pending = _run(_call(settings.db_path, "view", "v_pending"))
+    assert [r["id"] for r in pending if r["approved_unclaimed"]] == [request_id]
+
+    # Taking the claim moves it out of `approved` entirely, so it stops being
+    # "waiting on me" -- the queue drains by being worked, not by ageing out.
+    _run(_call(settings.db_path, "claim", request_id, "owner-a"))
+    pending = _run(_call(settings.db_path, "view", "v_pending"))
+    assert [r["id"] for r in pending] == []
 
 
 def test_a_row_with_no_code_ref_cannot_be_claimed(client, settings):

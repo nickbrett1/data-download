@@ -125,13 +125,24 @@ SELECT id,
  WHERE state IN ('succeeded','landed_with_errors','failed')
  ORDER BY updated_at DESC, rowid DESC;
 
--- What is broken. Exactly four conditions, all breakage (§7.8.1):
---   1. approved_unclaimed - approved past the claim window and nobody picked it up
---   2. lease_expired      - claimed, lease ran out, the claimant died mid-run
---   3. running_too_long   - running with a valid lease but no progress for >6h
---   4. repeat_failure     - one JOB_HASH has >=3 failed rows
+-- What is broken. Exactly three conditions, all breakage (§7.8.1):
+--   1. lease_expired      - claimed, lease ran out, the claimant died mid-run
+--   2. running_too_long   - running with a valid lease but no progress for >6h
+--   3. repeat_failure     - one JOB_HASH has >=3 failed rows
 --
--- Condition 4 groups on `job_hash`, not `payload_hash` as §7.8.1 prints it.
+-- "Approved, and nobody has picked it up" used to be a fourth, behind a 900 s
+-- claim window measured from `created_at` -- the filing, not the approval. A
+-- request is normally filed, left waiting, and approved some time later, so the
+-- window had always elapsed before anyone looked: every approval was instantly
+-- reported as stuck, with the detail "older than the claim window" printed one
+-- second after approving it. There is no window worth having, because there is
+-- nothing to wait for -- an approved row is unclaimed from the moment it is
+-- approved until a claim moves it to `running`, and `v_pending.approved_unclaimed`
+-- already says so, under "Approval". It is also not breakage: money authorised
+-- and waiting for a worker is a queue, not a fault. So it is gone from here
+-- rather than made instant, which would have painted every approval red.
+--
+-- Condition 3 groups on `job_hash`, not `payload_hash` as §7.8.1 prints it.
 -- As written it was unreachable (payload_hash was UNIQUE, so a second row with
 -- the same value could not exist) and, now that §5.6 drops that constraint, it
 -- would be reachable but *wrong*: identical content is evidence of two Requests,
@@ -143,28 +154,21 @@ SELECT id,
 -- `blocked` is deliberately NOT here: waiting on a plan is not breakage
 -- (§7.9.4), it is `v_blocked`.
 --
--- Thresholds are literals because there is nowhere else to put them this
--- phase: 900 s claim window, 6 h no-progress, 3 failed rows.
+-- Three conditions, and thresholds as literals because there is nowhere else to
+-- put them this phase: 6 h no-progress, 3 failed rows.
 -- Dropped and recreated like v_requests: phase 2 migrates `plan_hash` to
 -- `job_hash`, and CREATE VIEW IF NOT EXISTS would leave a deployed store on a
 -- definition that selects a column the migration removed.
 DROP VIEW IF EXISTS v_stuck;
 CREATE VIEW v_stuck AS
 SELECT request_id, state, condition, age_seconds, detail FROM (
+  -- The aliases live on the first branch only, as they always have: the outer
+  -- SELECT names the union's columns from here.
   SELECT id AS request_id,
          state,
-         'approved_unclaimed' AS condition,
-         CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) AS age_seconds,
-         'approved but never claimed (older than the claim window)' AS detail
-    FROM requests
-   WHERE state = 'approved'
-     AND (julianday('now') - julianday(created_at)) * 86400 > 900
-  UNION ALL
-  SELECT id,
-         state,
-         'lease_expired',
-         CAST((julianday('now') - julianday(lease_until)) * 86400 AS INTEGER),
-         'claimed, lease expired - the claimant died mid-run'
+         'lease_expired' AS condition,
+         CAST((julianday('now') - julianday(lease_until)) * 86400 AS INTEGER) AS age_seconds,
+         'claimed, lease expired - the claimant died mid-run' AS detail
     FROM requests
    WHERE state = 'running'
      AND lease_until IS NOT NULL

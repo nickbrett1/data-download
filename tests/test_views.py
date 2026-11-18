@@ -31,7 +31,7 @@ def _seed_all(path: Path) -> None:
     seed(
         path,
         [
-            # 1. approved, old, nobody claimed it
+            # 1. approved, nobody claimed it (a queue, not breakage)
             {
                 "id": "seed_approved",
                 "state": "approved",
@@ -107,15 +107,49 @@ def _seed_all(path: Path) -> None:
     )
 
 
-def test_v_stuck_is_exactly_the_four_breakage_conditions(client, db_path):
+def test_v_stuck_is_exactly_the_three_breakage_conditions(client, db_path):
     _seed_all(db_path)
     rows = read_view(db_path, "v_stuck")
     assert {row["condition"] for row in rows} == {
-        "approved_unclaimed",
         "lease_expired",
         "running_too_long",
         "repeat_failure",
     }
+
+
+def test_an_approval_is_unclaimed_without_a_window_and_without_being_broken(
+    client, db_path
+):
+    """The window is gone, and so is the "breakage" label it hung on.
+
+    There used to be a 900 s claim window here, measured from `created_at` --
+    the filing, not the approval -- so any request approved more than 15 min
+    after it was filed was instantly reported as stuck, `detail` and all. Both
+    halves of the old behaviour are asserted dead: it is never a stuck
+    condition at any age, and it is nonetheless flagged as unclaimed straight
+    away, by the column the "Approval" facet already reads.
+    """
+    seed(
+        db_path,
+        [
+            {
+                "id": "just_approved",
+                "state": "approved",
+                "job_json": PLAN_JSON,
+                # Filed five hours ago, approved a moment ago: the old view
+                # called this stuck the instant the approval landed.
+                "created_at": iso(-timedelta(hours=5)),
+                "updated_at": iso(),
+            }
+        ],
+    )
+    assert read_view(db_path, "v_stuck") == []
+
+    pending = read_view(db_path, "v_pending")
+    assert [row["approved_unclaimed"] for row in pending] == [1]
+    book = _book(client)
+    assert book["rows"][0]["facet"] == "todo"
+    assert book["rows"][0]["approved_unclaimed"] == 1
 
 
 def test_v_stuck_excludes_blocked(client, db_path):
@@ -208,11 +242,10 @@ def test_dashboard_is_one_list_with_a_badge_per_row(client, db_path):
 
     by_id = {row["id"]: row for row in book["rows"]}
 
-    # All four breakage conditions are labelled inline, not sectioned.
+    # Both single-row breakage conditions are labelled inline, not sectioned.
     for request_id, condition in (
         ("seed_lease", "lease_expired"),
         ("seed_hung", "running_too_long"),
-        ("seed_approved", "approved_unclaimed"),
     ):
         assert by_id[request_id]["stuck_condition"] == condition
         assert by_id[request_id]["facet"] == "broken"
@@ -256,14 +289,20 @@ def test_the_facet_index_partitions_the_rows(client, db_path):
     assert sorted(bucketed) == sorted(row["id"] for row in book["rows"])
 
     broken = {row["id"] for row in book["facets"]["broken"]}
-    assert {"seed_lease", "seed_approved"} <= broken
+    assert "seed_lease" in broken
+    # Approved-and-unclaimed is a queue, not a fault: it belongs under
+    # "Approval" with the drafts, where the badge can say what it is waiting on.
+    assert "seed_approved" not in broken
+    assert "seed_approved" in {row["id"] for row in book["facets"]["todo"]}
     assert "seed_blocked" not in broken and "seed_draft" not in broken
 
     no_plan = {row["id"] for row in book["facets"]["no_plan"]}
     assert no_plan == {"seed_blocked"}
 
     todo = {row["id"] for row in book["facets"]["todo"]}
-    assert todo == {"seed_draft"}
+    # The approved-and-unclaimed row joins the draft: both are waiting on a
+    # person to start something, and the badge tells them apart.
+    assert todo == {"seed_draft", "seed_approved"}
 
 
 def test_a_row_needs_a_human_in_the_order_the_ui_labels_it(client, db_path):
