@@ -171,13 +171,38 @@ offers one button; approving is two clicks with the ceiling between them, and
 the record shows a `human` event with that login as the actor, the job hash and
 `via: serve`.
 
-Three failure modes, each with its own sentence on the page:
+### When it refuses: read the peer it names
 
-| what you see | what is true |
+Every refusal carries the address the request arrived from, because there are
+three different hops that can go wrong and only one of them is a setting.
+
+| what the page says | what is actually wrong |
 | --- | --- |
-| "did not arrive through it" | the page was reached by IP, not by the serve URL — or Serve is not running |
-| "may read but not approve" | you are through Serve, but that login is not in `DATA_DOWNLOAD_APPROVERS` |
-| the button is missing entirely | same two cases; the card renders no verb it cannot honour |
+| `no Tailscale-User-Login header: this request arrived from 192.168.1.40 directly` | you used the host and port (`ryzen:8820`), not the serve URL. Being *on* the tailnet adds nothing — the header comes from `tailscale serve`, not from the network |
+| `a Tailscale-User-Login header arrived from 172.17.0.1, which is not a hop this service trusts` | Serve is working, but Docker's port forward re-originated the connection: the container sees the bridge gateway, not loopback. Add that address to `DATA_DOWNLOAD_TRUSTED_PROXIES` |
+| `this tailnet login is not named in DATA_DOWNLOAD_APPROVERS` | both hops are fine; the login is not on the allowlist |
+
+The middle case is the container tax and the reason the setting exists. Serve on
+the host connects to `127.0.0.1:8820`; Docker forwards that into the container
+from the bridge gateway, so "loopback" is no longer the peer. Two ways to deal
+with it:
+
+```bash
+# 1. name the gateway the refusal printed
+DATA_DOWNLOAD_TRUSTED_PROXIES=172.17.0.1
+
+# 2. or take the container out of the path
+#    (network_mode: host, so Serve's connection really is loopback)
+```
+
+If you take option 1, bind the published port to loopback
+(`127.0.0.1:8820:8820`): the trust in that address is only justified while
+nothing else can reach the container through it.
+
+`DATA_DOWNLOAD_APPROVERS` unset means **nobody** may approve: the door fails
+closed rather than treating "has a tailnet" as "may spend". Funnel (public)
+traffic carries no identity header at all, so approval cannot work over Funnel
+by construction.
 
 `DATA_DOWNLOAD_APPROVERS` unset means **nobody** may approve: the door fails
 closed rather than treating "has a tailnet" as "may spend". Funnel (public)

@@ -115,12 +115,15 @@ with arrives with a valid identity of its own.
 What that buys over a token: the record names *who* spent, not *someone holding
 the key*; and a page in the approver's own browser cannot spend, because a
 cross-origin `POST` (or a DNS-rebinding one, which defeats `Origin` checks) has
-no way to arrive from Serve's loopback hop. What it costs: Serve must be the
-only thing that reaches this process *on loopback*, which is a property of the
-host's config, not of the code — a direct LAN or container-network request is
-refused because its peer is not loopback, even though it reached the same
-process. Publishing the port on `127.0.0.1` is still the right default, because
-it keeps the read surface off the LAN as well. `DATA_DOWNLOAD_APPROVERS` unset
+no way to arrive from Serve's hop. What it costs: Serve must be the only thing
+that reaches this process *on the trusted address*, which is a property of the
+host's config, not of the code -- and inside a container that address is the
+bridge gateway rather than loopback, because Docker's port forward re-originates
+the connection (`DATA_DOWNLOAD_TRUSTED_PROXIES` names it; unset trusts loopback
+only). A direct LAN or container-network request is refused because its peer is
+not on that list, even though it reached the same process. Publishing the port
+on `127.0.0.1` is still the right default, because it keeps the read surface off
+the LAN as well. `DATA_DOWNLOAD_APPROVERS` unset
 means nobody may approve — the door fails closed rather than treating "has a
 tailnet" as "may spend".
 

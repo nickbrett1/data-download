@@ -769,10 +769,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         (200 with `approver: false`), because the second reader is signed in and
         needs to be told why the button is off, not shown a failure.
         """
-        login = auth.tailnet_login(request)
+        settings = request.app.state.settings
+        login = auth.tailnet_login(request, settings)
         if login is None:
-            raise errors.not_attested()
-        allowed = login.lower() in request.app.state.settings.approvers
+            raise errors.not_attested(
+                request.client.host if request.client else None,
+                bool(request.headers.get(auth.LOGIN_HEADER, "").strip()),
+            )
+        allowed = login.lower() in settings.approvers
         return JSONResponse(content={"login": login, "approver": allowed})
 
     @app.post("/v1/requests/{request_id}/approve")

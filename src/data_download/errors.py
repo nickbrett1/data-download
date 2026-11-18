@@ -59,14 +59,32 @@ def insufficient_scope(required: str, granted: frozenset[str]) -> ApiError:
     )
 
 
-def not_attested() -> ApiError:
-    return ApiError(
-        403,
-        NOT_ATTESTED,
-        "approval is authorised by the tailnet identity `tailscale serve` asserts, "
-        "and this request did not arrive through it: no Tailscale-User-Login "
-        "header from a loopback peer. Open the page at the serve URL.",
-    )
+def not_attested(peer: str | None = None, had_login: bool = False) -> ApiError:
+    """Refuse, and say which of the two hops is missing.
+
+    "Not through Serve" has three causes that used to share one sentence: the
+    header never arrived (the page was reached by IP), the header arrived from a
+    peer that is not the Serve hop (a proxy, a sibling container, a rebound
+    domain), or the peer *is* Serve but its address is not on the trusted list
+    (in Docker, the port forward re-originates the connection, so Serve's
+    loopback connection reaches the container from the bridge gateway). Naming
+    the peer is what makes the third case one env var instead of a mystery.
+    """
+    if had_login:
+        message = (
+            f"a Tailscale-User-Login header arrived from {peer or 'an unknown peer'}, "
+            "which is not a hop this service trusts, so its identity is not "
+            "believed. If that address is `tailscale serve` in front of this "
+            "container, name it in DATA_DOWNLOAD_TRUSTED_PROXIES."
+        )
+    else:
+        message = (
+            f"no Tailscale-User-Login header: this request arrived from "
+            f"{peer or 'an unknown peer'} directly, not through `tailscale serve`. "
+            "Open the page at the serve URL (https://<node>.<tailnet>.ts.net), "
+            "not the host and port."
+        )
+    return ApiError(403, NOT_ATTESTED, message, peer=peer)
 
 
 def not_an_approver() -> ApiError:

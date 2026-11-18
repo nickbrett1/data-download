@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import math
@@ -23,6 +24,14 @@ KNOWN_SCOPES = frozenset({"submit", "read", "escalate", "approve", "deploy"})
 # scopes.
 DEFAULT_SCOPES = frozenset({"submit", "read"})
 
+# The only peer that can be `tailscale serve` when this process is not in a
+# container. Everything else -- a LAN client, a sibling container, a rebound
+# domain -- carries a header it wrote itself.
+LOOPBACK_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+)
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -33,6 +42,11 @@ class Settings:
     # The tailnet logins allowed to approve, lowercased. Empty means nobody:
     # the door fails closed rather than treating "has a tailnet" as "may spend".
     approvers: frozenset[str] = field(default_factory=frozenset)
+    # Which peer addresses are allowed to assert identity. Loopback only, by
+    # default: that is the Serve hop when this runs directly on the host. In a
+    # container the hop arrives from the bridge gateway instead, which is why
+    # this is a setting rather than a constant.
+    trusted_proxies: tuple = LOOPBACK_NETWORKS
     # The commit this process runs (§4.1). Resolved here rather than in the app
     # so a test can name it, and so the one resolution per process is visible in
     # the settings rather than hidden in a lifespan side effect.
@@ -115,6 +129,25 @@ def _warn_inert_approve(tokens: dict[str, frozenset[str]]) -> dict[str, frozense
     return tokens
 
 
+def parse_trusted_proxies(raw: str | None) -> tuple:
+    """Parse `DATA_DOWNLOAD_TRUSTED_PROXIES`: addresses or CIDRs, comma separated.
+
+    Unset means loopback. A single address is read as a /32 (or /128), because
+    "the gateway Docker showed me" is the thing an operator actually has to hand.
+    A value this module cannot parse is dropped with a warning: losing an entry
+    makes the door stricter, never looser, so it is not worth refusing to boot.
+    """
+    if not raw or not raw.strip():
+        return LOOPBACK_NETWORKS
+    networks = []
+    for part in raw.replace(",", " ").split():
+        try:
+            networks.append(ipaddress.ip_network(part.strip(), strict=False))
+        except ValueError:
+            log.warning("DATA_DOWNLOAD_TRUSTED_PROXIES: %r is not an address - ignored", part)
+    return tuple(networks) or LOOPBACK_NETWORKS
+
+
 def parse_approvers(raw: str | None) -> frozenset[str]:
     """Parse `DATA_DOWNLOAD_APPROVERS`: logins, comma or whitespace separated.
 
@@ -167,6 +200,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         log.error("DATA_DOWNLOAD_API_TOKENS is unusable (%s) - no token will authenticate", exc)
         tokens = {}
 
+    trusted_proxies = parse_trusted_proxies(env.get("DATA_DOWNLOAD_TRUSTED_PROXIES"))
     approvers = parse_approvers(env.get("DATA_DOWNLOAD_APPROVERS"))
     if not approvers:
         # Loud, for the same reason the in-memory store is: a door that refuses
@@ -193,6 +227,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         plan_types_dir=find_plan_types_dir(env.get("DATA_DOWNLOAD_PLAN_TYPES_DIR")),
         port=port,
         approvers=approvers,
+        trusted_proxies=trusted_proxies,
         code_ref=resolve_code_ref(env),
     )
 

@@ -24,6 +24,10 @@ services:
       # The tailnet logins allowed to approve. Unset means nobody can: approval
       # is authorised by the identity `tailscale serve` asserts, not by a token.
       DATA_DOWNLOAD_APPROVERS: ${DATA_DOWNLOAD_APPROVERS:-}
+      # Which peer may assert identity. Unset trusts loopback only, which is
+      # right when the app runs on the host. Behind Docker's port forward the
+      # Serve hop arrives from the bridge gateway, so name that address here.
+      DATA_DOWNLOAD_TRUSTED_PROXIES: ${DATA_DOWNLOAD_TRUSTED_PROXIES:-}
     labels:
       - "homepage.group=Services"
       - "homepage.name=data-download"

@@ -31,10 +31,14 @@ from fastapi import Request
 
 from . import errors
 
-# The header `tailscale serve` adds, and the only peer address that can be
+# The header `tailscale serve` adds, and the only kind of peer that can be
 # trusted to have added it. Serve proxies to a local port, so the hop that
-# asserts identity is this process's own loopback; anything arriving from
-# anywhere else carries a header it could have written itself.
+# asserts identity is this process's own loopback -- except inside a container,
+# where Docker's port forward re-originates the connection and the container
+# sees the bridge gateway instead. That address is what
+# `DATA_DOWNLOAD_TRUSTED_PROXIES` is for; the default trusts nothing but
+# loopback, and an address is only worth adding if nothing else can originate
+# from it.
 LOGIN_HEADER = "tailscale-user-login"
 
 
@@ -63,32 +67,40 @@ def require_scope(request: Request, scope: str) -> tuple[str, frozenset[str]]:
     return token, scopes
 
 
-def _is_loopback(host: str | None) -> bool:
-    """`127.0.0.1`, `::1`, and the IPv4-mapped form a v6 socket reports.
-
-    Compared as addresses rather than strings: `127.0.0.1` and `127.0.0.2` are
-    both loopback, and `localhost` is not an address at all -- but a client that
-    connects by name still arrives from one, so the address is what we judge.
-    """
+def _addr(host: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     if not host:
-        return False
+        return None
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
-        return False
+        return None
+    # A v6 socket reports an IPv4 peer in mapped form; compare what it means.
     if addr.version == 6 and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
-    return addr.is_loopback
+        return addr.ipv4_mapped
+    return addr
 
 
-def tailnet_login(request: Request) -> str | None:
+def _is_trusted(host: str | None, networks: tuple) -> bool:
+    """Is this peer a hop allowed to assert identity?
+
+    Compared as addresses, not strings: `127.0.0.1` and `127.0.0.2` are both
+    loopback, and a proxy may connect from any address in its range.
+    """
+    addr = _addr(host)
+    return addr is not None and any(addr in net for net in networks)
+
+
+def tailnet_login(request: Request, settings=None) -> str | None:
     """The tailnet identity behind this request, or None.
 
-    None is the answer to three different questions -- no header, no loopback
-    peer, no tailnet at all -- because from here they are one fact: nobody
-    vouched for this request. The caller must not guess which.
+    None is the answer to several different questions -- no header, an
+    untrusted peer, no tailnet at all -- because from here they are one fact:
+    nobody vouched for this request. `require_approver` asks the questions
+    separately so its refusal can name the one that failed.
     """
-    if not _is_loopback(request.client.host if request.client else None):
+    settings = settings or request.app.state.settings
+    peer = request.client.host if request.client else None
+    if not _is_trusted(peer, settings.trusted_proxies):
         return None
     return request.headers.get(LOGIN_HEADER, "").strip() or None
 
@@ -102,10 +114,13 @@ def require_approver(request: Request) -> str:
     token: a tailnet is a network, not a person, and a shared-in device gets a
     perfectly valid identity of its own.
     """
-    login = tailnet_login(request)
+    settings = request.app.state.settings
+    login = tailnet_login(request, settings)
     if login is None:
-        raise errors.not_attested()
-    approvers = request.app.state.settings.approvers
+        peer = request.client.host if request.client else None
+        had_login = bool(request.headers.get(LOGIN_HEADER, "").strip())
+        raise errors.not_attested(peer, had_login)
+    approvers = settings.approvers
     if login.lower() not in approvers:
         raise errors.not_an_approver()
     return login

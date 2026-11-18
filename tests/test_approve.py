@@ -12,6 +12,7 @@ against a route stopped holding, and what of it was kept.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import subprocess
 import sys
@@ -264,37 +265,67 @@ def test_a_second_approval_through_the_route_writes_nothing(client, settings):
     assert len([e for e in _events(settings.db_path, request_id) if e["event"] == "approved"]) == 1
 
 
+def _fake_request(peer, login=None):
+    return type(
+        "Req",
+        (),
+        {
+            "client": type("Client", (), {"host": peer})(),
+            "headers": {"tailscale-user-login": login} if login else {},
+        },
+    )()
+
+
 @pytest.mark.parametrize(
-    "peer, header, expected",
+    "peer, login, expected",
     [
-        # The Serve hop, and the two spellings a loopback peer can have.
+        # The Serve hop, and the spellings a loopback peer can have.
         ("127.0.0.1", "nick@example.com", "nick@example.com"),
         ("::1", "nick@example.com", "nick@example.com"),
         ("::ffff:127.0.0.1", "nick@example.com", "nick@example.com"),
         # No header: nothing was asserted.
-        ("127.0.0.1", "", None),
+        ("127.0.0.1", None, None),
         # A header, from a peer that could have written it itself. The tailnet
         # address is the case that matters: that is what a curl on the tailnet,
         # a sibling container, or a rebound domain would look like.
         ("100.64.0.9", "nick@example.com", None),
         ("192.168.1.5", "nick@example.com", None),
+        ("172.17.0.1", "nick@example.com", None),
         (None, "nick@example.com", None),
     ],
 )
-def test_the_identity_header_only_counts_from_loopback(peer, header, expected):
-    """The header is the identity only when the peer that sent it is the local
-    Serve hop. From anywhere else it is a string the caller wrote."""
+def test_the_identity_header_only_counts_from_a_trusted_hop(peer, login, expected):
+    """The header is identity only when the peer that sent it is a hop allowed
+    to assert it. From anywhere else it is a string the caller wrote."""
     from data_download import auth
+    from data_download.config import Settings
 
-    request = type(
-        "Req",
-        (),
-        {
-            "client": type("Client", (), {"host": peer})(),
-            "headers": {"tailscale-user-login": header} if header else {},
-        },
-    )()
-    assert auth.tailnet_login(request) == expected
+    assert auth.tailnet_login(_fake_request(peer, login), Settings(db_path=":memory:")) == expected
+
+
+def test_a_container_gateway_can_be_named_as_the_serve_hop():
+    """Docker's port forward re-originates the connection, so the container sees
+    the bridge gateway rather than loopback. That address is configurable, and
+    nothing else is trusted by the change."""
+    from data_download import auth
+    from data_download.config import Settings, parse_trusted_proxies
+
+    settings = Settings(
+        db_path=":memory:",
+        trusted_proxies=parse_trusted_proxies("172.17.0.1"),
+    )
+    assert auth.tailnet_login(_fake_request("172.17.0.1", "nick@example.com"), settings) == "nick@example.com"
+    # One address named is not a range: a sibling container's own address, or
+    # loopback for that matter, is still not trusted.
+    assert auth.tailnet_login(_fake_request("172.17.0.2", "nick@example.com"), settings) is None
+    assert auth.tailnet_login(_fake_request("192.168.1.5", "nick@example.com"), settings) is None
+
+
+def test_an_unparsable_trusted_proxy_falls_back_to_loopback_only():
+    from data_download.config import LOOPBACK_NETWORKS, parse_trusted_proxies
+
+    assert parse_trusted_proxies("not-an-address") == LOOPBACK_NETWORKS
+    assert parse_trusted_proxies("10.0.0.0/8, bad") == (ipaddress.ip_network("10.0.0.0/8"),)
 
 
 def test_a_direct_request_is_refused_with_the_repair_in_the_message(client):

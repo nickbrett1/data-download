@@ -35,9 +35,8 @@ async function mock(
                 error: {
                   code: "not_attested",
                   message:
-                    "approval is authorised by the tailnet identity " +
-                    "`tailscale serve` asserts, and this request did not arrive " +
-                    "through it",
+                    "no Tailscale-User-Login header: this request arrived " +
+                    "from 192.168.1.40 directly, not through `tailscale serve`.",
                 },
               },
         ),
@@ -892,7 +891,7 @@ test.describe("approving a request", () => {
     // only honest thing to render is why.
     await expect(approveButton(page)).toHaveCount(0);
     await expect(page.locator(".approve .failure")).toContainText(
-      "did not arrive through it",
+      "no Tailscale-User-Login header",
     );
   });
 
