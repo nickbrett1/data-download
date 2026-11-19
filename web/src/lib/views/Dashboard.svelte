@@ -20,7 +20,7 @@
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import FilterPanel from "$lib/components/nb/FilterPanel.svelte";
   import { getView } from "$lib/api";
-  import { filed, stateDetail, stateLabel, stateTone } from "$lib/format";
+  import { filed, stateDetail, stateLabel, stateTone, usd } from "$lib/format";
 
   const FACET_LABELS = {
     broken: "Broken",
@@ -102,18 +102,21 @@
     return data.rows.filter((row) => row.facet === show);
   });
 
-  // No estimate column yet. `estimate_usd` is NULL on every row until a phase
-  // prices something, so the column was a dash from top to bottom -- an empty
-  // cell pretending to be a fact. The detail page still shows the estimate and
-  // the ceiling, and the column comes back the day there is a number in it.
-  // Three columns, because there are three questions a row answers: what is it,
-  // where is it, when was it asked for. A fourth -- "why it matters" -- was
-  // tried and removed: on a finished row it repeated the badge or said nothing,
-  // and its useful half (what a blocked row is short of) is a qualification of
-  // the state, so it lives under the badge now. See `stateDetail`.
+  // Four columns: what it is, where it is, what it costs, when it was asked
+  // for. The quote column spent the first three phases as a dash from top to
+  // bottom, because nothing priced anything; phase 4 fills it at submit, so it
+  // is a fact now rather than an empty cell dressed as one. It stays a dash
+  // only where there is no price to show: a blocked row has no Job to quote and
+  // the schema forbids it an estimate.
+  //
+  // A fifth -- "why it matters" -- was tried and removed: on a finished row it
+  // repeated the badge or said nothing, and its useful half (what a blocked row
+  // is short of) is a qualification of the state, so it lives under the badge
+  // now. See `stateDetail`.
   const columns = [
     { label: "request", width: "minmax(11rem, 1.9fr)" },
     { label: "state", width: "minmax(9rem, 0.9fr)" },
+    { label: "quote", align: "end", width: "minmax(5rem, 0.5fr)" },
     { label: "filed", align: "end" },
   ];
 </script>
@@ -191,6 +194,11 @@
               >
             {/if}
           </span>
+          <!-- The quote is a number, and it is the number the ceiling was
+               compared against -- four decimals, because 4c and 4.9c are
+               different purchases. A row with nothing to quote says so with a
+               dash, not a zero: `$0.0000` would read as a free download. -->
+          <span class="num quote">{usd(request.estimate_usd)}</span>
           <span class="num filed">{filed(request.created_at)}</span>
         {/snippet}
       </DataTable>

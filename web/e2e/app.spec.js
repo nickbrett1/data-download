@@ -70,13 +70,15 @@ test.describe("the request book", () => {
     await page.goto("/");
 
     await expect(page.locator(".tbl-row")).toHaveCount(5);
-    // Three columns. A fourth, "why it matters", was removed: on a finished row
-    // it either repeated the badge or rendered a dash, and the one part that
-    // mattered -- what a blocked row is short of -- is a qualification of the
-    // state, so it sits under the badge now.
+    // Four columns: what it is, where it is, what it costs, when it was asked
+    // for. "why it matters" was the one removed -- on a finished row it either
+    // repeated the badge or rendered a dash, and its useful half (what a
+    // blocked row is short of) is a qualification of the state, so it sits
+    // under the badge now.
     await expect(page.locator(".tbl-head .col-label")).toHaveText([
       "request",
       "state",
+      "quote",
       "filed",
     ]);
 
@@ -86,12 +88,11 @@ test.describe("the request book", () => {
       .locator(".tbl-row")
       .first()
       .evaluate((el) => getComputedStyle(el).gridTemplateColumns);
-    expect(template.split(" ").length).toBe(3);
+    expect(template.split(" ").length).toBe(4);
 
     const first = page.locator(".tbl-row").first();
-    // No estimate column: every row is unpriced this phase, so a column of
-    // dashes was an empty cell dressed as a fact.
-    await expect(first).not.toContainText("$0.0412");
+    // Phase 4: the quote is on the row, at the precision a purchase needs.
+    await expect(first.locator(".quote")).toHaveText("$0.0412");
     // When it was filed, in a form a person reads. Not "1h 4m": an age answers
     // a question nobody asked and has to be converted back into a clock.
     await expect(first.locator(".filed")).toHaveText("14 Nov 23:10");

@@ -30,6 +30,13 @@ PLAN_TYPE_UNKNOWN = "plan_type_unknown"
 INTENT_UNDERCONSTRAINED = "intent_underconstrained"
 STORE_UNAVAILABLE = "store_unavailable"
 
+# Phase 4, and both are submit-time codes because both refuse a body before a
+# row exists (§7.4). `quote_unavailable` is not "the vendor is down" but "this
+# request cannot be priced", and an unpriced request is not approvable: the
+# human is being asked to authorise a number, so no number means no request.
+QUOTE_UNAVAILABLE = "quote_unavailable"
+OVER_CEILING = "over_ceiling"
+
 # Not one of §7.4's submit-time codes. A read for an id that does not exist has
 # to answer something, and the closed set is about what a *submit* can be
 # refused with; `not_found` is the read-surface answer.
@@ -133,6 +140,33 @@ def intent_underconstrained(message: str, constraints: list[str]) -> ApiError:
 
 def store_unavailable(message: str = "the request store is unavailable") -> ApiError:
     return ApiError(503, STORE_UNAVAILABLE, message)
+
+
+def quote_unavailable(message: str) -> ApiError:
+    """This request cannot be priced (§5.2).
+
+    Not a 503: the service is fine, this body has no number, and a retry with
+    the same body will fail the same way until the cause (a missing key, a Job
+    with no quote step) is repaired.
+    """
+    return ApiError(422, QUOTE_UNAVAILABLE, message)
+
+
+def over_ceiling(estimate_usd: float, max_usd: float) -> ApiError:
+    """The quote is above the ceiling the caller set (§5.2).
+
+    Both numbers ride along so the caller can see what happened without a
+    second call: this is a refusal to *authorise*, not a refusal to price, and
+    the repair is either a smaller window or a larger `max_usd`.
+    """
+    return ApiError(
+        422,
+        OVER_CEILING,
+        f"this request prices at ${estimate_usd:.4f}, above its "
+        f"ceiling of ${max_usd:.4f}",
+        estimate_usd=estimate_usd,
+        max_usd=max_usd,
+    )
 
 
 def not_found(message: str) -> ApiError:

@@ -70,6 +70,18 @@ def served(login: str = "nick@example.com") -> dict[str, str]:
     return {"Tailscale-User-Login": login}
 
 
+# What the fake vendor answers (phase 4). A request must be priced before it can
+# be approved, and `pytest` must never reach a vendor -- no client, no key, no
+# network -- so every app in this suite gets a pricer that answers from here. A
+# test that cares about the number passes its own `Settings` with its own.
+QUOTE_USD = 0.42
+
+
+def fake_quote(kwargs: dict) -> float:
+    """A pricer with no client and no network, for tests that only need a number."""
+    return QUOTE_USD
+
+
 def iso(delta: timedelta = timedelta(0)) -> str:
     return (datetime.now(UTC) + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -87,6 +99,7 @@ def settings(db_path: Path) -> Settings:
         plan_types_dir=PLAN_TYPES_DIR,
         approvers=APPROVERS,
         code_ref=CODE_REF,
+        quote=fake_quote,
     )
 
 

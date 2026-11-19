@@ -11,7 +11,12 @@ dependencies = [
     "jinja2>=3.1.4",
     "pydantic>=2.9.0",
     "pyyaml>=6.0.2",
-    "jsonschema>=4.23"
+    "jsonschema>=4.23",
+    # Phase 4: the one place a vendor client exists is `vendor.py`, and
+    # `metadata.get_cost` is a free read -- but it is still a credential-bearing
+    # dependency, which is why the budget question (D1) was answered "one check"
+    # rather than "one check and an aggregate".
+    "databento>=0.40"
 ]
 
 [project.optional-dependencies]

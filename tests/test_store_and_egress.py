@@ -18,7 +18,15 @@ from data_download.db import Store, payload_hash
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src" / "data_download"
 
-FORBIDDEN_IMPORTS = ("databento", "httpx", "aiohttp", "urllib3", "requests", "socket", "http.client")
+FORBIDDEN_IMPORTS = ("httpx", "aiohttp", "urllib3", "requests", "socket", "http.client")
+
+# Phase 4's one exception, and it is one named file rather than a package:
+# `vendor.py` is the only place a vendor client exists (§5.3). Everything else
+# -- `interpreter.py` included, which takes a `Driver` it is given -- stays
+# vendor-free, so this gate is still the thing that keeps a stray `import
+# databento` out of the wrong module.
+VENDOR_IMPORTS = ("databento",)
+VENDOR_MODULE = "vendor.py"
 
 
 def test_unusable_store_is_up_but_broken(tmp_path):
@@ -170,6 +178,11 @@ def test_no_vendor_client_or_network_import(path: Path):
             imported.add(node.module)
     for module in imported:
         assert not module.startswith(FORBIDDEN_IMPORTS), f"{path.name} imports {module}"
+        if module.startswith(VENDOR_IMPORTS):
+            assert path.name == VENDOR_MODULE, (
+                f"{path.name} imports {module}; only {VENDOR_MODULE} may, because "
+                "the client stays in one place (§5.3)"
+            )
 
 
 def test_an_older_store_gains_the_new_columns_on_start(tmp_path):

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import PLAN_BODY, auth
+from conftest import PLAN_BODY, auth, fake_quote
 from data_download import dryrun, interpreter
 from data_download.app import create_app
 from data_download.config import Settings
@@ -23,6 +23,9 @@ def filed(tmp_path):
         db_path=str(db),
         tokens={"tok-submit": frozenset({"submit", "read"})},
         plan_types_dir=REPO_ROOT / "plan_types",
+        # Phase 4: a submit is priced. The dry run is offline, so the pricer is
+        # the suite's fake -- still an injected callable, still no network.
+        quote=fake_quote,
     )
     with TestClient(create_app(settings)) as client:
         response = client.post("/v1/requests", json=PLAN_BODY, headers=auth("tok-submit"))

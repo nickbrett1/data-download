@@ -90,6 +90,7 @@ matter:
 | `GET /v1/*` | `read` or `submit` in an `Authorization` header |
 | `POST /v1/requests` | `submit` |
 | `POST /v1/requests/{id}/escalate` | `escalate` |
+| `POST /v1/quotes` | `read` — a question, not a purchase: it prices a request's Job and writes nothing |
 | `POST /v1/requests/{id}/approve` | a tailnet login, asserted by `tailscale serve` and named in `DATA_DOWNLOAD_APPROVERS` |
 | `python -m data_download.approve` | a shell on the host: no route, no credential, no identity |
 
@@ -134,6 +135,28 @@ query-string path: one way in, so one thing to audit. `DATA_DOWNLOAD_API_TOKENS`
 is a list of `<token>:<scopes>` pairs, and `python -c` is not how you read it —
 it comes from Doppler on the NAS, or the service's own `.env` beside its compose
 file.
+
+### The price, and the one check
+
+A request is priced at submit, from its own Job: the emitted `quote` step's
+kwargs go to `databento.metadata.get_cost` and the answer is stored as
+`estimate_usd`. Nothing prices from the params, because the params are what was
+asked for and the Job is what will be run. If nothing can price it — no key, no
+`quote` step, a vendor that answers nothing or something that is not a positive
+finite number — the submit is refused (`quote_unavailable`) and no row is
+written. A zero is refused rather than recorded, because "free" and "the vendor
+said nothing" are the same number and only one of them is a fact.
+
+The ceiling is the only budget check. `max_usd` on the body is compared to that
+one quote, at submit, once. Above it, a plan submit is refused `over_ceiling`;
+a matched *intent* cannot be refused (it is already a row), so it lands
+`blocked` with `blocked_reason='ceiling_exceeded'` and no Job, and the number
+comes back in the response for whoever raises the ceiling. There is no
+aggregate, no running total, and no `sum()` inside the claim transaction:
+vendor-side caps and statements are the control for the aggregate, and this
+service's job is to not authorise a single request above the number somebody
+stated. `POST /v1/quotes` answers the same question without creating anything,
+so a caller can ask "what would this cost?" first.
 
 That is also how the tests divide: `pytest` owns the contract (which row gets
 which facet, what a plan type says a parameter demands), and `web/e2e/` owns the

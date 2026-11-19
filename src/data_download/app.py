@@ -28,7 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, bind, errors, match, profiles, rematch
+from . import auth, bind, errors, match, profiles, rematch, vendor
 from . import job as job_mod
 from .config import Settings, load_settings
 from .db import (
@@ -277,6 +277,20 @@ async def _store(request: Request) -> Store:
     if state.store is None:
         raise errors.store_unavailable(state.store_error or "store is not connected")
     return state.store
+
+
+def _price(request: Request, job_text: str) -> float:
+    """Price a bound Job, or refuse the submit (§5.2, phase 4).
+
+    The pricer lives in the settings so a test can inject one and the vendor
+    client stays inside `vendor.py`. A refusal here is a refusal of the *body*:
+    nothing is stored, so there is no half-created row to reconcile with a
+    number that may never arrive.
+    """
+    try:
+        return vendor.price(job_text, request.app.state.settings.quote)  # type: ignore[arg-type]
+    except vendor.QuoteUnavailable as exc:
+        raise errors.quote_unavailable(str(exc)) from None
 
 
 async def _reconnect(state: Any) -> None:
@@ -572,6 +586,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if idempotency_key and len(idempotency_key) > 200:
             raise errors.invalid_body("Idempotency-Key must be at most 200 characters")
 
+        # What the vendor said this request costs, for the response only. The
+        # row carries it as `estimate_usd`, except where the ceiling refused it
+        # and the CHECK forbids a blocked row an estimate (§7.9.2) -- then this
+        # is the only place the number the caller was refused on survives.
+        submit_quote: float | None = None
+
         if kind == "plan":
             raw_type = body.get("plan_type")
             plan = profiles.resolve(registry, raw_type)
@@ -592,6 +612,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise errors.plan_not_valid(
                     f"the binder for {plan.name!r} refused these params: {exc}"
                 ) from None
+            # Phase 4 (§5.2): price it before it can be approved. One free
+            # vendor read, one comparison against the ceiling the caller set,
+            # and no row if either fails -- an unpriced draft is a request
+            # nobody can authorise honestly, because approving it means
+            # approving a number that does not exist.
+            estimate = _price(request, job_text)
+            submit_quote = estimate
+            ceiling = body.get("max_usd")
+            if isinstance(ceiling, (int, float)) and estimate > ceiling:
+                raise errors.over_ceiling(estimate, ceiling)
             row = {
                 "id": _new_id(),
                 "state": "draft",
@@ -602,7 +632,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "idempotency_key": idempotency_key,
                 "payload_hash": digest,
                 "intent_json": None,
-                "estimate_usd": None,  # nothing prices anything this phase
+                "estimate_usd": estimate,
                 "blocked_reason": None,
                 "plan_origin": "adhoc",  # no profile registry exists yet
                 "matched_profile": None,
@@ -644,9 +674,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             job_text = bound.job_text
             job_digest = bound.job_digest
             plan_type = bound.plan_type
+            # Phase 4: a matched intent binds, so it can be priced too. Over the
+            # ceiling is not a refused submit -- the row exists and the caller
+            # must not have it vanish (§7.9.2), so it lands `blocked` with the
+            # reason and no Job. Raising `max_usd` is the repair, which is a
+            # human's decision, and a later re-match binds it again.
+            estimate = None
+            ceiling_reason = None
+            refused_quote = None
+            if job_text:
+                estimate = _price(request, job_text)
+                ceiling = body.get("max_usd")
+                if isinstance(ceiling, (int, float)) and estimate > ceiling:
+                    ceiling_reason = "ceiling_exceeded"
+                    refused_quote = estimate
+                    # `blocked` requires no Job and no estimate (the CHECK), so
+                    # the number is reported in the response and not stored.
+                    job_text = None
+                    job_digest = None
+                    estimate = None
+            submit_quote = refused_quote if refused_quote is not None else estimate
+            state = "blocked" if ceiling_reason else ("draft" if job_text else "blocked")
             row = {
                 "id": _new_id(),
-                "state": "draft" if job_text else "blocked",
+                "state": state,
                 "body_kind": "intent",
                 "plan_type": plan_type,
                 "job_json": job_text,
@@ -654,8 +705,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "idempotency_key": idempotency_key,
                 "payload_hash": digest,
                 "intent_json": canonical_json(body),
-                "estimate_usd": None,
-                "blocked_reason": None if job_text else "awaiting_plan",
+                "estimate_usd": estimate,
+                "blocked_reason": ceiling_reason
+                or (None if job_text else "awaiting_plan"),
                 "plan_origin": "matched" if job_text else None,
                 "matched_profile": None,
                 "code_ref": getattr(request.app.state, "code_ref", None)
@@ -700,10 +752,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "match": json.loads(stored["match_report_json"])
                 if stored.get("match_report_json")
                 else None,
+                # What the vendor quoted. A plan body carries it on the row
+                # too; an intent refused by its ceiling has nowhere to put it.
+                "quote_usd": submit_quote,
                 # Informational: an earlier Request with the same body. This one
                 # still exists, with its own id and its own output directory.
                 "duplicate_of": duplicate_of,
             },
+        )
+
+    @app.post("/v1/quotes")
+    async def quote_request(request: Request) -> JSONResponse:
+        """Price a request's Job without changing anything (§8.4).
+
+        `read` scope, because this is a question and not a mutation: it buys
+        nothing, downloads nothing, and writes nothing. It exists so a caller
+        such as `data-sourcing-agent` can ask "what would this cost?" instead of
+        holding a vendor key of its own -- the spend-capable credential lives in
+        one deployment (§13 Q3).
+
+        A request with no Job cannot be priced, and says so rather than
+        answering zero.
+        """
+        auth.require_scope(request, "read")
+        store = await _store(request)
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise errors.invalid_body("body is not valid JSON") from None
+        if not isinstance(body, dict):
+            raise errors.invalid_body("body must be a JSON object")
+        request_id = body.get("request_id")
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise errors.invalid_body("request_id is required and must be a string")
+
+        row = await store.get_request(request_id)
+        if row is None:
+            raise errors.not_found(f"no request {request_id!r}")
+        job_text = row["job_json"] if "job_json" in row.keys() else None
+        if not job_text:
+            raise errors.quote_unavailable(
+                f"request {request_id!r} is {row['state']} with no Job, so there "
+                "is nothing to price yet"
+            )
+        estimate = _price(request, job_text)
+        return JSONResponse(
+            content={
+                "request_id": request_id,
+                "estimate_usd": estimate,
+                "max_usd": row["max_usd"] if "max_usd" in row.keys() else None,
+                "currency": "USD",
+                "priced_at": utcnow(),
+            }
         )
 
     @app.post("/v1/requests/{request_id}/escalate", status_code=202)

@@ -35,6 +35,10 @@ services:
       # right when the app runs on the host. Behind Docker's port forward the
       # Serve hop arrives from the bridge gateway, so name that address here.
       DATA_DOWNLOAD_TRUSTED_PROXIES: ${DATA_DOWNLOAD_TRUSTED_PROXIES:-}
+      # Phase 4: the vendor key a request is priced with at submit. Unset means
+      # nothing can be priced, so every submit is refused -- deliberately, since
+      # an unpriced request is one whose approval authorises an unknown amount.
+      DATA_DOWNLOAD_DATABENTO_KEY: ${DATA_DOWNLOAD_DATABENTO_KEY:-}
     labels:
       - "homepage.group=Services"
       - "homepage.name=data-download"

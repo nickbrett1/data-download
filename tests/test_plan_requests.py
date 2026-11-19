@@ -6,7 +6,7 @@ import copy
 import json
 import time
 
-from conftest import INTENT_BODY, PLAN_BODY, auth
+from conftest import INTENT_BODY, PLAN_BODY, QUOTE_USD, auth
 
 VALID_STATES = {"draft", "blocked"}
 
@@ -41,7 +41,8 @@ def test_plan_submit_returns_202_then_reads_back(client):
     assert row["plan_type"] == "databento_batch_download"
     assert row["params"] == PLAN_BODY["params"]
     assert row["intent"] is None
-    assert row["estimate_usd"] is None
+    # Phase 4: priced at submit, and the number is the Job's quote step.
+    assert row["estimate_usd"] == QUOTE_USD
     # The Job, not the params and not the body: the Plan's binder emitted it.
     assert row["job"]["plan"] == "databento_batch_download"
     kinds = [step["kind"] for step in row["job"]["steps"]]

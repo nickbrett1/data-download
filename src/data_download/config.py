@@ -51,6 +51,12 @@ class Settings:
     # so a test can name it, and so the one resolution per process is visible in
     # the settings rather than hidden in a lifespan side effect.
     code_ref: str | None = None
+    # Phase 4: how a request is priced. `None` means this deployment cannot
+    # price anything (no `DATA_DOWNLOAD_DATABENTO_KEY`), and a submit that would
+    # need a number is refused rather than stored unpriced. A callable rather
+    # than a client so `pytest` injects a fake and never reaches a vendor, and so
+    # the one place a client exists stays in `vendor.py` (§5.3).
+    quote: object | None = None
 
     def scopes_for(self, token: str) -> frozenset[str] | None:
         return self.tokens.get(token)
@@ -211,6 +217,19 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         )
 
     from .coderef import resolve as resolve_code_ref
+    from .vendor import databento_pricer
+
+    key = (env.get("DATA_DOWNLOAD_DATABENTO_KEY") or "").strip()
+    quote = databento_pricer(key) if key else None
+    if quote is None:
+        # Loud, like the other doors that fail closed: with no key nothing can be
+        # priced, and an unpriced request is not one anybody can approve
+        # honestly, so a plan body is refused rather than stored with a NULL
+        # estimate that would look like "we forgot".
+        log.warning(
+            "DATA_DOWNLOAD_DATABENTO_KEY is unset - nothing can be priced, so a "
+            "submit that needs a number will be refused with quote_unavailable."
+        )
 
     port_raw = (env.get("PORT") or "8820").strip()
     try:
@@ -229,6 +248,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         approvers=approvers,
         trusted_proxies=trusted_proxies,
         code_ref=resolve_code_ref(env),
+        quote=quote,
     )
 
 
