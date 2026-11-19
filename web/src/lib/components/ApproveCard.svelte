@@ -25,9 +25,13 @@
    * is on the far side of a tunnel this page cannot see.
    */
   import { getView, postJson } from "$lib/api";
-  import { bound } from "$lib/format";
+  import { bound, usd } from "$lib/format";
 
-  let { requestId, maxUsd = null, onapproved } = $props();
+  // `estimateUsd` is the vendor's quote for this exact Job. It is passed in so
+  // the decision states both numbers: what is being authorised (the ceiling)
+  // and what the vendor said it costs (the quote). Before phase 4 there was no
+  // second number, and the card could only say "up to".
+  let { requestId, maxUsd = null, estimateUsd = null, onapproved } = $props();
 
   let note = $state("");
   // idle -> confirm -> busy; `confirm` exists so the amount is read before the
@@ -70,6 +74,8 @@
 
   const ceiling =
     maxUsd === null || maxUsd === undefined ? null : bound(maxUsd);
+  const quote =
+    estimateUsd === null || estimateUsd === undefined ? null : usd(estimateUsd);
   const ready = $derived(who?.approver === true);
 
   async function approve() {
@@ -101,7 +107,10 @@
     <p class="ask">
       Approve this request up to <strong
         >{ceiling ?? "the ceiling it carries"}</strong
-      >? Nothing is downloaded here — a runner picks up an approved row.
+      >?{#if quote}
+        The vendor quoted <strong>{quote}</strong> for exactly this Job.
+      {/if}
+      Nothing is downloaded here — a runner picks up an approved row.
     </p>
     {#if !ceiling}
       <p class="quiet note">

@@ -20,7 +20,7 @@
   import DetailPanel from "$lib/components/nb/DetailPanel.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import { getView } from "$lib/api";
-  import { age, filed, stateLabel, stateTone, usd } from "$lib/format";
+  import { age, bound, filed, stateLabel, stateTone, usd } from "$lib/format";
 
   // The three blocked facets are the same state and three different answers to
   // "what next", so the meta row asks the question the label answers.
@@ -100,22 +100,66 @@
     if (data.vendor) {
       rows.push({ label: "vendor", value: data.vendor });
     }
+    // The ceiling and the estimate are not here: they are about the request
+    // itself, not about the row's bookkeeping, so they sit with the request at
+    // the top of the page where somebody deciding has them in view.
     rows.push(
-      { label: "ceiling", value: usd(data.max_usd) },
-      { label: "estimate", value: usd(data.estimate_usd) },
-      { label: "filed", value: data.created_at },
+      { label: "filed", value: filed(data.created_at) },
       { label: "age", value: age(data.age_seconds) },
     );
     return rows;
   });
 
+  // The order a person reads a Databento request in: what, which feed, what
+  // instruments, then the window. Anything the plan type adds that this list
+  // does not name follows in the order the caller sent it, so a new param is
+  // shown rather than silently dropped.
+  const PARAM_ORDER = [
+    "dataset",
+    "schema",
+    "symbols",
+    "stype_in",
+    "window",
+    "start",
+    "end",
+  ];
+
+  /** A param, as a person would say it.
+   *
+   * The four shapes a request actually uses: a window is a range with an arrow
+   * rather than another `{"start":…,"end":…}` blob, symbols are a list that
+   * reads as one, and `null` says `—` instead of the word "null". */
+  function say(key, value) {
+    if (value === null || value === undefined) return "—";
+    if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
+    if (typeof value === "object") {
+      if (value.start && value.end) return `${value.start} → ${value.end}`;
+      return JSON.stringify(value);
+    }
+    return String(value);
+  }
+
   const asked = $derived.by(() => {
     if (!data) return [];
     const params = data.payload?.params ?? {};
-    return Object.entries(params).map(([key, value]) => ({
-      key,
-      value: typeof value === "string" ? value : JSON.stringify(value),
-    }));
+    // An intent arrives with `window: {start, end}` and a plan with flat
+    // `start`/`end`. One range, said one way, whichever body it came from --
+    // otherwise the same request reads differently depending on which door it
+    // came through, which is exactly the confusion this page exists to end.
+    const ranged = !params.window && Boolean(params.start && params.end);
+    const rows = [];
+    for (const [key, value] of Object.entries(params)) {
+      if (ranged && (key === "start" || key === "end")) continue;
+      rows.push({ key, value: say(key, value) });
+    }
+    if (ranged) {
+      rows.push({ key: "window", value: `${params.start} → ${params.end}` });
+    }
+    const rank = (key) => {
+      const at = PARAM_ORDER.indexOf(key);
+      return at === -1 ? PARAM_ORDER.length : at;
+    };
+    return rows.sort((a, b) => rank(a.key) - rank(b.key));
   });
 
   const rawBody = $derived.by(() => {
@@ -189,17 +233,45 @@
       {meta}
       pill={{ label: stateLabel(data.state), tone: stateTone(data.state) }}
     >
-      {#if data.state === "draft"}
-        <!-- The one verb on this page. Rendered only where it can be used: a
-             row that is already approved gets no control, because a second
-             approval is a no-op and a disabled button would be a promise the
-             page cannot keep. -->
-        <ApproveCard
-          requestId={data.id}
-          maxUsd={data.max_usd}
-          onapproved={() => load()}
-        />
-      {/if}
+      <!-- First, because it is the question somebody opened this page to ask.
+           It used to sit third, under the verb and the reason: the reader got
+           the decision before the thing being decided about. Everything below
+           is commentary on this block. -->
+      <section class="block request">
+        <p class="micro">what was asked for</p>
+        {#if asked.length}
+          <dl class="kv spec">
+            {#each asked as item (item.key)}
+              <dt>{item.key}</dt>
+              <dd><code>{item.value}</code></dd>
+            {/each}
+          </dl>
+        {:else}
+          <p class="quiet">No parameters were recorded on this request.</p>
+        {/if}
+        <!-- The money, in the same breath as the thing it prices: the quote is
+             what a decision needs and the ceiling is what it authorises. Three
+             different absences, said three different ways -- a dash would make
+             an unpriced request look like a free one. -->
+        {#if data.estimate_usd !== null && data.estimate_usd !== undefined}
+          <p class="money">
+            quoted <strong>{usd(data.estimate_usd)}</strong
+            >{#if data.max_usd !== null && data.max_usd !== undefined}<span
+                class="sep">·</span
+              >
+              ceiling {bound(data.max_usd)}{/if}
+          </p>
+        {:else if data.max_usd !== null && data.max_usd !== undefined}
+          <p class="money">
+            <span class="quiet">not priced — there is no job to quote</span
+            ><span class="sep">·</span> ceiling {bound(data.max_usd)}
+          </p>
+        {:else}
+          <p class="money">
+            <span class="quiet">not priced — filed before pricing existed</span>
+          </p>
+        {/if}
+      </section>
 
       <section class="block">
         <p class="micro">why</p>
@@ -213,16 +285,18 @@
         {/if}
       </section>
 
-      {#if asked.length}
-        <section class="block">
-          <p class="micro">what was asked for</p>
-          <dl class="kv">
-            {#each asked as item (item.key)}
-              <dt>{item.key}</dt>
-              <dd><code>{item.value}</code></dd>
-            {/each}
-          </dl>
-        </section>
+      {#if data.state === "draft"}
+        <!-- The one verb on this page, and it comes after what it decides
+             about rather than before. Rendered only where it can be used: a
+             row that is already approved gets no control, because a second
+             approval is a no-op and a disabled button would be a promise the
+             page cannot keep. -->
+        <ApproveCard
+          requestId={data.id}
+          maxUsd={data.max_usd}
+          estimateUsd={data.estimate_usd}
+          onapproved={() => load()}
+        />
       {/if}
 
       {#if BLOCKED.has(data.facet)}
@@ -362,6 +436,34 @@
 <style>
   .block {
     margin: 0 0 20px;
+  }
+
+  /* The request leads, so it gets a little more air than the sections that
+     comment on it. */
+  .request .kv {
+    margin-top: 10px;
+  }
+
+  .spec dt {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11.5px;
+  }
+
+  .money {
+    margin: 10px 0 0;
+    font-size: 13px;
+    color: var(--ink-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .money strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .money .sep {
+    margin: 0 6px;
+    color: var(--ink-faint);
   }
 
   .why {

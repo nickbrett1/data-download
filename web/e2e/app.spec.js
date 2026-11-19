@@ -770,6 +770,54 @@ test.describe("naming a request, and opening it", () => {
     await expect(page.locator("details.raw pre")).toContainText("OPRA.PILLAR");
   });
 
+  test("the request is read before the decision about it", async ({ page }) => {
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+
+    // The order is the argument: what was asked for, then why, then the verb.
+    // "what was asked for" used to sit third, under the approve card -- the
+    // reader got the decision before the thing being decided about.
+    const order = await page
+      .locator(".detail-card .block")
+      .evaluateAll((blocks) =>
+        blocks.map((block) =>
+          block.querySelector(".micro")?.textContent.trim(),
+        ),
+      );
+    expect(order.slice(0, 3)).toEqual(["what was asked for", "why", "spend"]);
+
+    const request = page.locator(".block.request");
+    // A request as a person says it: the list is a list and the window is a
+    // range, not two JSON blobs shown one key at a time.
+    await expect(request).toContainText("GLBX.MDP3");
+    await expect(request).toContainText("ES.c.0");
+    await expect(request).toContainText("2026-11-04 → 2026-11-06");
+    await expect(request).not.toContainText('{"start"');
+
+    // And the money, in the same block as the thing it prices.
+    await expect(request.locator(".money")).toContainText("quoted $0.8115");
+    await expect(request.locator(".money")).toContainText("ceiling $5");
+  });
+
+  test("an unpriced request says which kind of unpriced it is", async ({
+    page,
+  }) => {
+    // The same row with no quote on it -- a blocked intent, which has no Job.
+    await mock(page, {
+      detail: {
+        ...draftDetail,
+        estimate_usd: null,
+        blocked_reason: "awaiting_plan",
+      },
+    });
+    await page.goto("/requests/req_draft01");
+    // A dash would make three different absences look like one, and an
+    // unpriced request look like a free one.
+    await expect(page.locator(".block.request .money")).toContainText(
+      "not priced — there is no job to quote",
+    );
+  });
+
   test("the detail page is a page: a reload and a back link both work", async ({
     page,
   }) => {

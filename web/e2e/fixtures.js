@@ -339,6 +339,9 @@ export const draftDetail = {
   facet_label: "Approval",
   blocked_reason: null,
   max_usd: 5,
+  // Phase 4: the vendor's quote for exactly this Job, four decimals, because
+  // 4c and 4.9c are different purchases.
+  estimate_usd: 0.8115,
   why: "test row: futures trades, ES continuous, two days",
   payload: {
     body_kind: "plan",
