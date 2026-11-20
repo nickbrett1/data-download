@@ -28,7 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, bind, errors, match, profiles, rematch, vendor
+from . import auth, bind, datasets, errors, match, profiles, rematch, vendor
 from . import job as job_mod
 from .config import Settings, load_settings
 from .db import (
@@ -1121,6 +1121,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ],
         }
 
+    @app.get("/ui/datasets.json")
+    async def datasets_json(request: Request) -> dict[str, Any]:
+        """What landed, and what is landing (§7.8).
+
+        Two sources joined read-only: the store names the vendor, the dataset and
+        the state; the datasets root holds the bytes and the `landing.json` that
+        says which driver wrote them. The tree mirrors `runner.destination`, so
+        the page cannot show a path the runner would not have written.
+        """
+        store = await _store(request)
+        rows, _ = await store.list_requests(
+            states=sorted(datasets.VISIBLE_STATES), limit=500
+        )
+        rows.sort(key=lambda r: str(r["created_at"]), reverse=True)
+        return datasets.tree(rows, root=settings.datasets_dir, registry=registry)
+
+    @app.get("/datasets/file/{vendor}/{dataset}/{request_id}/{name}")
+    async def dataset_file(
+        vendor: str, dataset: str, request_id: str, name: str
+    ) -> FileResponse:
+        """One landed file, as a download.
+
+        Every segment goes through `resolve_under`, so `..` and a symlink out of
+        the root are both refused by where they end up, not by how they are
+        spelled. The body is `application/octet-stream` with an attachment
+        disposition: a phone should save it, never render it.
+        """
+        path = datasets.resolve_under(
+            settings.datasets_dir, vendor, dataset, request_id, "files", name
+        )
+        if path is None or not path.is_file():
+            raise errors.not_found(
+                f"no landed file {vendor}/{dataset}/{request_id}/{name}"
+            )
+        return FileResponse(
+            path,
+            media_type="application/octet-stream",
+            filename=path.name,
+            headers={
+                "Cache-Control": "private, max-age=60",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     @app.get("/ui/plan-types.json")
     async def plan_types_json(request: Request) -> dict[str, Any]:
         return {"types": [_plan_type_view(entry) for entry in registry.all()]}
@@ -1148,6 +1192,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         because "which fields does a Databento plan need?" should not require
         reading raw JSON in a terminal. The page itself is an empty shell; the
         rows arrive from the gated view-model below.
+        """
+        return _index()
+
+    @app.get("/datasets", response_class=HTMLResponse)
+    async def datasets_page(request: Request) -> FileResponse:
+        """The browse view for what landed: vendor, dataset, request, files.
+
+        A phone-sized answer to "what do I have?", which the request book cannot
+        give: the book knows what was asked for, this page knows what exists.
         """
         return _index()
 

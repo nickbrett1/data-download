@@ -1,14 +1,15 @@
 <script>
   /**
-   * Three pages, one bundle. FastAPI serves this same index.html for `/`,
-   * `/plan-types` and `/requests/<id>`, so the router is `location.pathname`
-   * and nothing else. No hash routing: the dashboard's `#plan_type` anchors and
+   * Four pages, one bundle. FastAPI serves this same index.html for `/`,
+   * `/datasets`, `/plan-types` and `/requests/<id>`, so the router is
+   * `location.pathname` and nothing else. No hash routing: the dashboard's `#plan_type` anchors and
    * the plan-type page's TOC are real fragment links and have to keep working.
    *
    * No lock, no token: the pages read a public projection of the store. See
    * `api.js` for why that is the right trade.
    */
   import Dashboard from "$lib/views/Dashboard.svelte";
+  import Datasets from "$lib/views/Datasets.svelte";
   import PlanTypes from "$lib/views/PlanTypes.svelte";
   import RequestDetail from "$lib/views/RequestDetail.svelte";
 
@@ -22,11 +23,15 @@
     ? "request"
     : path === "/plan-types"
       ? "plans"
-      : "requests";
+      : path === "/datasets"
+        ? "datasets"
+        : "requests";
 </script>
 
 {#if view === "request"}
   <RequestDetail id={decodeURIComponent(requestMatch[1])} />
+{:else if view === "datasets"}
+  <Datasets />
 {:else if view === "plans"}
   <PlanTypes />
 {:else}

@@ -132,6 +132,7 @@
   title="data-download"
   nav={[
     { label: "Requests", href: "/", current: true },
+    { label: "Datasets", href: "/datasets", current: false },
     { label: "Plan types", href: "/plan-types", current: false },
   ]}
 >

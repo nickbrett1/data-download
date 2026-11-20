@@ -557,6 +557,7 @@ class Store:
         self,
         *,
         state: str | None = None,
+        states: list[str] | tuple[str, ...] | None = None,
         plan_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -566,6 +567,12 @@ class Store:
         if state:
             where.append("state = ?")
             args.append(state)
+        elif states:
+            # One query for the datasets browser, which wants every state that
+            # can have bytes. The single-`state` form stays for its callers.
+            wanted = list(dict.fromkeys(states))
+            where.append(f"state IN ({', '.join('?' for _ in wanted)})")
+            args.extend(wanted)
         if plan_type:
             where.append("plan_type = ?")
             args.append(plan_type)

@@ -428,3 +428,113 @@ export const blockedBook = (() => {
     facets,
   };
 })();
+
+// What `/ui/datasets.json` answers: the vendor -> dataset -> request tree the
+// browser draws. Two requests, because the page's hardest case is the
+// difference between "finished" and "still arriving" sitting in one list.
+export const datasets = {
+  root: "/datasets",
+  configured: true,
+  vendors: [
+    {
+      vendor: "Databento",
+      vendor_slug: "databento",
+      requests: 2,
+      files: 2,
+      bytes: 8158,
+      datasets: [
+        {
+          dataset: "GLBX.MDP3",
+          files: 2,
+          bytes: 8158,
+          requests: [
+            {
+              request_id: "req_landed01",
+              state: "succeeded",
+              plan_type: "databento_batch_download",
+              vendor: "Databento",
+              vendor_slug: "databento",
+              dataset: "GLBX.MDP3",
+              symbols: ["ES.c.0"],
+              stype_in: "continuous",
+              schema: "trades",
+              start: "2026-11-04",
+              end: "2026-11-06",
+              estimate_usd: 0.8115,
+              created_at: "2026-11-19T03:00:13Z",
+              updated_at: "2026-11-20T13:27:24Z",
+              landed_sha256:
+                "c69889effb5db6e7eed6dca19ed257b07b1378762e1cbb3b8b93bd00e297ed57",
+              verdict: "pass",
+              disposition: "commit",
+              driver: "StubDatabentoDriver",
+              stub: true,
+              settled_at: "2026-11-20T13:27:24Z",
+              on_disk: true,
+              total_bytes: 8158,
+              files: [
+                {
+                  name: "GLBX.MDP3-2026-11-04.dbn.zst",
+                  bytes: 4079,
+                  sha256:
+                    "c1cb1e057aac8449456ef5ddf79b58140935d7fe0f8f720107fb47fdae45b4c0",
+                  rows: 1000,
+                  href: "/datasets/file/databento/GLBX.MDP3/req_landed01/GLBX.MDP3-2026-11-04.dbn.zst",
+                },
+                {
+                  name: "GLBX.MDP3-2026-11-05.dbn.zst",
+                  bytes: 4079,
+                  sha256:
+                    "a0fa9c27cea3d4b337e45a378bd909ec021d7352b0f8140e8176f57913d9c214",
+                  rows: 1000,
+                  href: "/datasets/file/databento/GLBX.MDP3/req_landed01/GLBX.MDP3-2026-11-05.dbn.zst",
+                },
+              ],
+            },
+            {
+              request_id: "req_running01",
+              state: "running",
+              plan_type: "databento_batch_download",
+              vendor: "Databento",
+              vendor_slug: "databento",
+              dataset: "GLBX.MDP3",
+              symbols: ["NQ.c.0"],
+              stype_in: "continuous",
+              schema: "trades",
+              start: "2026-11-04",
+              end: "2026-11-08",
+              estimate_usd: 1.9021,
+              created_at: "2026-11-20T12:00:00Z",
+              updated_at: "2026-11-20T13:30:00Z",
+              landed_sha256: null,
+              verdict: null,
+              disposition: null,
+              driver: null,
+              stub: false,
+              settled_at: null,
+              on_disk: true,
+              total_bytes: 4079,
+              files: [
+                {
+                  name: "GLBX.MDP3-2026-11-04.dbn.zst",
+                  bytes: 4079,
+                  sha256: null,
+                  rows: null,
+                  href: "/datasets/file/databento/GLBX.MDP3/req_running01/GLBX.MDP3-2026-11-04.dbn.zst",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  totals: {
+    vendors: 1,
+    datasets: 1,
+    requests: 2,
+    files: 3,
+    bytes: 12237,
+    in_flight: 1,
+  },
+};
