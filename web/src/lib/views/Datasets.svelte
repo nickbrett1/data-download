@@ -260,8 +260,8 @@
   }
 
   .stub {
-    border: 1px solid var(--warn, #b26b00);
-    color: var(--warn, #b26b00);
+    border: 1px solid var(--warn);
+    color: var(--warn);
     border-radius: 999px;
     padding: 1px 7px;
     font-size: 11px;
