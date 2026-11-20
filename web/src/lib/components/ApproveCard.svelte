@@ -155,7 +155,7 @@
           <input
             type="text"
             bind:value={note}
-            placeholder="why this window is worth the money"
+            placeholder="why this request is worth the money"
             autocomplete="off"
           />
         </label>
