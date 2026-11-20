@@ -143,11 +143,6 @@
                 <a class="plan" href={`/requests/${request.request_id}`}
                   >{request.plan_type ?? "—"}</a
                 >
-                {#if request.stub}
-                  <span class="stub" title="placeholder bytes, not market data"
-                    >stub</span
-                  >
-                {/if}
               </header>
 
               {#if window_of(request) || facts(request)}
@@ -257,16 +252,6 @@
     font-size: 13px;
     color: var(--ink-muted);
     text-decoration: none;
-  }
-
-  .stub {
-    border: 1px solid var(--warn);
-    color: var(--warn);
-    border-radius: 999px;
-    padding: 1px 7px;
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
   }
 
   .facts {

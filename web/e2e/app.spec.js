@@ -1344,8 +1344,10 @@ test.describe("the datasets browser", () => {
       "download",
       "",
     );
-    // Placeholder bytes and real ones must not be indistinguishable.
-    await expect(landed.locator(".stub")).toHaveText("stub");
+    // The card describes the landing and nothing else: no marker about which
+    // driver produced it. That belongs to `landing.json` and `/ui/datasets.json`,
+    // where it is a fact to read, not a badge to scroll past.
+    await expect(page.locator(".stub")).toHaveCount(0);
     await expect(landed.locator(".card-foot")).toContainText(
       "sha c69889effb5d",
     );
@@ -1367,7 +1369,6 @@ test.describe("the datasets browser", () => {
     );
     // Not settled yet, so no landing digest and no verdict to claim.
     await expect(running.locator(".card-foot")).not.toContainText("sha");
-    await expect(running.locator(".stub")).toHaveCount(0);
   });
 
   test("says what a summary is worth, and keeps polling while a run moves", async ({

@@ -98,9 +98,10 @@ def test_a_landed_request_is_listed_under_its_vendor_and_dataset(settings, tmp_p
     assert request["request_id"] == request_id
     assert request["state"] == "succeeded"
     assert request["verdict"] == "pass"
+    # The driver is a fact in the payload; the page does not turn it into a
+    # badge (whether the bytes are real is read here, or in landing.json).
     assert request["driver"] == "StubDatabentoDriver"
-    # The one fact a reader must not have to infer.
-    assert request["stub"] is True
+    assert "stub" not in request
     assert request["schema"] == "trades"
     assert request["symbols"] == ["ES.c.0"]
     assert request["stype_in"] == "continuous"
@@ -135,7 +136,6 @@ def test_a_running_request_lists_the_bytes_it_already_has(settings, tmp_path):
     request = body["vendors"][0]["datasets"][0]["requests"][0]
     assert request["state"] == "running"
     assert request["verdict"] is None
-    assert request["stub"] is False
     assert request["on_disk"] is True
     assert [f["name"] for f in request["files"]] == ["GLBX.MDP3-2026-10-01.dbn.zst"]
     assert request["files"][0]["bytes"] == 1234

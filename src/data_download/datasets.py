@@ -195,10 +195,10 @@ def _request_entry(
         "landed_sha256": row.get("landed_sha256"),
         "verdict": (landing or {}).get("verdict"),
         "disposition": (landing or {}).get("disposition"),
+        # Which driver wrote the landing. Reported, not judged: whether those
+        # bytes are real is a fact about the driver, and the page shows the
+        # landing, not a verdict on it.
         "driver": driver,
-        # The one fact a reader must not have to infer: these bytes are not
-        # market data. The stub says so in every file; the page says it once.
-        "stub": bool(driver and "stub" in str(driver).lower()),
         "settled_at": (landing or {}).get("settled_at"),
         "on_disk": bool(files) or bool(landing),
         "files": files,
