@@ -794,30 +794,28 @@ test.describe("naming a request, and opening it", () => {
     await expect(request).toContainText("2026-11-04 → 2026-11-06");
     await expect(request).not.toContainText('{"start"');
 
-    // And the money, in the same block as the thing it prices.
-    await expect(request.locator(".money")).toContainText("quoted $0.8115");
-    await expect(request.locator(".money")).toContainText("ceiling $5");
-
-    // Each figure ends where the book's `quote` column ends: the value is read
-    // against the right edge, not the left margin, and 4c against 49c differ in
-    // a digit rather than in where the line starts.
-    const money = request.locator(".money");
-    expect(await money.evaluate((el) => getComputedStyle(el).textAlign)).toBe(
-      "right",
-    );
-    const [ends, edge] = await Promise.all([
-      money.locator(".line").evaluateAll((lines) =>
-        lines.map((line) => {
-          const range = document.createRange();
-          range.selectNodeContents(line);
-          return range.getBoundingClientRect().right;
-        }),
-      ),
-
-      request.evaluate((el) => el.getBoundingClientRect().right),
-    ]);
-    expect(ends).toHaveLength(2);
-    for (const end of ends) expect(end).toBeCloseTo(edge, 0);
+    // And the money, as rows in the same grid -- `quoted` and `ceiling` are
+    // fields of this request exactly as `window` and `stype_in` are. Two
+    // columns, not a right-aligned block that looked like a different kind of
+    // fact: the label sits where every other label sits, and so does the value.
+    const cells = await request.locator(".spec").evaluate((grid) => {
+      const rows = [...grid.children];
+      const found = {};
+      for (let i = 0; i < rows.length; i += 2) {
+        found[rows[i].textContent.trim()] = {
+          label: rows[i].getBoundingClientRect().left,
+          value: rows[i + 1].getBoundingClientRect().left,
+        };
+      }
+      return found;
+    });
+    expect(cells.quoted.value).toBeGreaterThan(0);
+    for (const key of ["window", "quoted", "ceiling"]) {
+      expect(cells[key].label).toBeCloseTo(cells.window.label, 0);
+      expect(cells[key].value).toBeCloseTo(cells.window.value, 0);
+    }
+    await expect(request.locator(".spec")).toContainText("$0.8115");
+    await expect(request.locator(".spec")).toContainText("$5");
   });
 
   test("an unpriced request says which kind of unpriced it is", async ({
@@ -834,7 +832,7 @@ test.describe("naming a request, and opening it", () => {
     await page.goto("/requests/req_draft01");
     // A dash would make three different absences look like one, and an
     // unpriced request look like a free one.
-    await expect(page.locator(".block.request .money")).toContainText(
+    await expect(page.locator(".block.request .unpriced")).toHaveText(
       "not priced — there is no job to quote",
     );
   });

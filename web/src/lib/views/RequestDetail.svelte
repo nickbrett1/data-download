@@ -163,6 +163,36 @@
     return rows.sort((a, b) => rank(a.key) - rank(b.key));
   });
 
+  const hasPrice = $derived(
+    data?.estimate_usd !== null && data?.estimate_usd !== undefined,
+  );
+  const hasCeiling = $derived(
+    data?.max_usd !== null && data?.max_usd !== undefined,
+  );
+
+  // The money, as more rows in the same grid the parameters use: `quoted` and
+  // `ceiling` are fields of this request exactly as `window` and `stype_in`
+  // are, so they are set the same way -- a label in one column, the value in
+  // the other. A right-aligned block of their own made them look like a
+  // different kind of fact.
+  const money = $derived.by(() => {
+    if (!data) return [];
+    const rows = [];
+    if (hasPrice) rows.push({ key: "quoted", value: usd(data.estimate_usd) });
+    if (hasCeiling) rows.push({ key: "ceiling", value: bound(data.max_usd) });
+    return rows;
+  });
+
+  // No figure, and the reason said plainly. Three different absences, three
+  // different sentences -- a dash would make an unpriced request look free.
+  const unpriced = $derived(
+    hasPrice
+      ? ""
+      : hasCeiling
+        ? "not priced — there is no job to quote"
+        : "not priced — filed before pricing existed",
+  );
+
   const rawBody = $derived.by(() => {
     if (!data) return "";
     const body =
@@ -240,9 +270,16 @@
            is commentary on this block. -->
       <section class="block request">
         <p class="micro">what was asked for</p>
-        {#if asked.length}
+        {#if asked.length || money.length}
           <dl class="kv spec">
             {#each asked as item (item.key)}
+              <dt>{item.key}</dt>
+              <dd><code>{item.value}</code></dd>
+            {/each}
+            <!-- The money, in the same breath as the thing it prices: the quote
+                 is what a decision needs and the ceiling is what it authorises.
+                 Same two columns as the parameters above. -->
+            {#each money as item (item.key)}
               <dt>{item.key}</dt>
               <dd><code>{item.value}</code></dd>
             {/each}
@@ -250,32 +287,8 @@
         {:else}
           <p class="quiet">No parameters were recorded on this request.</p>
         {/if}
-        <!-- The money, in the same breath as the thing it prices: the quote is
-             what a decision needs and the ceiling is what it authorises. Two
-             lines, each ending at the right edge, so the figures share a margin
-             -- the same edge the book's `quote` column ends on. Three different
-             absences, said three different ways -- a dash would make an
-             unpriced request look like a free one. -->
-        {#if data.estimate_usd !== null && data.estimate_usd !== undefined}
-          <p class="money">
-            <span class="line"
-              >quoted <strong>{usd(data.estimate_usd)}</strong></span
-            >
-            {#if data.max_usd !== null && data.max_usd !== undefined}
-              <span class="line"
-                >ceiling <strong>{bound(data.max_usd)}</strong></span
-              >
-            {/if}
-          </p>
-        {:else if data.max_usd !== null && data.max_usd !== undefined}
-          <p class="money plain">
-            <span class="quiet">not priced — there is no job to quote</span
-            ><span class="sep">·</span> ceiling {bound(data.max_usd)}
-          </p>
-        {:else}
-          <p class="money plain">
-            <span class="quiet">not priced — filed before pricing existed</span>
-          </p>
+        {#if unpriced}
+          <p class="quiet unpriced">{unpriced}</p>
         {/if}
       </section>
 
@@ -452,36 +465,9 @@
     font-size: 11.5px;
   }
 
-  /* Each line ends at the right edge of the block, so the two figures share a
-     margin and a reader can compare them at a glance. It is a stack of lines,
-     not a table: there is no label column, just the words in front of the
-     number they belong to. */
-  .money {
-    margin: 12px 0 0;
-    font-size: 13px;
-    color: var(--ink-muted);
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-  }
-
-  .money strong {
-    color: var(--ink);
-    font-weight: 600;
-  }
-
-  .money .line {
-    display: block;
-  }
-
-  /* No figure, so nothing to line up: prose, at the left, where prose belongs. */
-  .money.plain {
-    text-align: left;
-    font-variant-numeric: normal;
-  }
-
-  .money .sep {
-    margin: 0 6px;
-    color: var(--ink-faint);
+  /* No figure to show: one sentence, where the rows would have been. */
+  .unpriced {
+    margin: 8px 0 0;
   }
 
   .why {
