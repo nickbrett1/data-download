@@ -798,21 +798,26 @@ test.describe("naming a request, and opening it", () => {
     await expect(request.locator(".money")).toContainText("quoted $0.8115");
     await expect(request.locator(".money")).toContainText("ceiling $5");
 
-    // It is one sentence, but it ends where the book's `quote` column ends:
-    // the figure is read against the right edge, not the left margin.
+    // Each figure ends where the book's `quote` column ends: the value is read
+    // against the right edge, not the left margin, and 4c against 49c differ in
+    // a digit rather than in where the line starts.
     const money = request.locator(".money");
     expect(await money.evaluate((el) => getComputedStyle(el).textAlign)).toBe(
       "right",
     );
-    const [text, edge] = await Promise.all([
-      money.evaluate((el) => {
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        return range.getBoundingClientRect().right;
-      }),
+    const [ends, edge] = await Promise.all([
+      money.locator(".line").evaluateAll((lines) =>
+        lines.map((line) => {
+          const range = document.createRange();
+          range.selectNodeContents(line);
+          return range.getBoundingClientRect().right;
+        }),
+      ),
+
       request.evaluate((el) => el.getBoundingClientRect().right),
     ]);
-    expect(text).toBeCloseTo(edge, 0);
+    expect(ends).toHaveLength(2);
+    for (const end of ends) expect(end).toBeCloseTo(edge, 0);
   });
 
   test("an unpriced request says which kind of unpriced it is", async ({

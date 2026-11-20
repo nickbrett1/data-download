@@ -251,18 +251,21 @@
           <p class="quiet">No parameters were recorded on this request.</p>
         {/if}
         <!-- The money, in the same breath as the thing it prices: the quote is
-             what a decision needs and the ceiling is what it authorises. It is
-             one sentence, set against the right edge so the figure ends where
-             the book's `quote` column ends. Three different absences, said
-             three different ways -- a dash would make an unpriced request look
-             like a free one. -->
+             what a decision needs and the ceiling is what it authorises. Two
+             lines, each ending at the right edge, so the figures share a margin
+             -- the same edge the book's `quote` column ends on. Three different
+             absences, said three different ways -- a dash would make an
+             unpriced request look like a free one. -->
         {#if data.estimate_usd !== null && data.estimate_usd !== undefined}
           <p class="money">
-            quoted <strong>{usd(data.estimate_usd)}</strong
-            >{#if data.max_usd !== null && data.max_usd !== undefined}<span
-                class="sep">·</span
+            <span class="line"
+              >quoted <strong>{usd(data.estimate_usd)}</strong></span
+            >
+            {#if data.max_usd !== null && data.max_usd !== undefined}
+              <span class="line"
+                >ceiling <strong>{bound(data.max_usd)}</strong></span
               >
-              ceiling {bound(data.max_usd)}{/if}
+            {/if}
           </p>
         {:else if data.max_usd !== null && data.max_usd !== undefined}
           <p class="money plain">
@@ -449,9 +452,10 @@
     font-size: 11.5px;
   }
 
-  /* One sentence, hung off the right edge of the block: the figure ends where
-     the book's `quote` column ends, so the same number reads in the same place
-     on both pages. */
+  /* Each line ends at the right edge of the block, so the two figures share a
+     margin and a reader can compare them at a glance. It is a stack of lines,
+     not a table: there is no label column, just the words in front of the
+     number they belong to. */
   .money {
     margin: 12px 0 0;
     font-size: 13px;
@@ -460,14 +464,19 @@
     text-align: right;
   }
 
-  /* No figure, so nothing to line up: prose, at the left, where prose belongs. */
-  .money.plain {
-    text-align: left;
-  }
-
   .money strong {
     color: var(--ink);
     font-weight: 600;
+  }
+
+  .money .line {
+    display: block;
+  }
+
+  /* No figure, so nothing to line up: prose, at the left, where prose belongs. */
+  .money.plain {
+    text-align: left;
+    font-variant-numeric: normal;
   }
 
   .money .sep {
