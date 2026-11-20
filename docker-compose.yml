@@ -39,7 +39,8 @@ services:
       # nothing can be priced, so every submit is refused -- deliberately, since
       # an unpriced request is one whose approval authorises an unknown amount.
       DATA_DOWNLOAD_DATABENTO_KEY: ${DATA_DOWNLOAD_DATABENTO_KEY:-}
-      # Phase 5: where a runner lands bytes -- `<dir>/<dataset>/<request_id>/`.
+      # Phase 5: where a runner lands bytes --
+      # `<dir>/<vendor>/<dataset>/<request_id>/`.
       # Unset means no request can be run (the runner refuses rather than
       # guessing), which is the right default for a host that has not decided
       # where its data lives.

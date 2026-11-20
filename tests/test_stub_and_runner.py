@@ -7,7 +7,7 @@ the vendor does:
 
 * the claim is the permission, and a row that was not claimed is not run;
 * only the leaseholder can settle, so a reclaimed attempt writes nothing;
-* the bytes land under `datasets/<dataset>/<request_id>/files/`, and the
+* the bytes land under `datasets/<vendor>/<dataset>/<request_id>/files/`, and the
   `landed_sha256` on the row is the hash of exactly those bytes;
 * the verdict decides the state, and `failed` never carries a landing digest.
 
@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -109,7 +110,7 @@ def test_a_clean_run_lands_bytes_under_the_dataset_and_settles(client, settings,
     assert result.settled is True
     assert len(result.files) == 2  # 2026-10-01 -> 2026-10-03, split by day
 
-    root = datasets / "GLBX.MDP3" / request_id
+    root = datasets / "databento" / "GLBX.MDP3" / request_id
     landed = sorted(p.name for p in (root / "files").iterdir())
     assert landed == ["GLBX.MDP3-2026-10-01.dbn.zst", "GLBX.MDP3-2026-10-02.dbn.zst"]
 
@@ -131,7 +132,7 @@ def test_a_clean_run_lands_bytes_under_the_dataset_and_settles(client, settings,
 def test_the_landed_digest_is_the_hash_of_the_landed_bytes(client, settings, tmp_path):
     request_id, datasets, result = _land(client, settings, tmp_path)
 
-    root = datasets / "GLBX.MDP3" / request_id / "files"
+    root = datasets / "databento" / "GLBX.MDP3" / request_id / "files"
     manifest = "".join(
         f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n"
         for p in sorted(root.iterdir())
@@ -143,7 +144,7 @@ def test_provenance_sits_beside_files_and_never_inside_it(client, settings, tmp_
     """Inside `dest`, `landing.json` would be staged and absent from the vendor
     manifest -- the verifier would correctly call a good landing a contradiction."""
     request_id, datasets, result = _land(client, settings, tmp_path)
-    root = datasets / "GLBX.MDP3" / request_id
+    root = datasets / "databento" / "GLBX.MDP3" / request_id
 
     landing = json.loads((root / "landing.json").read_text())
     assert landing["runner_version"] == RUNNER_VERSION
@@ -208,8 +209,8 @@ def test_a_contradiction_settles_failed_and_carries_no_digest(client, settings, 
     assert result.state == "failed"
     assert result.verdict == interpreter.CONTRADICTION
     assert result.landed_sha256 is None
-    assert (datasets / "GLBX.MDP3" / request_id / "files").is_dir()
-    assert list((datasets / "GLBX.MDP3" / request_id / "files").iterdir()) == []
+    assert (datasets / "databento" / "GLBX.MDP3" / request_id / "files").is_dir()
+    assert list((datasets / "databento" / "GLBX.MDP3" / request_id / "files").iterdir()) == []
 
     stored = _run(_call(settings.db_path, "get_request", request_id))
     assert stored["state"] == "failed"
@@ -286,18 +287,66 @@ def test_no_datasets_directory_means_no_run_at_all(client, settings, tmp_path):
     assert _run(_call(settings.db_path, "get_request", request_id))["state"] == "approved"
 
 
+def test_a_row_with_no_vendor_in_the_registry_fails_instead_of_guessing(
+    client, settings, tmp_path
+):
+    """The tree starts with the seller. If the registry cannot name one, the
+    runner must not invent a folder -- and must not leave the row `running`."""
+    request_id = _approved(client, settings)
+    conn = sqlite3.connect(settings.db_path)
+    try:
+        conn.execute(
+            "UPDATE requests SET plan_type = 'retired_plan' WHERE id = ?", (request_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = _run(
+        _run_in_store(
+            settings.db_path,
+            request_id,
+            datasets_dir=tmp_path / "datasets",
+            owner="host:1:abc",
+        )
+    )
+    assert result.state == "failed"
+    assert result.errors and result.errors["error"] == "vendor_unknown"
+    assert not (tmp_path / "datasets").exists()
+
+    stored = _run(_call(settings.db_path, "get_request", request_id))
+    assert stored["state"] == "failed"
+    assert stored["lease_until"] is None
+
+
 def test_a_dataset_cannot_be_a_path(tmp_path):
     for dataset in ("..", "../etc", "a/b", ".hidden", ""):
         with pytest.raises(RunRefused) as caught:
-            destination(tmp_path, dataset, "req_abc")
+            destination(tmp_path, "Databento", dataset, "req_abc")
         assert caught.value.reason == "bad_dataset"
 
     with pytest.raises(RunRefused) as caught:
-        destination(tmp_path, "GLBX.MDP3", "../../etc/passwd")
+        destination(tmp_path, "Databento", "GLBX.MDP3", "../../etc/passwd")
     assert caught.value.reason == "bad_request_id"
 
-    # The shapes that do occur are accepted, including the dotted one.
-    assert destination(tmp_path, "GLBX.MDP3", "req_abc") == tmp_path / "GLBX.MDP3" / "req_abc"
+    with pytest.raises(RunRefused) as caught:
+        destination(tmp_path, "../vendor", "GLBX.MDP3", "req_abc")
+    assert caught.value.reason == "bad_vendor"
+
+    # The shapes that do occur are accepted: the vendor is folded to a slug and
+    # the dataset keeps its case, because that is the vendor's own vocabulary.
+    assert (
+        destination(tmp_path, "Databento", "GLBX.MDP3", "req_abc")
+        == tmp_path / "databento" / "GLBX.MDP3" / "req_abc"
+    )
+
+
+def test_the_vendor_is_the_top_level_and_comes_from_the_plan_type(client, settings, tmp_path):
+    """A dataset code is vendor vocabulary; the tree says who sold it first."""
+    _, datasets, result = _land(client, settings, tmp_path)
+    assert result.dest is not None
+    relative = result.dest.relative_to(datasets)
+    assert relative.parts[:2] == ("databento", "GLBX.MDP3")
 
 
 # -- settlement is the leaseholder's --------------------------------------
@@ -400,7 +449,9 @@ def test_the_cli_runs_the_oldest_approved_request(client, settings, tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert request_id in proc.stdout
     assert "succeeded" in proc.stdout
-    assert (tmp_path / "datasets" / "GLBX.MDP3" / request_id / "files").is_dir()
+    assert (
+        tmp_path / "datasets" / "databento" / "GLBX.MDP3" / request_id / "files"
+    ).is_dir()
 
 
 def test_the_cli_with_nothing_to_do_is_not_an_error(settings, tmp_path):

@@ -16,10 +16,14 @@ Four rules, in the order they bite:
    reclaimed cannot write `succeeded` over the new claimant's attempt. Losing
    that CAS is the reclaim working, not an error.
 3. **`dest` is relative and the root is not.** The Job stages into `files/`;
-   the absolute directory is `datasets/<dataset>/<request_id>/`, built here and
-   nowhere earlier (§5.7 -- a `job_hash` must never be a path segment). The
-   folder per dataset is what an operator asked for; the request id underneath
-   it is what keeps two requests for one dataset apart.
+   the absolute directory is `datasets/<vendor>/<dataset>/<request_id>/`, built
+   here and nowhere earlier (§5.7 -- a `job_hash` must never be a path segment).
+   The vendor is the top level because a dataset code is vendor vocabulary
+   (`XNAS.ITCH` means nothing without knowing who sells it) and because the
+   datasets root already holds data from more than one vendor; the request id
+   underneath keeps two requests for one dataset apart. The vendor comes from
+   the plan type in the registry, not from the Job, which is a flow and knows no
+   seller.
 4. **The verdict decides the state, not the runner.** `pass` -> `succeeded`,
    `commit_marked` -> `landed_with_errors`, `quarantine` -> `failed`. The
    runner maps; it never overrules `interpreter.classify`.
@@ -46,8 +50,9 @@ from typing import Any
 from . import interpreter
 from . import job as job_mod
 from .claim import default_owner
-from .config import load_settings
+from .config import find_plan_types_dir, load_settings
 from .db import ClaimRefused, Store, utcnow
+from .registry import Registry, load_registry
 from .stub import StubDatabentoDriver, staged_files
 
 # Bumped when this module's behaviour changes, and recorded in `landing.json` and
@@ -55,10 +60,10 @@ from .stub import StubDatabentoDriver, staged_files
 # shell settled it are different facts.
 RUNNER_VERSION = "1"
 
-# A dataset names a directory under the datasets root, so it is constrained:
-# `..` or a slash would land bytes outside the store, and the value is
-# submitter-controlled (params.dataset) until a binder refuses it. Dot is
-# allowed (`GLBX.MDP3`); a leading dot is not.
+# A vendor or dataset names a directory under the datasets root, so both are
+# constrained: `..` or a slash would land bytes outside the store, and the
+# dataset is submitter-controlled (params.dataset) until a binder refuses it.
+# Dot is allowed (`GLBX.MDP3`); a leading dot is not.
 DATASET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
@@ -78,6 +83,8 @@ class RunRefused(Exception):
             "not_configured",
             "bad_request_id",
             "bad_dataset",
+            "bad_vendor",
+            "vendor_unknown",
             "job_missing",
             "job_invalid",
             "job_hash_mismatch",
@@ -147,13 +154,27 @@ def dataset_of(job: Any) -> str | None:
     return None
 
 
-def destination(datasets_dir: Path, dataset: str, request_id: str) -> Path:
-    """`<datasets>/<dataset>/<request_id>/` -- validated, then joined."""
+def vendor_slug(vendor: str | None) -> str:
+    """`Databento` -> `databento`: the top level of the store, lowercased.
+
+    Case is not meaningful in a directory name and two spellings of one vendor
+    would be two folders, so the registry's display name is folded once, here.
+    """
+    slug = " ".join((vendor or "").split()).lower().replace(" ", "-").replace("_", "-")
+    if not DATASET_RE.match(slug):
+        raise RunRefused("bad_vendor", f"{vendor!r} is not a directory name")
+    return slug
+
+
+def destination(
+    datasets_dir: Path, vendor: str, dataset: str, request_id: str
+) -> Path:
+    """`<datasets>/<vendor>/<dataset>/<request_id>/` -- validated, then joined."""
     if not DATASET_RE.match(dataset or ""):
         raise RunRefused("bad_dataset", f"{dataset!r} is not a directory name")
     if not REQUEST_ID_RE.match(request_id or ""):
         raise RunRefused("bad_request_id", f"{request_id!r} is not a request id")
-    return Path(datasets_dir) / dataset / request_id
+    return Path(datasets_dir) / vendor_slug(vendor) / dataset / request_id
 
 
 def bundle_digest(files: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> str:
@@ -219,6 +240,7 @@ async def run_one(
     mode: str = "clean",
     lease_seconds: int | None = None,
     driver_factory: Callable[..., Any] = StubDatabentoDriver,
+    registry: Registry | None = None,
     now: str | None = None,
 ) -> RunResult:
     """Claim one row, run its Job, settle it. Raises `ClaimRefused` if not ours."""
@@ -262,7 +284,23 @@ async def run_one(
             )
 
         dataset = dataset_of(job)
-        root = destination(Path(datasets_dir), dataset or "", request_id)
+        vendor = (registry or load_registry(find_plan_types_dir())).vendor_of(
+            row.get("plan_type")
+        )
+        if not vendor:
+            # The datasets root is organised by seller, and the seller is the
+            # plan type's declaration. A row whose type is not in the registry
+            # (code moved on, row stayed) has no place in that tree, and
+            # guessing one would file bytes under a vendor that never sold them.
+            return await _settle_refusal(
+                store, request_id, owner, "failed",
+                {
+                    "error": "vendor_unknown",
+                    "detail": f"plan_type {row.get('plan_type')!r} declares no vendor",
+                },
+                now=now,
+            )
+        root = destination(Path(datasets_dir), vendor, dataset or "", request_id)
 
         dest = dest_of(job) or "files/"
         relative = Path(dest)
@@ -399,9 +437,20 @@ def _write_landing(root: Path, payload: dict[str, Any]) -> None:
 async def run(args: argparse.Namespace) -> int:
     settings = load_settings()
     datasets_dir = args.datasets_dir or settings.datasets_dir
+    registry = load_registry(settings.plan_types_dir or find_plan_types_dir())
     store = Store(args.db or settings.db_path)
     await store.connect()
     try:
+        if not len(registry):
+            # Every landing path starts with the vendor, and the vendor is the
+            # plan type's declaration. A runner with no registry would have to
+            # invent one; refuse before claiming anything.
+            print(
+                "error: no plan types are loaded, so no row has a vendor to file "
+                "under; is DATA_DOWNLOAD_PLAN_TYPES_DIR right?",
+                file=sys.stderr,
+            )
+            return 2
         ids = [args.request_id] if args.request_id else await _approved_ids(store)
         if not ids:
             print("nothing to do: no approved request is waiting for a runner")
@@ -415,6 +464,7 @@ async def run(args: argparse.Namespace) -> int:
                     owner=args.owner,
                     mode=args.mode,
                     lease_seconds=args.lease_seconds,
+                    registry=registry,
                 )
             except ClaimRefused as exc:
                 if args.request_id:

@@ -261,7 +261,9 @@ docker exec -it data-download python -m data_download.runner <request_id>
 docker exec -it data-download python -m data_download.runner --next
 ```
 
-The bytes land in `<DATA_DOWNLOAD_DATASETS_DIR>/<dataset>/<request_id>/files/`,
+The bytes land in
+`<DATA_DOWNLOAD_DATASETS_DIR>/<vendor>/<dataset>/<request_id>/files/` (so
+`/srv/datasets/databento/GLBX.MDP3/...` here),
 which is `/datasets` in the container and a shared directory on the host
 (`DATA_DOWNLOAD_DATASETS_HOST_DIR`: `/srv/datasets` on ryzen; a `/volume1` share
 on a Synology). Create the host directory first: Docker will create a missing

@@ -177,11 +177,17 @@ It claims the row (`Store.claim`, the same CAS the `claim` CLI uses), interprets
 the sealed Job, writes the result under
 
 ```
-$DATA_DOWNLOAD_DATASETS_DIR/<dataset>/<request_id>/files/
+$DATA_DOWNLOAD_DATASETS_DIR/<vendor>/<dataset>/<request_id>/files/
 ```
 
-— a folder per dataset, a folder per request underneath it, because two
-requests can ask for the same dataset and must not overwrite each other. The
+— the vendor first, because a dataset code is vendor vocabulary (`XNAS.ITCH`
+means nothing without knowing who sells it) and the datasets root already holds
+more than one vendor's data; then a folder per dataset, then a folder per
+request, because two requests can ask for the same dataset and must not
+overwrite each other. The vendor comes from the plan type's declaration in
+`plan_types/*.yaml`, not from the Job: a Job is a flow and knows no seller. A
+row whose plan type is no longer in the registry fails with `vendor_unknown`
+rather than being filed under a guessed name. The
 root is a setting and there is no default: with `DATA_DOWNLOAD_DATASETS_DIR`
 unset the runner refuses before it claims anything, rather than writing bytes to
 a path nobody named and then reporting `succeeded`. A Job whose `dest` is
