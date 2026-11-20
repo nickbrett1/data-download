@@ -763,7 +763,6 @@ test.describe("naming a request, and opening it", () => {
     // The append-only trail, which no list view has room for.
     await expect(page.locator(".events li")).toHaveCount(1);
     await expect(page.locator(".events li")).toContainText("submitted");
-    await expect(page.locator(".events li")).toContainText("submitter");
 
     // The body the caller sent, verbatim, behind a disclosure.
     await page.locator("details.raw summary").click();
@@ -835,6 +834,37 @@ test.describe("naming a request, and opening it", () => {
     await expect(page.locator(".block.request .unpriced")).toHaveText(
       "not priced — there is no job to quote",
     );
+  });
+
+  test("the trail says who only when that is not the event's own word", async ({
+    page,
+  }) => {
+    await mock(page, {
+      detail: {
+        ...draftDetail,
+        events: [
+          draftDetail.events[0],
+          {
+            id: 2,
+            ts: "2026-11-15T23:50:00Z",
+            actor_kind: "human",
+            event: "approved",
+            detail: { actor: "nick@example.com", note: "go on then" },
+          },
+        ],
+      },
+    });
+    await page.goto("/requests/req_draft01");
+
+    const rows = page.locator(".events li");
+    await expect(rows).toHaveCount(2);
+    // `submitted` followed by `submitter` was the same word twice. No identity
+    // is recorded, so there is no third column to print.
+    await expect(rows.nth(0).locator(".what")).toHaveText("submitted");
+    await expect(rows.nth(0).locator(".who")).toHaveCount(0);
+    // An approval is worth a name, and the name is the login the tailnet
+    // asserted -- not the word "human".
+    await expect(rows.nth(1).locator(".who")).toHaveText("nick@example.com");
   });
 
   test("the detail page is a page: a reload and a back link both work", async ({

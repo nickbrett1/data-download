@@ -193,6 +193,22 @@
         : "not priced — filed before pricing existed",
   );
 
+  // Which field of an event's detail is the actor, when the trail recorded one.
+  const ACTOR_OF = { approved: "actor", claimed: "owner", released: "owner" };
+
+  /** The doer, when the event does not already say who.
+
+   * `submitted` used to be followed by `submitter` -- the trail printing the
+   * same word twice and calling it a column. The kind only earns its place when
+   * it says something the event name cannot: who approved it, which worker took
+   * it. Where there is no identity to print, there is no third column.
+   */
+  function who(event) {
+    const field = ACTOR_OF[event.event];
+    if (!field) return "";
+    return event.detail?.[field] ?? "";
+  }
+
   const rawBody = $derived.by(() => {
     if (!data) return "";
     const body =
@@ -422,7 +438,9 @@
             <li>
               <span class="when">{event.ts}</span>
               <span class="what">{event.event}</span>
-              <span class="who">{event.actor_kind}</span>
+              {#if who(event)}
+                <span class="who">{who(event)}</span>
+              {/if}
             </li>
           {/each}
         </ol>
