@@ -57,6 +57,11 @@ class Settings:
     # than a client so `pytest` injects a fake and never reaches a vendor, and so
     # the one place a client exists stays in `vendor.py` (§5.3).
     quote: object | None = None
+    # Phase 5: where a runner puts bytes — `datasets/<dataset>/<request_id>/`.
+    # `None` means this deployment has not said where its data lives, and the
+    # runner refuses rather than guessing a path: bytes in the wrong place are
+    # bytes the operator will not find, on a request that then reads `succeeded`.
+    datasets_dir: Path | None = None
 
     def scopes_for(self, token: str) -> frozenset[str] | None:
         return self.tokens.get(token)
@@ -231,6 +236,17 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
             "submit that needs a number will be refused with quote_unavailable."
         )
 
+    datasets_raw = (env.get("DATA_DOWNLOAD_DATASETS_DIR") or "").strip()
+    datasets_dir = Path(datasets_raw) if datasets_raw else None
+    if datasets_dir is None:
+        # Only the runner cares, and the service must boot without it, so this is
+        # a warning rather than a refusal -- but a loud one, because the first
+        # approved request will have nowhere to land.
+        log.warning(
+            "DATA_DOWNLOAD_DATASETS_DIR is unset - no request can be run: the "
+            "runner refuses rather than writing bytes to a path nobody named."
+        )
+
     port_raw = (env.get("PORT") or "8820").strip()
     try:
         port = int(port_raw)
@@ -249,6 +265,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         trusted_proxies=trusted_proxies,
         code_ref=resolve_code_ref(env),
         quote=quote,
+        datasets_dir=datasets_dir,
     )
 
 

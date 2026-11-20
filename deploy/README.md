@@ -252,6 +252,32 @@ docker exec -it data-download python -m data_download.approve \
   <request_id> --actor nick --note "cheap window"
 ```
 
+### Running an approved request (phase 5)
+
+An approved row is a queue entry, not a download. One command runs one:
+
+```bash
+docker exec -it data-download python -m data_download.runner <request_id>
+docker exec -it data-download python -m data_download.runner --next
+```
+
+The bytes land in `<DATA_DOWNLOAD_DATASETS_DIR>/<dataset>/<request_id>/files/`,
+which is `/datasets` in the container and a NAS share on the host
+(`DATA_DOWNLOAD_DATASETS_HOST_DIR`, default `/volume1/datasets`). Create the
+host directory first: Docker will create a missing bind source as root-owned,
+which is usually not what the share wants.
+
+**The driver is a stub.** It writes placeholder files that begin `STUB:`, makes
+no network call and cannot spend. The run is real in every other respect — the
+claim, the lease, the verdict, the `landed_sha256`, the `landed` event — which
+is the point: the first real download should not also be the first test of the
+settlement path. Do not read a `succeeded` row as data until the driver says
+`DatabentoDriver` in `landing.json`.
+
+If the runner dies mid-run the row stays `running` until the lease expires
+(900 s), then `v_stuck` reports `lease_expired` and the next claim reclaims it.
+There is no sweeper, and no second mechanism: the reclaim is the same CAS.
+
 ## 7. Networking notes
 
 - Network mode is `bridge`.

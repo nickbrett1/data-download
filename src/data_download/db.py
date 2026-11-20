@@ -291,6 +291,10 @@ async def _migrate_requests(conn: aiosqlite.Connection) -> None:
 # calcify. Overridable per call so the exit test does not need a 15-minute sleep.
 LEASE_SECONDS = 900
 
+# Where a run can end (§3.1). `running` is the claimant's, not the runner's, and
+# the three below are the only states `settle` may write.
+TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
+
 
 class ApproveRefused(Exception):
     """`approve` said no, with one of a closed set of reasons (phase 3 §2)."""
@@ -1112,6 +1116,85 @@ class Store:
                 await self.conn.execute("ROLLBACK")
                 raise
         return True
+
+    async def settle(
+        self,
+        request_id: str,
+        owner: str,
+        state: str,
+        *,
+        landed_sha256: str | None = None,
+        errors: dict[str, Any] | None = None,
+        detail: dict[str, Any] | None = None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """`running` -> a terminal state, by the leaseholder and nobody else.
+
+        Same CAS discipline as `claim` and `release`: `AND state = 'running'
+        AND owner = ?` is load-bearing. A runner whose lease expired and was
+        reclaimed must not be able to write `succeeded` over the new claimant's
+        row, even though it really did finish the old attempt.
+
+        Terminal states are `succeeded`, `landed_with_errors` and `failed`
+        (§3.1); `landed` is written for the two that put bytes on disk and
+        `failed` for the one that did not, so the trail reads as what happened
+        rather than as a state machine's name.
+
+        Returns the row after the write, or the unchanged row with
+        `"settled": False` when the CAS lost -- the caller must not treat a
+        refused settle as an error: it is the reclaim working.
+        """
+        if state not in TERMINAL_STATES:
+            raise ValueError(
+                f"settle to {state!r} is not terminal; expected one of "
+                f"{', '.join(sorted(TERMINAL_STATES))}"
+            )
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                async with self.conn.execute(
+                    "UPDATE requests "
+                    "SET state = ?, owner = ?, lease_until = NULL, updated_at = ?, "
+                    "    landed_sha256 = COALESCE(?, landed_sha256), "
+                    "    errors_json = ? "
+                    "WHERE id = ? AND state = 'running' AND owner = ?",
+                    (
+                        state,
+                        owner,
+                        ts,
+                        landed_sha256,
+                        canonical_json(errors) if errors else None,
+                        request_id,
+                        owner,
+                    ),
+                ) as cur:
+                    settled = cur.rowcount == 1
+                if not settled:
+                    await self.conn.execute("ROLLBACK")
+                    row = await self.get_request(request_id) or {}
+                    row["settled"] = False
+                    return row
+                await self._event(
+                    request_id,
+                    ts,
+                    "runner",
+                    "landed" if state != "failed" else "failed",
+                    {
+                        "owner": owner,
+                        "state": state,
+                        "landed_sha256": landed_sha256,
+                        "errors": errors,
+                        **(detail or {}),
+                    },
+                )
+                await self.conn.execute("COMMIT")
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        row = await self.get_request(request_id) or {}
+        row["settled"] = True
+        return row
 
     # -- long poll ---------------------------------------------------------
 

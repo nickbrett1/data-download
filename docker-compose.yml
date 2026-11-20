@@ -39,6 +39,18 @@ services:
       # nothing can be priced, so every submit is refused -- deliberately, since
       # an unpriced request is one whose approval authorises an unknown amount.
       DATA_DOWNLOAD_DATABENTO_KEY: ${DATA_DOWNLOAD_DATABENTO_KEY:-}
+      # Phase 5: where a runner lands bytes -- `<dir>/<dataset>/<request_id>/`.
+      # Unset means no request can be run (the runner refuses rather than
+      # guessing), which is the right default for a host that has not decided
+      # where its data lives.
+      DATA_DOWNLOAD_DATASETS_DIR: ${DATA_DOWNLOAD_DATASETS_DIR:-/datasets}
+    volumes:
+      # The datasets root, one folder per requested dataset. Host-side path is
+      # a NAS share, not the container's layer: a bind mount is the only way
+      # these bytes outlive an image pull. `docker compose exec app python -m
+      # data_download.runner --next` runs one request in this same container,
+      # so the runner sees the store and the datasets root together.
+      - ${DATA_DOWNLOAD_DATASETS_HOST_DIR:-/volume1/datasets}:/datasets
     labels:
       - "homepage.group=Services"
       - "homepage.name=data-download"

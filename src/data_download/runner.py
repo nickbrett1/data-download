@@ -1,0 +1,495 @@
+"""The runner: an approved row in, bytes under `/datasets`, a settled row out (§8).
+
+Phases 2-4 built everything up to the point where a request *could* run: a Job
+that is bound and sealed, a quote, a ceiling, an approval, a claim with a lease
+that can be reclaimed. Nothing before this module puts a byte anywhere. This is
+the one place in the repo where an approved request becomes files on disk.
+
+Four rules, in the order they bite:
+
+1. **The claim is the permission.** The runner does not re-check the state, the
+   ceiling or the code ref: `Store.claim` already did, in one statement, and a
+   second check would be a second vocabulary for the same refusal. A row it did
+   not claim is a row it does not run.
+2. **Only a leaseholder may settle.** `Store.settle` carries the same
+   `AND owner = ?` as `release`, so a runner whose lease expired and was
+   reclaimed cannot write `succeeded` over the new claimant's attempt. Losing
+   that CAS is the reclaim working, not an error.
+3. **`dest` is relative and the root is not.** The Job stages into `files/`;
+   the absolute directory is `datasets/<dataset>/<request_id>/`, built here and
+   nowhere earlier (§5.7 -- a `job_hash` must never be a path segment). The
+   folder per dataset is what an operator asked for; the request id underneath
+   it is what keeps two requests for one dataset apart.
+4. **The verdict decides the state, not the runner.** `pass` -> `succeeded`,
+   `commit_marked` -> `landed_with_errors`, `quarantine` -> `failed`. The
+   runner maps; it never overrules `interpreter.classify`.
+
+The driver is injected. Today `main()` builds `stub.StubDatabentoDriver`, which
+writes placeholder bytes that say so; the real Databento driver slots into the
+same argument without this module changing, which is how the stub earns its
+keep.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import hashlib
+import json
+import re
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from . import interpreter
+from . import job as job_mod
+from .claim import default_owner
+from .config import load_settings
+from .db import ClaimRefused, Store, utcnow
+from .stub import StubDatabentoDriver, staged_files
+
+# Bumped when this module's behaviour changes, and recorded in `landing.json` and
+# the `landed` event. `interpreter_version` is separate: which flow ran and which
+# shell settled it are different facts.
+RUNNER_VERSION = "1"
+
+# A dataset names a directory under the datasets root, so it is constrained:
+# `..` or a slash would land bytes outside the store, and the value is
+# submitter-controlled (params.dataset) until a binder refuses it. Dot is
+# allowed (`GLBX.MDP3`); a leading dot is not.
+DATASET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+LANDING_FILE = "landing.json"
+
+
+class RunRefused(Exception):
+    """The runner said no before (or instead of) spending."
+
+    A closed set of reasons, for the same purpose as `ClaimRefused`: the CLI and
+    any future supervisor must not invent their own words for "the store said
+    the row is not mine" and "the Job does not validate".
+    """
+
+    REASONS = frozenset(
+        {
+            "not_configured",
+            "bad_request_id",
+            "bad_dataset",
+            "job_missing",
+            "job_invalid",
+            "job_hash_mismatch",
+        }
+    )
+
+    def __init__(self, reason: str, detail: str | None = None) -> None:
+        if reason not in self.REASONS:
+            raise ValueError(f"unknown refusal {reason!r}")
+        self.reason = reason
+        self.detail = detail
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """What one run did, in the words the CLI prints and the tests assert."""
+
+    request_id: str
+    state: str
+    verdict: str | None
+    disposition: str | None
+    owner: str
+    dest: Path | None = None
+    files: tuple[dict[str, Any], ...] = ()
+    total_bytes: int = 0
+    landed_sha256: str | None = None
+    errors: dict[str, Any] | None = None
+    settled: bool = True
+    steps: tuple[str, ...] = ()
+
+    @property
+    def landed(self) -> bool:
+        return self.state in {"succeeded", "landed_with_errors"}
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "state": self.state,
+            "verdict": self.verdict,
+            "disposition": self.disposition,
+            "owner": self.owner,
+            "dest": str(self.dest) if self.dest else None,
+            "files": list(self.files),
+            "total_bytes": self.total_bytes,
+            "landed_sha256": self.landed_sha256,
+            "errors": self.errors,
+            "settled": self.settled,
+            "steps": list(self.steps),
+        }
+
+
+# -- pure helpers ---------------------------------------------------------
+
+
+def dataset_of(job: Any) -> str | None:
+    """The dataset to file this Job's bytes under: the `resolve` step's argument.
+
+    Read off the Job rather than off params, because the Job is what was sealed
+    and approved; params are the earlier draft of the same fact.
+    """
+    steps = job.get("steps") if isinstance(job, dict) else None
+    for step in steps or []:
+        if isinstance(step, dict) and step.get("kind") == "resolve":
+            dataset = (step.get("kwargs") or {}).get("dataset")
+            return str(dataset) if dataset else None
+    return None
+
+
+def destination(datasets_dir: Path, dataset: str, request_id: str) -> Path:
+    """`<datasets>/<dataset>/<request_id>/` -- validated, then joined."""
+    if not DATASET_RE.match(dataset or ""):
+        raise RunRefused("bad_dataset", f"{dataset!r} is not a directory name")
+    if not REQUEST_ID_RE.match(request_id or ""):
+        raise RunRefused("bad_request_id", f"{request_id!r} is not a request id")
+    return Path(datasets_dir) / dataset / request_id
+
+
+def bundle_digest(files: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> str:
+    """One hash for the landing: the sorted `sha256  name` lines.
+
+    Per-file hashes are recorded too, but the row has one `landed_sha256`
+    column, and "which bytes landed for this request" has to be one value that
+    can be compared later -- to a re-run, or to a copy on another host.
+    """
+    manifest = "".join(
+        f"{entry['sha256']}  {entry['name']}\n"
+        for entry in sorted(files, key=lambda e: str(e.get("name")))
+    )
+    return hashlib.sha256(manifest.encode("utf-8")).hexdigest()
+
+
+def landed_files(root: Path, dest: str) -> tuple[dict[str, Any], ...]:
+    """Every file the run put under its `dest`, with size and hash."""
+    base = Path(str(dest))
+    base = base if base.is_absolute() else root / base
+    staged = staged_files(base)
+    out: list[dict[str, Any]] = []
+    for name in sorted(staged):
+        path = base / name
+        out.append(
+            {
+                "name": name,
+                "sha256": staged[name]["sha256"],
+                "rows": staged[name]["rows"],
+                "bytes": path.stat().st_size,
+            }
+        )
+    return tuple(out)
+
+
+def dest_of(job: Any) -> str | None:
+    steps = job.get("steps") if isinstance(job, dict) else None
+    for step in steps or []:
+        if isinstance(step, dict) and step.get("kind") == "download":
+            dest = (step.get("kwargs") or {}).get("dest")
+            return str(dest) if dest else None
+    return None
+
+
+def state_for(disposition: str) -> str:
+    """`interpreter`'s disposition -> the Request's state (§3.1)."""
+    if disposition == interpreter.COMMIT:
+        return "succeeded"
+    if disposition == interpreter.COMMIT_MARKED:
+        return "landed_with_errors"
+    return "failed"
+
+
+# -- one run --------------------------------------------------------------
+
+
+async def run_one(
+    request_id: str,
+    *,
+    store: Store,
+    datasets_dir: Path | str | None,
+    owner: str | None = None,
+    mode: str = "clean",
+    lease_seconds: int | None = None,
+    driver_factory: Callable[..., Any] = StubDatabentoDriver,
+    now: str | None = None,
+) -> RunResult:
+    """Claim one row, run its Job, settle it. Raises `ClaimRefused` if not ours."""
+    if datasets_dir is None:
+        # Fail closed: writing bytes somewhere nobody named is worse than not
+        # running, because the Request then looks done and the bytes are lost.
+        raise RunRefused(
+            "not_configured",
+            "no datasets directory: set DATA_DOWNLOAD_DATASETS_DIR or --datasets-dir",
+        )
+    if not REQUEST_ID_RE.match(request_id or ""):
+        raise RunRefused("bad_request_id", f"{request_id!r} is not a request id")
+
+    owner = owner or default_owner()
+    row = await store.claim(request_id, owner, lease_seconds=lease_seconds)
+
+    try:
+        job_text = row.get("job_json")
+        if not job_text:
+            return await _settle_refusal(
+                store, request_id, owner, "failed", {"error": "job_missing"}, now=now
+            )
+
+        try:
+            job = json.loads(job_text)
+            job_mod.validate(job)
+        except (json.JSONDecodeError, job_mod.JobInvalid) as exc:
+            # A stored Job that does not validate is a code or store fault, not
+            # a vendor outcome: settle `failed` with the reason rather than
+            # leaving the row `running` until the lease expires.
+            message = getattr(exc, "message", str(exc))
+            return await _settle_refusal(
+                store, request_id, owner, "failed",
+                {"error": "job_invalid", "detail": message}, now=now,
+            )
+
+        if job_mod.job_hash(job_text) != row.get("job_hash"):
+            return await _settle_refusal(
+                store, request_id, owner, "failed",
+                {"error": "job_hash_mismatch"}, now=now,
+            )
+
+        dataset = dataset_of(job)
+        root = destination(Path(datasets_dir), dataset or "", request_id)
+
+        dest = dest_of(job) or "files/"
+        relative = Path(dest)
+        if relative.is_absolute() or ".." in relative.parts:
+            # A Job that stages outside its own request directory is not one
+            # this runner will execute: `dest` is relative by design (§5.7).
+            return await _settle_refusal(
+                store, request_id, owner, "failed",
+                {"error": "job_invalid", "detail": f"dest {dest!r} is not relative"},
+                now=now,
+            )
+        root.mkdir(parents=True, exist_ok=True)
+        # The staging directory exists for the attempt even when the vendor
+        # publishes nothing: `absent` is a file fact, not a missing directory.
+        (root / relative).mkdir(parents=True, exist_ok=True)
+
+        driver = driver_factory(root, mode)
+        try:
+            verdict = interpreter.run(job, driver)
+        except interpreter.InterpreterError as exc:
+            return await _settle_refusal(
+                store, request_id, owner, "failed",
+                {"error": "interpreter_error", "detail": str(exc)},
+                dest=root, dataset=dataset, mode=mode, now=now,
+            )
+
+        files = landed_files(root, dest)
+        state = state_for(verdict.disposition)
+        digest = bundle_digest(files) if state != "failed" else None
+        errors = None if state == "succeeded" else dict(verdict.detail)
+
+        _write_landing(
+            root,
+            {
+                "request_id": request_id,
+                "job_hash": row.get("job_hash"),
+                "owner": owner,
+                "state": state,
+                "verdict": verdict.verdict,
+                "disposition": verdict.disposition,
+                "driver": f"{type(driver).__name__}",
+                "driver_mode": mode,
+                "dest": str(root / dest),
+                "files": list(files),
+                "landed_sha256": digest,
+                "interpreter_version": verdict.interpreter_version,
+                "runner_version": RUNNER_VERSION,
+                "settled_at": now or utcnow(),
+            },
+        )
+
+        after = await store.settle(
+            request_id,
+            owner,
+            state,
+            landed_sha256=digest,
+            errors=errors,
+            detail={
+                "verdict": verdict.verdict,
+                "disposition": verdict.disposition,
+                "dest": str(root / dest),
+                "files": len(files),
+                "bytes": sum(int(f["bytes"]) for f in files),
+                "driver": type(driver).__name__,
+            },
+            now=now,
+        )
+        return RunResult(
+            request_id=request_id,
+            state=state,
+            verdict=verdict.verdict,
+            disposition=verdict.disposition,
+            owner=owner,
+            dest=root / dest,
+            files=files,
+            total_bytes=sum(int(f["bytes"]) for f in files),
+            landed_sha256=digest,
+            errors=errors,
+            settled=bool(after.get("settled")),
+            steps=verdict.steps,
+        )
+    except Exception:
+        # A crash after the claim but before the settle would hold the lease for
+        # 15 minutes on a request nobody is working on. Give it back — best
+        # effort, and only if it is still ours — then let the caller see why.
+        await store.release(request_id, owner, reason="runner_crashed")
+        raise
+
+
+async def _settle_refusal(
+    store: Store,
+    request_id: str,
+    owner: str,
+    state: str,
+    errors: dict[str, Any],
+    *,
+    dest: Path | None = None,
+    dataset: str | None = None,
+    mode: str | None = None,
+    now: str | None = None,
+) -> RunResult:
+    after = await store.settle(
+        request_id, owner, state, errors=errors, detail={"reason": errors.get("error")}, now=now
+    )
+    return RunResult(
+        request_id=request_id,
+        state=state,
+        verdict=None,
+        disposition=None,
+        owner=owner,
+        dest=dest,
+        errors=errors,
+        settled=bool(after.get("settled")),
+    )
+
+
+def _write_landing(root: Path, payload: dict[str, Any]) -> None:
+    """Provenance beside `files/`, never inside it.
+
+    Inside `dest` it would be staged, not in the vendor manifest, and `classify`
+    would call a correct landing a contradiction — the same trap `convert`
+    avoids. Written even when the settle then loses its CAS: bytes on disk with
+    no record are worse than bytes with an honest record naming the attempt.
+    """
+    (Path(root) / LANDING_FILE).write_text(
+        json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+# -- the command line -----------------------------------------------------
+
+
+async def run(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    datasets_dir = args.datasets_dir or settings.datasets_dir
+    store = Store(args.db or settings.db_path)
+    await store.connect()
+    try:
+        ids = [args.request_id] if args.request_id else await _approved_ids(store)
+        if not ids:
+            print("nothing to do: no approved request is waiting for a runner")
+            return 0
+        for request_id in ids:
+            try:
+                result = await run_one(
+                    request_id,
+                    store=store,
+                    datasets_dir=datasets_dir,
+                    owner=args.owner,
+                    mode=args.mode,
+                    lease_seconds=args.lease_seconds,
+                )
+            except ClaimRefused as exc:
+                if args.request_id:
+                    print(f"refused: {exc.as_text()}", file=sys.stderr)
+                    return 1 if exc.reason != "not_found" else 2
+                continue  # `--next`: another runner won this row; try the next
+            except RunRefused as exc:
+                print(f"refused: {exc}", file=sys.stderr)
+                return 2
+            print(
+                f"{result.request_id}: {result.state} ({result.verdict or 'no verdict'}, "
+                f"{len(result.files)} file(s), {result.total_bytes} bytes) "
+                f"owner={result.owner}"
+            )
+            if result.dest:
+                print(f"  dest: {result.dest}")
+            if result.landed_sha256:
+                print(f"  landed_sha256: {result.landed_sha256}")
+            if not result.settled:
+                print(
+                    "  note: the lease was reclaimed before this run settled; "
+                    "the row belongs to another attempt",
+                    file=sys.stderr,
+                )
+                return 1
+            return 0 if result.state != "failed" else 1
+        print("no approved request could be claimed")
+        return 0
+    finally:
+        await store.close()
+
+
+async def _approved_ids(store: Store) -> list[str]:
+    rows, _ = await store.list_requests(state="approved", limit=100)
+    # Oldest first: a queue, not a stack. `list_requests` is newest-first for
+    # the UI.
+    return [row["id"] for row in sorted(rows, key=lambda r: str(r["created_at"]))]
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m data_download.runner",
+        description=(
+            "Claim one approved request, run its Job against the stub vendor, "
+            "land the bytes under the datasets directory, and settle the row."
+        ),
+    )
+    parser.add_argument("request_id", nargs="?", default=None)
+    parser.add_argument(
+        "--next",
+        action="store_true",
+        help="run the oldest approved request instead of a named one",
+    )
+    parser.add_argument("--owner", default=None, help="the claimant (default: host:pid:uuid)")
+    parser.add_argument("--lease-seconds", type=int, default=None)
+    parser.add_argument("--mode", choices=("clean", "short", "nothing"), default="clean")
+    parser.add_argument(
+        "--datasets-dir",
+        default=None,
+        help="where datasets/ lives (default: $DATA_DOWNLOAD_DATASETS_DIR)",
+    )
+    parser.add_argument("--db", default=None, help="the store (default: $DATA_DOWNLOAD_DB)")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if not args.request_id and not args.next:
+        print("error: name a request id or pass --next", file=sys.stderr)
+        return 2
+    if args.request_id and args.next:
+        print("error: --next and a request id are mutually exclusive", file=sys.stderr)
+        return 2
+    return asyncio.run(run(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

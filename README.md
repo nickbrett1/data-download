@@ -164,6 +164,50 @@ That is also how the tests divide: `pytest` owns the contract (which row gets
 which facet, what a plan type says a parameter demands), and `web/e2e/` owns the
 render, mocking `/ui/*.json` so it needs neither Python nor a database.
 
+### The runner, and where the bytes go
+
+Phase 5 turns an approved row into files. One invocation runs one request:
+
+```
+python -m data_download.runner <request_id>     # a named request
+python -m data_download.runner --next           # the oldest approved one
+```
+
+It claims the row (`Store.claim`, the same CAS the `claim` CLI uses), interprets
+the sealed Job, writes the result under
+
+```
+$DATA_DOWNLOAD_DATASETS_DIR/<dataset>/<request_id>/files/
+```
+
+— a folder per dataset, a folder per request underneath it, because two
+requests can ask for the same dataset and must not overwrite each other. The
+root is a setting and there is no default: with `DATA_DOWNLOAD_DATASETS_DIR`
+unset the runner refuses before it claims anything, rather than writing bytes to
+a path nobody named and then reporting `succeeded`. A Job whose `dest` is
+absolute or escapes its request directory is refused too.
+
+The verdict decides the state, and nothing else does: `pass` -> `succeeded`,
+`commit_marked` -> `landed_with_errors`, `quarantine` or an interpreter error
+-> `failed`. `succeeded` and `landed_with_errors` record `landed_sha256` (the
+hash of the sorted `sha256  name` lines of what actually landed) and write a
+`landed` event; `failed` records its errors and writes `failed`. Every settle
+carries `AND state = 'running' AND owner = ?`, so a runner whose lease expired
+and was reclaimed cannot write over the new claimant's attempt — losing that
+CAS is the reclaim working, and is reported, not raised. `landing.json` sits
+beside `files/` rather than inside it, because a file inside the staging
+directory would be staged-but-not-in-the-vendor-manifest and the shared verifier
+would rightly call a good landing a contradiction.
+
+**The driver today is a stub.** `stub.StubDatabentoDriver` makes no network
+call, holds no credential, and writes files that literally begin `STUB:`; it
+cannot spend and it cannot produce data. What it proves is the runner: the
+claim, the path, the digest, the settlement, the events. The interpreter's
+Driver protocol is unchanged, so the real Databento driver slots in behind the
+same `run_one(..., driver_factory=...)` argument. Until it does, an approved
+request run through this path lands placeholder bytes — deliberately, so the
+first real download is not also the first test of the lease.
+
 ## When the registry moves
 
 A Request filed while nothing registered could take it sits `blocked` with a
