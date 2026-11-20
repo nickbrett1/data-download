@@ -34,9 +34,7 @@
    *                row with `aria-current="page"` -- so the block owns it and
    *                every consumer stops re-inventing it. `current` is the
    *                caller's truth (it knows its router); the block never
-   *                guesses from the URL. A bar too narrow to hold the row
-   *                beside the wordmark gives the tabs a line of their own
-   *                instead of scrolling them out of reach (1.17.0).
+   *                guesses from the URL.
    *   `embedded` -- true when the shell is not a page: a Homepage dashboard
    *                card iframed into someone else's layout (1.11.0). A card is
    *                not a viewport, so the shell must not claim one -- and this
@@ -333,22 +331,6 @@
 
     .topbar-inner {
       gap: 10px;
-    }
-
-    /* Two tabs fitted beside the wordmark on a 390px phone; a third does not
-       (measured on data-download: 230px of tabs into 206px of room). The row
-       shrinks and scrolls silently when it is squeezed -- which is how a
-       destination disappears, the one thing the `.main-nav` rules above
-       exist to prevent. So on a narrow bar the row may not shrink at all:
-       every tab fits on one line, or the row takes a line of its own at its
-       natural width, where all of them are visible at once (1.17.0). */
-    .has-nav .topbar-inner {
-      flex-wrap: wrap;
-    }
-
-    .has-nav .main-nav {
-      flex: 0 0 auto;
-      overflow-x: visible;
     }
 
     .main-nav a {
