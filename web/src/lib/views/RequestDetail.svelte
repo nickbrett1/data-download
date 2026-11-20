@@ -64,14 +64,15 @@
     const rows = [
       { label: "request id", value: data.id, isCode: true },
       { label: "state", value: stateLabel(data.state) },
-      {
-        // The dashboard column of this name was removed for promising more
-        // than it could deliver; here the value really is "where this row sits
-        // in the book", so it says that.
-        label: BLOCKED.has(data.facet) ? "waiting on" : "in the book",
-        value: data.facet_label,
-      },
     ];
+    // The facet is worth naming on a blocked row and nowhere else. There it
+    // answers a question the state cannot: which of the three kinds of stuck
+    // this is, and therefore who moves next. On a draft it was "in the book:
+    // Approval" -- a filter bucket restated under a pill that already said
+    // *Awaiting approval*, which is a label inventing a thing to say.
+    if (BLOCKED.has(data.facet)) {
+      rows.push({ label: "waiting on", value: data.facet_label });
+    }
     // Approved and nobody has taken it. The same words the book uses under the
     // badge, because a reader who clicked through from `no worker has it yet`
     // should find that sentence here, not a second vocabulary for it. It is no
