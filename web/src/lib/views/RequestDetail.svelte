@@ -251,20 +251,18 @@
           <p class="quiet">No parameters were recorded on this request.</p>
         {/if}
         <!-- The money, in the same breath as the thing it prices: the quote is
-             what a decision needs and the ceiling is what it authorises. The
-             figures sit against the right edge in one column, the way the book
-             sets them in its `quote` column -- a number is read by comparing it
-             with the one above, so the decimal points have to line up. Three
-             different absences, said three different ways -- a dash would make
-             an unpriced request look like a free one. -->
+             what a decision needs and the ceiling is what it authorises. It is
+             one sentence, set against the right edge so the figure ends where
+             the book's `quote` column ends. Three different absences, said
+             three different ways -- a dash would make an unpriced request look
+             like a free one. -->
         {#if data.estimate_usd !== null && data.estimate_usd !== undefined}
           <p class="money">
-            <span class="lbl">quoted</span>
-            <span class="fig">{usd(data.estimate_usd)}</span>
-            {#if data.max_usd !== null && data.max_usd !== undefined}
-              <span class="lbl">ceiling</span>
-              <span class="fig">{bound(data.max_usd)}</span>
-            {/if}
+            quoted <strong>{usd(data.estimate_usd)}</strong
+            >{#if data.max_usd !== null && data.max_usd !== undefined}<span
+                class="sep">·</span
+              >
+              ceiling {bound(data.max_usd)}{/if}
           </p>
         {:else if data.max_usd !== null && data.max_usd !== undefined}
           <p class="money plain">
@@ -451,32 +449,25 @@
     font-size: 11.5px;
   }
 
-  /* A ledger, not a sentence: two columns pushed to the right edge, so the
-     figures stack in one column and line up with the book's `quote`. */
+  /* One sentence, hung off the right edge of the block: the figure ends where
+     the book's `quote` column ends, so the same number reads in the same place
+     on both pages. */
   .money {
-    display: grid;
-    grid-template-columns: max-content max-content;
-    justify-content: end;
-    column-gap: 14px;
-    row-gap: 2px;
     margin: 12px 0 0;
     font-size: 13px;
     color: var(--ink-muted);
     font-variant-numeric: tabular-nums;
-  }
-
-  /* The one case where there is no figure to line up: prose, at the left,
-     where prose belongs. */
-  .money.plain {
-    display: block;
-    font-variant-numeric: normal;
-  }
-
-  .money .fig {
     text-align: right;
+  }
+
+  /* No figure, so nothing to line up: prose, at the left, where prose belongs. */
+  .money.plain {
+    text-align: left;
+  }
+
+  .money strong {
     color: var(--ink);
     font-weight: 600;
-    font-family: var(--mono);
   }
 
   .money .sep {

@@ -798,20 +798,21 @@ test.describe("naming a request, and opening it", () => {
     await expect(request.locator(".money")).toContainText("quoted $0.8115");
     await expect(request.locator(".money")).toContainText("ceiling $5");
 
-    // Set as a ledger, not a sentence: the figures stack in one column against
-    // the right edge, so 4c and 49c differ in a digit and not in where the
-    // decimal point sits. Reading a price means comparing it with another.
-    const [quoted, ceiling] = await request
-      .locator(".money .fig")
-      .evaluateAll((figs) => figs.map((fig) => fig.getBoundingClientRect()));
-    expect(quoted.right).toBeCloseTo(ceiling.right, 0);
-    const edge = await request.evaluate(
-      (el) => el.getBoundingClientRect().right,
+    // It is one sentence, but it ends where the book's `quote` column ends:
+    // the figure is read against the right edge, not the left margin.
+    const money = request.locator(".money");
+    expect(await money.evaluate((el) => getComputedStyle(el).textAlign)).toBe(
+      "right",
     );
-    expect(quoted.right).toBeCloseTo(edge, 0);
-    // One column, not two indentations: the boxes share both edges and the
-    // text inside them hangs off the right.
-    expect(quoted.left).toBeCloseTo(ceiling.left, 0);
+    const [text, edge] = await Promise.all([
+      money.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return range.getBoundingClientRect().right;
+      }),
+      request.evaluate((el) => el.getBoundingClientRect().right),
+    ]);
+    expect(text).toBeCloseTo(edge, 0);
   });
 
   test("an unpriced request says which kind of unpriced it is", async ({
