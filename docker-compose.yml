@@ -46,11 +46,12 @@ services:
       DATA_DOWNLOAD_DATASETS_DIR: ${DATA_DOWNLOAD_DATASETS_DIR:-/datasets}
     volumes:
       # The datasets root, one folder per requested dataset. Host-side path is
-      # a NAS share, not the container's layer: a bind mount is the only way
-      # these bytes outlive an image pull. `docker compose exec app python -m
+      # a share, not the container's layer: a bind mount is the only way these
+      # bytes outlive an image pull. On ryzen that share is /srv/datasets; on a
+      # Synology it is a /volume1 share. `docker compose exec app python -m
       # data_download.runner --next` runs one request in this same container,
       # so the runner sees the store and the datasets root together.
-      - ${DATA_DOWNLOAD_DATASETS_HOST_DIR:-/volume1/datasets}:/datasets
+      - ${DATA_DOWNLOAD_DATASETS_HOST_DIR:-/srv/datasets}:/datasets
     labels:
       - "homepage.group=Services"
       - "homepage.name=data-download"

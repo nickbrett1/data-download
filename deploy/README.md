@@ -262,10 +262,10 @@ docker exec -it data-download python -m data_download.runner --next
 ```
 
 The bytes land in `<DATA_DOWNLOAD_DATASETS_DIR>/<dataset>/<request_id>/files/`,
-which is `/datasets` in the container and a NAS share on the host
-(`DATA_DOWNLOAD_DATASETS_HOST_DIR`, default `/volume1/datasets`). Create the
-host directory first: Docker will create a missing bind source as root-owned,
-which is usually not what the share wants.
+which is `/datasets` in the container and a shared directory on the host
+(`DATA_DOWNLOAD_DATASETS_HOST_DIR`: `/srv/datasets` on ryzen; a `/volume1` share
+on a Synology). Create the host directory first: Docker will create a missing
+bind source as root-owned, which is usually not what the share wants.
 
 **The driver is a stub.** It writes placeholder files that begin `STUB:`, makes
 no network call and cannot spend. The run is real in every other respect — the
