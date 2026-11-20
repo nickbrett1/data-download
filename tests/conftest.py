@@ -42,6 +42,10 @@ PLAN_BODY = {
         "end": "2026-10-03",
     },
     "verify": {"on_failure": "quarantine"},
+    # Phase 4: the ceiling, and the reason. A plan is priced at submit and
+    # refused above its ceiling, so the number is not optional here either.
+    "max_usd": 5,
+    "why": "ES continuous, two days, to check the binder and the quote",
 }
 
 INTENT_BODY = {

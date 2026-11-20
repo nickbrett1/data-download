@@ -147,8 +147,10 @@ finite number — the submit is refused (`quote_unavailable`) and no row is
 written. A zero is refused rather than recorded, because "free" and "the vendor
 said nothing" are the same number and only one of them is a fact.
 
-The ceiling is the only budget check. `max_usd` on the body is compared to that
-one quote, at submit, once. Above it, a plan submit is refused `over_ceiling`;
+The ceiling is the only budget check. `max_usd` is required on both body kinds —
+a plan without one is a request nobody can refuse on cost, and it is the body
+kind most likely to be expensive — and it is compared to that one quote, at
+submit, once. Above it, a plan submit is refused `over_ceiling`;
 a matched *intent* cannot be refused (it is already a row), so it lands
 `blocked` with `blocked_reason='ceiling_exceeded'` and no Job, and the number
 comes back in the response for whoever raises the ceiling. There is no

@@ -105,6 +105,8 @@ def test_reordered_keys_hash_identically_and_bind_the_same_job(client):
     assert first.status_code == 202
 
     reordered = {
+        "max_usd": PLAN_BODY["max_usd"],
+        "why": PLAN_BODY["why"],
         "verify": PLAN_BODY["verify"],
         "params": dict(reversed(list(PLAN_BODY["params"].items()))),
         "plan_type": PLAN_BODY["plan_type"],
@@ -113,6 +115,23 @@ def test_reordered_keys_hash_identically_and_bind_the_same_job(client):
     again = _submit(client, reordered)
     assert again.status_code == 202
     assert again.json()["duplicate_of"] == first.json()["request_id"]
+
+
+def test_a_plan_without_a_ceiling_is_refused(client):
+    """The single budget check needs a number to check against.
+
+    `max_usd` was mandatory for intents and optional for plans, so the one body
+    kind most likely to be expensive could be approved with nothing bounding it:
+    the comparison against `estimate_usd` had nothing to compare with.
+    """
+    body = copy.deepcopy(PLAN_BODY)
+    body.pop("max_usd")
+    response = _submit(client, body)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "plan_not_valid"
+    assert response.json()["error"]["field"] == "max_usd"
+    # Nothing was stored, so nothing can be approved.
+    assert client.get("/v1/requests", headers=auth()).json()["items"] == []
 
 
 def test_unregistered_plan_type_is_422_plan_type_unknown(client):

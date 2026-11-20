@@ -85,6 +85,18 @@ def validate_plan(body: dict[str, Any], plan_type: PlanType) -> dict[str, Any]:
 
     _validate_params(plan_type, params)
 
+    # The ceiling, for a plan exactly as for an intent. It was optional here
+    # while it was mandatory there, which meant the one body kind most likely to
+    # be expensive could be approved with nothing bounding it -- the single
+    # budget check (§5.2) compares a quote against this number, so a plan
+    # without one is a request nobody can refuse on cost.
+    if not finite_positive(body.get("max_usd")):
+        raise errors.plan_not_valid(
+            "max_usd is required and must be a finite number greater than 0: "
+            "it is the ceiling an approval authorises",
+            field="max_usd",
+        )
+
     verify = body.get("verify")
     if plan_type.verify_required and verify is None:
         raise errors.plan_not_valid(

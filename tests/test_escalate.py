@@ -154,6 +154,8 @@ def test_escalating_something_that_is_not_waiting_is_refused(client):
                 "end": "2026-10-03",
             },
             "verify": {"on_failure": "quarantine"},
+            "max_usd": 5,
+            "why": "a plan row is draft, so there is nothing to escalate",
         },
         headers=auth(),
     ).json()
