@@ -6,6 +6,7 @@ test.use({ timezoneId: "UTC" });
 import {
   blockedBook,
   dashboard,
+  datasets,
   draftDetail,
   emptyBook,
   planTypes,
@@ -20,7 +21,7 @@ const SERVED = { login: "nick@example.com", approver: true };
 
 async function mock(
   page,
-  { requests, types, detail, who, whoStatus = 200 } = {},
+  { requests, types, detail, tree, who, whoStatus = 200 } = {},
 ) {
   await page.route(
     "**/v1/whoami",
@@ -49,9 +50,11 @@ async function mock(
       const url = route.request().url();
       const body = url.includes("plan-types")
         ? (types ?? planTypes)
-        : url.includes("/ui/request/")
-          ? (detail ?? requestDetail)
-          : (requests ?? dashboard);
+        : url.includes("/ui/datasets")
+          ? (tree ?? datasets)
+          : url.includes("/ui/request/")
+            ? (detail ?? requestDetail)
+            : (requests ?? dashboard);
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -550,8 +553,8 @@ test.describe("the shell on a phone", () => {
 
   async function expectTabs(page, current) {
     const tabs = page.locator(".main-nav a");
-    await expect(tabs).toHaveCount(2);
-    await expect(tabs).toHaveText(["Requests", "Plan types"]);
+    await expect(tabs).toHaveCount(3);
+    await expect(tabs).toHaveText(["Requests", "Datasets", "Plan types"]);
     // Exactly one tab is the current page, and it is the right one.
     await expect(page.locator('.main-nav a[aria-current="page"]')).toHaveCount(
       1,
@@ -559,8 +562,8 @@ test.describe("the shell on a phone", () => {
     await expect(page.locator('.main-nav a[aria-current="page"]')).toHaveText(
       current,
     );
-    // Both tabs are reachable without scrolling the bar: a tab row that hides
-    // the second view is the bug this test exists for.
+    // Every tab is reachable without scrolling the bar: a tab row that hides
+    // a view is the bug this test exists for.
     const fits = await page
       .locator(".main-nav")
       .evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
@@ -620,7 +623,7 @@ test.describe("the shell on a phone", () => {
     await expectNoHorizontalScroll(page);
   }
 
-  test("the request book shows both views and a typed intro", async ({
+  test("the request book shows every view and a typed intro", async ({
     page,
   }) => {
     await mock(page);
@@ -631,12 +634,21 @@ test.describe("the shell on a phone", () => {
     await expectNoHorizontalScroll(page);
   });
 
-  test("plan types shows both views and a typed intro", async ({ page }) => {
+  test("plan types shows every view and a typed intro", async ({ page }) => {
     await mock(page);
     await page.goto("/plan-types");
     await expect(page.locator(".type-card")).toHaveCount(2);
     await expectTabs(page, "Plan types");
     await expectLede(page, "Plan types");
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("datasets shows every view and a typed intro", async ({ page }) => {
+    await mock(page);
+    await page.goto("/datasets");
+    await expect(page.locator(".card")).toHaveCount(2);
+    await expectTabs(page, "Datasets");
+    await expectLede(page, "Datasets");
     await expectNoHorizontalScroll(page);
   });
 
@@ -662,11 +674,15 @@ test.describe("the page ends where the content ends", () => {
   // to the other tab. The link duplicated the nav directly above it, the
   // timestamp always read "now" on a page that is never cached, and the path
   // is the host's business. A page that is one list should stop after the list.
-  for (const path of ["/", "/plan-types"]) {
+  for (const path of ["/", "/datasets", "/plan-types"]) {
     test(`${path} has no footer and no server trivia`, async ({ page }) => {
       await mock(page);
       await page.goto(path);
 
+      // A `<footer>` on a page is a page footer, and there is none. This is
+      // also what keeps a card's own landed-at line (the datasets browser has
+      // one) a `div`: card metadata is not a page footer, and a `<footer>`
+      // inside a card would make this count 2 on the third view.
       await expect(page.locator("footer")).toHaveCount(0);
       const body = await page.locator("body").innerText();
       expect(body).not.toContain("generated");
@@ -675,7 +691,7 @@ test.describe("the page ends where the content ends", () => {
 
       // The navigation exists once, in the bar.
       await expect(page.locator(".main-nav")).toHaveCount(1);
-      await expect(page.locator(".main-nav a")).toHaveCount(2);
+      await expect(page.locator(".main-nav a")).toHaveCount(3);
     });
   }
 });
@@ -1276,5 +1292,105 @@ test.describe("a request that is waiting, in three different ways", () => {
     await page.goto("/requests/req_0a7c9d33");
     await expect(section).toContainText("new plan asked for");
     await expect(section).not.toContainText("POST /v1/requests/");
+  });
+});
+
+test.describe("the datasets browser", () => {
+  test("is vendor, then dataset, then what landed", async ({ page }) => {
+    await mock(page);
+    await page.goto("/datasets");
+
+    // The vendor is the top level, because a dataset code is vendor
+    // vocabulary: `GLBX.MDP3` under `databento` is the same fact as the path
+    // on disk.
+    await expect(page.locator(".vendor h2")).toHaveText("databento");
+    await expect(page.locator(".vendor h3")).toHaveText("GLBX.MDP3");
+    await expect(page.locator(".card")).toHaveCount(2);
+
+    const landed = page.locator(".card").nth(0);
+    await expect(landed.locator(".pill")).toHaveText("Succeeded");
+    await expect(landed.locator(".facts")).toContainText(
+      "2026-11-04 → 2026-11-06",
+    );
+    await expect(landed.locator(".facts")).toContainText(
+      "trades · ES.c.0 · continuous",
+    );
+    await expect(landed.locator(".files li")).toHaveCount(2);
+    await expect(landed.locator(".files a").first()).toHaveAttribute(
+      "href",
+      /^\/datasets\/file\/databento\/GLBX\.MDP3\/req_landed01\//,
+    );
+    // A download, not a navigation: a phone should save the file.
+    await expect(landed.locator(".files a").first()).toHaveAttribute(
+      "download",
+      "",
+    );
+    // Placeholder bytes and real ones must not be indistinguishable.
+    await expect(landed.locator(".stub")).toHaveText("stub");
+    await expect(landed.locator(".card-foot")).toContainText(
+      "sha c69889effb5d",
+    );
+  });
+
+  test("a half-finished download shows the files it already has", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/datasets");
+
+    const running = page.locator(".card").nth(1);
+    await expect(running.locator(".pill")).toHaveText("Running");
+    // The whole reason this page exists next to the request book: a run with
+    // one of four days on disk must look like progress, not like nothing.
+    await expect(running.locator(".files li")).toHaveCount(1);
+    await expect(running.locator(".files li")).toContainText(
+      "GLBX.MDP3-2026-11-04.dbn.zst",
+    );
+    // Not settled yet, so no landing digest and no verdict to claim.
+    await expect(running.locator(".card-foot")).not.toContainText("sha");
+    await expect(running.locator(".stub")).toHaveCount(0);
+  });
+
+  test("says what a summary is worth, and keeps polling while a run moves", async ({
+    page,
+  }) => {
+    let calls = 0;
+    await page.route("**/ui/datasets.json", (route) => {
+      calls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(datasets),
+      });
+    });
+    await page.goto("/datasets");
+
+    await expect(page.locator(".summary")).toContainText("1 vendor");
+    await expect(page.locator(".summary")).toContainText("3 files");
+    await expect(page.locator(".summary")).toContainText("1 in flight");
+
+    await expect.poll(() => calls, { timeout: 12000 }).toBeGreaterThan(1);
+  });
+
+  test("a missing datasets root is a sentence, not an empty list", async ({
+    page,
+  }) => {
+    await mock(page, {
+      tree: { root: null, configured: false, vendors: [], totals: {} },
+    });
+    await page.goto("/datasets");
+
+    await expect(page.locator(".empty")).toContainText(
+      "No datasets root is configured",
+    );
+    await expect(page.locator(".card")).toHaveCount(0);
+  });
+
+  test("is one tap from the request book", async ({ page }) => {
+    await mock(page);
+    await page.goto("/");
+    await page.getByRole("link", { name: "Datasets" }).click();
+    await expect(page).toHaveURL(/\/datasets$/);
+    await expect(page.locator(".lede")).toHaveText("Datasets");
   });
 });
