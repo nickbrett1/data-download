@@ -251,24 +251,28 @@
           <p class="quiet">No parameters were recorded on this request.</p>
         {/if}
         <!-- The money, in the same breath as the thing it prices: the quote is
-             what a decision needs and the ceiling is what it authorises. Three
+             what a decision needs and the ceiling is what it authorises. The
+             figures sit against the right edge in one column, the way the book
+             sets them in its `quote` column -- a number is read by comparing it
+             with the one above, so the decimal points have to line up. Three
              different absences, said three different ways -- a dash would make
              an unpriced request look like a free one. -->
         {#if data.estimate_usd !== null && data.estimate_usd !== undefined}
           <p class="money">
-            quoted <strong>{usd(data.estimate_usd)}</strong
-            >{#if data.max_usd !== null && data.max_usd !== undefined}<span
-                class="sep">·</span
-              >
-              ceiling {bound(data.max_usd)}{/if}
+            <span class="lbl">quoted</span>
+            <span class="fig">{usd(data.estimate_usd)}</span>
+            {#if data.max_usd !== null && data.max_usd !== undefined}
+              <span class="lbl">ceiling</span>
+              <span class="fig">{bound(data.max_usd)}</span>
+            {/if}
           </p>
         {:else if data.max_usd !== null && data.max_usd !== undefined}
-          <p class="money">
+          <p class="money plain">
             <span class="quiet">not priced — there is no job to quote</span
             ><span class="sep">·</span> ceiling {bound(data.max_usd)}
           </p>
         {:else}
-          <p class="money">
+          <p class="money plain">
             <span class="quiet">not priced — filed before pricing existed</span>
           </p>
         {/if}
@@ -279,10 +283,7 @@
         {#if data.payload?.why}
           <p class="why">{data.payload.why}</p>
         {:else}
-          <p class="quiet">
-            No reason was recorded. Every submit takes a `why` — a plan filed
-            before this was stored has none.
-          </p>
+          <p class="quiet">No reason was recorded.</p>
         {/if}
       </section>
 
@@ -450,16 +451,32 @@
     font-size: 11.5px;
   }
 
+  /* A ledger, not a sentence: two columns pushed to the right edge, so the
+     figures stack in one column and line up with the book's `quote`. */
   .money {
-    margin: 10px 0 0;
+    display: grid;
+    grid-template-columns: max-content max-content;
+    justify-content: end;
+    column-gap: 14px;
+    row-gap: 2px;
+    margin: 12px 0 0;
     font-size: 13px;
     color: var(--ink-muted);
     font-variant-numeric: tabular-nums;
   }
 
-  .money strong {
+  /* The one case where there is no figure to line up: prose, at the left,
+     where prose belongs. */
+  .money.plain {
+    display: block;
+    font-variant-numeric: normal;
+  }
+
+  .money .fig {
+    text-align: right;
     color: var(--ink);
     font-weight: 600;
+    font-family: var(--mono);
   }
 
   .money .sep {
