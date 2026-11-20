@@ -16,9 +16,11 @@
    * What that buys: the card cannot be talked into a spend by being pasted a
    * secret, and a page in some other tab has no way to arrive from Serve's hop.
    *
-   * What survived from the token version, because it was right: approving is
-   * two clicks with the ceiling between them, so a mis-tap on a phone cannot
-   * spend anything; and the page still cannot do anything else.
+   * It used to be two clicks: "Approve", then "Yes, approve", with the ceiling
+   * between them. That second step was a layer of approval asking the question
+   * the first click had already asked -- the numbers are on the page before
+   * either click, so it confirmed nothing the reader had not just read. One
+   * click now. The page still cannot do anything else.
    *
    * This card no longer asks who you are, because it does not have to. It asks
    * the server (`/v1/whoami`), which is the only party that knows: the identity
@@ -34,8 +36,8 @@
   let { requestId, maxUsd = null, estimateUsd = null, onapproved } = $props();
 
   let note = $state("");
-  // idle -> confirm -> busy; `confirm` exists so the amount is read before the
-  // commit, and `busy` so a double-click cannot post twice.
+  // idle -> busy. `busy` is not a step the reader sees, only a guard: the button
+  // is disabled between the click and the answer, so one press is one request.
   let stage = $state("idle");
   let failure = $state("");
   let done = $state(false);
@@ -101,37 +103,6 @@
       Approved. The record has moved to <code>approved</code> and a
       <code>human</code> event is on the trail; nothing is fetched by this page.
     </p>
-  {:else if stage === "confirm"}
-    <!-- The number and the window, then one button. The ceiling is what is
-         being authorised: the quote is a later step, so this says "up to". -->
-    <p class="ask">
-      Approve this request up to <strong
-        >{ceiling ?? "the ceiling it carries"}</strong
-      >?{#if quote}
-        The vendor quoted <strong>{quote}</strong> for exactly this Job.
-      {/if}
-      Nothing is downloaded here — a runner picks up an approved row.
-    </p>
-    {#if !ceiling}
-      <p class="quiet note">
-        This request carries no <code>max_usd</code>, so the approval is not
-        bounded by a number this page can show you.
-      </p>
-    {/if}
-    <div class="row">
-      <button class="btn primary" type="button" onclick={approve}>
-        Yes, approve {ceiling ?? "it"}
-      </button>
-      <button
-        class="btn"
-        type="button"
-        onclick={() => {
-          stage = "idle";
-        }}
-      >
-        Cancel
-      </button>
-    </div>
   {:else if whoFailure}
     <!-- No identity, so there is no verb to offer: not a disabled button, which
          would promise that something here could be fixed by clicking. -->
@@ -149,6 +120,21 @@
       {/if}
     </p>
     {#if ready}
+      <!-- Both numbers, before the click rather than between two of them. The
+           ceiling is what an approval authorises; the quote is what the vendor
+           said this exact Job costs. Said plainly: a request with no ceiling is
+           not bounded by a number this page can show, and that is worth
+           reading before the click rather than after it. -->
+      <p class="ask">
+        {#if quote}
+          The vendor quoted <strong>{quote}</strong> for exactly this Job.
+        {/if}
+        {#if ceiling}
+          Approving authorises up to <strong>{ceiling}</strong>.{:else}
+          This request carries no ceiling, so nothing here bounds what it may
+          cost.{/if}
+        Nothing is downloaded here — a runner picks up an approved row.
+      </p>
       <div class="fields">
         <label>
           <span class="micro">note <span class="opt">(optional)</span></span>
@@ -165,10 +151,7 @@
           class="btn primary"
           type="button"
           disabled={stage === "busy"}
-          onclick={() => {
-            failure = "";
-            stage = "confirm";
-          }}
+          onclick={approve}
         >
           Approve{ceiling ? ` up to ${ceiling}` : ""}
         </button>
