@@ -718,3 +718,74 @@ def test_every_facet_key_has_a_label(client):
     """
     book = _book(client)
     assert set(book["facets"]) <= set(book["facet_labels"])
+
+
+def test_a_failed_row_carries_the_reason_it_failed(client, db_path):
+    """A `failed` row used to say nothing about why.
+
+    The runner has written `errors_json` since phase 3 and no page read it, so
+    the badge said *Failed* and the reason -- "no driver is installed for
+    vendor 'Databento'" -- lived only in the table and the job log. The list
+    now carries the code for the half-line under its badge and the page carries
+    the runner's sentence with it.
+    """
+    _seed_all(db_path)
+    by_id = {row["id"]: row for row in _book(client)["rows"]}
+    assert by_id["seed_fail_1"]["failure"] == {
+        "code": "verify_contradiction",
+        "detail": "",
+    }
+    assert by_id["seed_short"]["failure"]["code"] == "verify_shortfall"
+    # A row that never failed grows no empty failure to render: an absent
+    # reason is not a blank one.
+    assert by_id["seed_draft"]["failure"] is None
+
+    page = _detail(client, "seed_fail_1").json()
+    assert page["failure"]["code"] == "verify_contradiction"
+    # The column itself is unchanged, because it is what the runner wrote and
+    # the raw record is the one thing a projection must not rewrite.
+    assert page["identity"]["errors"] == [{"code": "verify_contradiction"}]
+
+
+def test_the_runners_own_shape_becomes_a_code_and_a_sentence(client, db_path):
+    """The live refusal, which is a dict and has a sentence in it.
+
+    Two shapes reach the column: the runner's `{"error", "detail"}` and the
+    older list of `{"code"}`. A page that handled one would have shown the
+    reason for seeded rows and nothing for real ones.
+    """
+    detail = (
+        "no driver is installed for vendor 'Databento' (installed: stub v1 (Stub))"
+    )
+    seed(
+        db_path,
+        [
+            {
+                "id": "req_driverless",
+                "state": "failed",
+                "job_json": PLAN_JSON,
+                "errors_json": json.dumps(
+                    {"error": "driver_not_ready", "detail": detail}
+                ),
+            },
+            {
+                "id": "req_two_errors",
+                "state": "failed",
+                "job_json": PLAN_JSON,
+                "errors_json": json.dumps(
+                    [{"code": "verify_shortfall"}, {"code": "timeout"}]
+                ),
+            },
+        ],
+    )
+    by_id = {row["id"]: row for row in _book(client)["rows"]}
+    assert by_id["req_driverless"]["failure"] == {
+        "code": "driver_not_ready",
+        "detail": detail,
+    }
+    # One code is all a badge can carry; the rest of the row is counted rather
+    # than silently dropped.
+    assert by_id["req_two_errors"]["failure"] == {
+        "code": "verify_shortfall",
+        "detail": "(+1 more on the row)",
+    }

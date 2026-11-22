@@ -445,6 +445,43 @@ def _gap_of(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _failure_of(raw: Any) -> dict[str, str] | None:
+    """Why a settled row did not land cleanly, in the reader's words.
+
+    Two shapes sit in `errors_json`: the runner's `{"error": …, "detail": …}`
+    and the older list of `{"code": …}`. Both become one code and one sentence,
+    because a badge-sized line can carry a code and only a page can carry the
+    sentence. `None` when there is nothing to say, so a page can ask rather
+    than print an empty heading.
+
+    The code is not prettified here: `driver_not_ready` is a phrase this code
+    owns, and the reader's version of it ("driver not ready") belongs one layer
+    out, where the page can also decide whether to look it up.
+    """
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        try:
+            parsed: Any = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            # Not JSON: a runner that wrote prose still said something.
+            return {"code": "unrecorded", "detail": raw}
+    else:
+        parsed = raw
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    first = parsed[0] if isinstance(parsed[0], dict) else {"detail": str(parsed[0])}
+    code = first.get("error") or first.get("code") or "unrecorded"
+    detail = first.get("detail") or first.get("message") or ""
+    more = len(parsed) - 1
+    text = str(detail)
+    if more > 0:
+        text = f"{text} (+{more} more on the row)".strip()
+    return {"code": str(code), "detail": text}
+
+
 def _book_row(row: dict[str, Any], registry: Registry) -> dict[str, Any]:
     """One row of the request book.
 
@@ -463,6 +500,9 @@ def _book_row(row: dict[str, Any], registry: Registry) -> dict[str, Any]:
     out = {
         k: v for k, v in row.items() if k not in ("params_json", "match_report_json")
     }
+    # The column is a string of JSON; the page wants the reason. Reduced here so
+    # every caller -- the book and the page -- gets the same reading of it.
+    out["failure"] = _failure_of(out.pop("errors_json", None))
     out["label"] = _label(row)
     out["vendor"] = _vendor_of(row, registry)
     out["gap"] = _gap_of(row)

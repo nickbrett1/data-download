@@ -281,6 +281,21 @@
       {meta}
       pill={{ label: stateLabel(data.state), tone: stateTone(data.state) }}
     >
+      <!-- Before the request itself, when there is one: a reader who opens a
+           failed row is asking "why", and making them scroll past the params to
+           reach it is answering the question second. The code is the phrase the
+           code owns; the sentence under it is the runner's, verbatim, because
+           paraphrasing a driver's refusal is how a reason becomes a guess. -->
+      {#if data.failure}
+        <section class="block failed">
+          <p class="micro">why it failed</p>
+          <p class="failed-code"><code>{data.failure.code}</code></p>
+          {#if data.failure.detail}
+            <p class="failed-detail">{data.failure.detail}</p>
+          {/if}
+        </section>
+      {/if}
+
       <!-- First, because it is the question somebody opened this page to ask.
            It used to sit third, under the verb and the reason: the reader got
            the decision before the thing being decided about. Everything below
@@ -496,7 +511,33 @@
     color: var(--ink);
   }
 
-  .kv {
+  /* A failure is the loudest thing on the page and still not a siren: sunken
+     rather than red, with the code in mono because it is a phrase the code
+     owns and the reader may grep for it. The sentence keeps normal type, since
+     it is prose a driver wrote. */
+  .failed {
+    padding: 10px 12px;
+    background: var(--bg-sunken);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--bad);
+    border-radius: var(--radius);
+  }
+
+  .failed-code {
+    margin: 4px 0 0;
+  }
+
+  .failed-code code {
+    font-size: 13px;
+    word-break: break-word;
+  }
+
+  .failed-detail {
+    margin: 6px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink-dim);
+  }  .kv {
     display: grid;
     grid-template-columns: minmax(7rem, max-content) 1fr;
     gap: 6px 14px;

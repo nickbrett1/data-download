@@ -162,6 +162,18 @@ export function stateDetail(row) {
     };
   }
   if (BLOCKED_FACETS.has(row.facet)) return blockedMove(row);
+  // A settled row keeps its reason. The badge says *that* it ended, never
+  // *why*, and the two failures read nothing alike: `driver_not_ready` is "we
+  // have no driver for this vendor", `verify_shortfall` is "the vendor sent
+  // less than the manifest claimed". The code is the half-line; the runner's
+  // sentence is the title, because a row is not the place for a paragraph.
+  if (row.failure?.code) {
+    return {
+      text: String(row.failure.code).replaceAll("_", " "),
+      tone: "bad",
+      title: row.failure.detail ?? "",
+    };
+  }
   if (row.facet === "todo") {
     // An approved row nobody picked up is an anomaly, not a restatement of
     // `approved`, so it is said. A draft says what approval would authorise,

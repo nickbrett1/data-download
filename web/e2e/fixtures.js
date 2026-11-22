@@ -118,6 +118,10 @@ export const dashboard = {
       facet: "done",
       facet_label: "Finished",
       had_errors: true,
+      failure: {
+        code: "verify_shortfall",
+        detail: "the vendor sent 3 of the 5 files the manifest claimed",
+      },
       stuck_condition: null,
       stuck_detail: null,
       blocked_reason: null,
@@ -301,6 +305,7 @@ export const requestDetail = {
       note: "an example shape, not a quote: the missing values are placeholders",
     },
   },
+  failure: null,
   identity: {
     job_hash: null,
     code_ref: null,
@@ -360,6 +365,7 @@ export const draftDetail = {
     why: "test row: futures trades, ES continuous, two days",
   },
   match: null,
+  failure: null,
   identity: {
     job_hash:
       "a3d57f9bf1dc2af76782b6b0fecd8cf701d1575742aa9cd5ce84814b8763df1e",

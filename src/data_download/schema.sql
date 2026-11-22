@@ -263,6 +263,12 @@ SELECT r.id,
        r.match_report_json,
        r.escalated_at,
        CASE WHEN r.blocked_reason = 'awaiting_plan' THEN 1 ELSE 0 END AS merge_can_clear,
+       -- Why a settled row did not land cleanly. It was written by the runner
+       -- from phase 3 on and read by nothing: a `failed` row showed the badge
+       -- and no reason, which is the one thing a reader opening it wants. The
+       -- list carries only the code it needs for the half-line under the badge
+       -- (`_book_row` reduces it); the page carries the sentence too.
+       r.errors_json AS errors_json,
        s.condition AS stuck_condition,
        s.detail AS stuck_detail
   FROM requests r

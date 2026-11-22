@@ -1414,3 +1414,70 @@ test.describe("the datasets browser", () => {
     await expect(page.locator(".lede")).toHaveText("Datasets");
   });
 });
+
+test.describe("a failure says why", () => {
+  // The runner has always written a reason and no page read it: a `failed`
+  // row said *Failed* and stopped there, so the one question the reader came
+  // with -- "no driver? no key? the vendor refused?" -- needed a shell.
+  test("the book puts the reason under the badge", async ({ page }) => {
+    await mock(page);
+    await page.goto("/");
+
+    const row = page.locator(".tbl-row").filter({ hasText: "#5" });
+    await expect(row.locator(".pill")).toHaveText("Landed with errors");
+    await expect(row.locator(".state .detail")).toHaveText("verify shortfall");
+    await expect(row.locator(".state .detail")).toHaveAttribute(
+      "title",
+      "the vendor sent 3 of the 5 files the manifest claimed",
+    );
+  });
+
+  test("the page says why, before it says what was asked for", async ({
+    page,
+  }) => {
+    await mock(page, {
+      detail: {
+        ...draftDetail,
+        state: "failed",
+        facet: "done",
+        facet_label: "Finished",
+        failure: {
+          code: "driver_not_ready",
+          detail:
+            "no driver is installed for vendor 'Databento' (installed: stub v1 (Stub))",
+        },
+        identity: {
+          ...draftDetail.identity,
+          errors: {
+            error: "driver_not_ready",
+            detail:
+              "no driver is installed for vendor 'Databento' (installed: stub v1 (Stub))",
+          },
+        },
+      },
+    });
+    await page.goto("/requests/req_draft01");
+
+    // The phrase the code owns, verbatim, plus the runner's sentence under it.
+    await expect(page.locator(".block.failed .failed-code")).toHaveText(
+      "driver_not_ready",
+    );
+    await expect(page.locator(".block.failed .failed-detail")).toHaveText(
+      "no driver is installed for vendor 'Databento' (installed: stub v1 (Stub))",
+    );
+
+    // And it leads: a reader opening a failed row is asking this first.
+    const order = await page
+      .locator(".detail-card .block")
+      .evaluateAll((blocks) =>
+        blocks.map((block) => block.querySelector(".micro")?.textContent.trim()),
+      );
+    expect(order[0]).toBe("why it failed");
+  });
+
+  test("a row that did not fail grows no empty heading", async ({ page }) => {
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+    await expect(page.locator(".block.failed")).toHaveCount(0);
+  });
+});
