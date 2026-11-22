@@ -537,7 +537,8 @@
     font-size: 13px;
     line-height: 1.5;
     color: var(--ink-dim);
-  }  .kv {
+  }
+  .kv {
     display: grid;
     grid-template-columns: minmax(7rem, max-content) 1fr;
     gap: 6px 14px;

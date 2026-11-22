@@ -1470,7 +1470,9 @@ test.describe("a failure says why", () => {
     const order = await page
       .locator(".detail-card .block")
       .evaluateAll((blocks) =>
-        blocks.map((block) => block.querySelector(".micro")?.textContent.trim()),
+        blocks.map((block) =>
+          block.querySelector(".micro")?.textContent.trim(),
+        ),
       );
     expect(order[0]).toBe("why it failed");
   });
