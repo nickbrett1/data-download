@@ -93,6 +93,7 @@ matter:
 | `POST /v1/quotes` | `read` — a question, not a purchase: it prices a request's Job and writes nothing |
 | `POST /v1/requests/{id}/approve` | a tailnet login, asserted by `tailscale serve` and named in `DATA_DOWNLOAD_APPROVERS` |
 | `POST /v1/requests/{id}/retry` | either a `submit` token or that same tailnet login — it files a `draft`, which spends nothing until somebody approves it |
+| `POST /v1/requests/{id}/withdraw` | the same pair — it cancels a `draft` nobody has approved, which spends nothing and deletes nothing |
 | `python -m data_download.approve` | a shell on the host: no route, no credential, no identity |
 
 Approval started as a shell command with no route at all, on the argument that a
@@ -248,6 +249,37 @@ against an immutable manifest, so the same bytes would fail the same way and
 refuse, and shows the server's own refusal text when a stale page tries anyway.
 The check is `409 not_retryable`, with `reason: not_settled` for a row still in
 flight and `reason: same_bytes` for the immutable-verdict cases.
+
+## Withdrawing a draft nobody wants
+
+Filing twice is easy — the retry card will do it for you — and until there was a
+verb for it, the only ways to get rid of the spare were approving a request
+nobody wanted (a spend) or editing the store by hand (a lie about the record).
+`POST /v1/requests/{id}/withdraw` is a third way: `draft` (and only `draft`)
+becomes `withdrawn`, and the row, its quote, its `why` and its events all stay.
+
+It is not a DELETE, and that is the design rather than an omission. A missing
+row reads as a request that was never filed; `withdrawn` reads as a request
+somebody looked at and dropped, which is the truth and is also the thing worth
+keeping. The badge is deliberately colourless: nothing failed and nothing
+landed. `withdrawn` rows sit in the book's finished bucket, because nothing is
+expected of them and they landed nothing.
+
+Only `draft` is accepted. `approved` is refused because an approval authorises
+one attempt, and once the runner may hold the lease, stopping the work is the
+runner's business — writing `withdrawn` under a running claim would be this
+process claiming a cancellation it cannot enforce. Everything past that is
+history and answers to `retry`, not to `withdraw`. `blocked` is refused for a
+duller reason: two CHECKs encode "a blocked row has no Job and no estimate", so
+a withdrawn row that never had one would need both relaxed, and that is a
+decision about what a never-bound row *is*.
+
+A widening of the `state` CHECK is a table rebuild in SQLite, so `db.py` grows
+one (`_widen_state_check`, idempotent by inspecting `sqlite_master.sql` for the
+word). It is not only about the CHECK: `v_done` is `CREATE VIEW IF NOT EXISTS`,
+so a deployed store would otherwise keep a definition that cannot show a
+withdrawn row. One rebuild fixes both, and it copies columns by intersection
+with the live table, so a store a phase behind is rebuilt into what it has.
 
 ## When the registry moves
 

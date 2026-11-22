@@ -201,6 +201,28 @@ def approve_refused(reason: str, state: object) -> ApiError:
     )
 
 
+def withdraw_refused(reason: str, state: object) -> ApiError:
+    """A refusal from `Store.withdraw`, over the same closed set of reasons.
+
+    `wrong_state` is the interesting one, and its sentence says why rather than
+    naming the state: a row past `draft` either has a person's approval on it or
+    has been run, and cancelling one of those is not a book-keeping change.
+    """
+    messages = {
+        "wrong_state": (
+            "only a request waiting for approval can be withdrawn: this one "
+            "has been authorised, has run, or was never bound to a plan"
+        ),
+    }
+    return ApiError(
+        409,
+        "withdraw_refused",
+        messages.get(reason, "the request could not be withdrawn"),
+        reason=reason,
+        state=state,
+    )
+
+
 def not_retryable(
     reason: str, state: object, request_id: str, **extra: Any
 ) -> ApiError:
@@ -220,6 +242,19 @@ def not_retryable(
             "re-filing deliberately is a submit, not a retry"
         ),
     }
+    if reason == "not_settled" and state == "withdrawn":
+        # Not "still in flight": this row was cancelled on purpose and nothing
+        # failed. The honest next move is a fresh submit, not a retry.
+        return ApiError(
+            409,
+            NOT_RETRYABLE,
+            "this request was withdrawn before it ran, so there is no outcome "
+            "to retry; submit it again if you want it",
+            reason=reason,
+            state=state,
+            request_id=request_id,
+            **extra,
+        )
     return ApiError(
         409,
         NOT_RETRYABLE,

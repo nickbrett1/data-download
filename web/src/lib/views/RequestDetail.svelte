@@ -17,6 +17,7 @@
   import AppMark from "$lib/components/AppMark.svelte";
   import ApproveCard from "$lib/components/ApproveCard.svelte";
   import RetryCard from "$lib/components/RetryCard.svelte";
+  import WithdrawCard from "$lib/components/WithdrawCard.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DetailPanel from "$lib/components/nb/DetailPanel.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
@@ -361,6 +362,15 @@
           estimateUsd={data.estimate_usd}
           onapproved={() => load()}
         />
+        <!-- The other door on the same decision: a draft can be filed and then
+             not wanted, and until this existed the only ways out were approving
+             it (a spend) or editing the store by hand (a lie about the record).
+             It goes under approve because it is the answer to the same
+             question, and because the card that spends should be the one read
+             first. -->
+        {#if data.state === "draft"}
+          <WithdrawCard requestId={data.id} />
+        {/if}
       {/if}
 
       {#if BLOCKED.has(data.facet)}

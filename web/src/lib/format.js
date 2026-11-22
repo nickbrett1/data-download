@@ -19,6 +19,9 @@ const TONES = {
   landed_with_errors: "warn",
   failed: "bad",
   blocked: "warn",
+  // Not a colour with an opinion: nothing went wrong and nothing landed. The
+  // word in the badge is what says it was a person's decision.
+  withdrawn: "",
 };
 
 export function stateTone(state) {
@@ -43,6 +46,8 @@ const STATE_LABELS = {
   succeeded: "Succeeded",
   landed_with_errors: "Landed with errors",
   failed: "Failed",
+  // A decision, not an outcome: this request was taken back before it ran.
+  withdrawn: "Withdrawn",
 };
 
 export function stateLabel(state) {

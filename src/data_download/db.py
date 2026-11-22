@@ -286,6 +286,71 @@ async def _migrate_requests(conn: aiosqlite.Connection) -> None:
         await conn.execute("PRAGMA foreign_keys=ON")
 
 
+def _rows_final_said_requests_ddl() -> str:
+    """`CREATE TABLE requests ...` from schema.sql, under a name of its own.
+
+    The rebuild below needs the *current* definition of the table, including
+    every CHECK. Writing it out a second time is how the two copies drift: the
+    one in this file would keep the old `state` list and happily copy a row into
+    a table that cannot hold a `withdrawn` one. So the schema is the single
+    source, and this renames the table it creates.
+    """
+    text = SCHEMA_PATH.read_text(encoding="utf-8")
+    marker = "CREATE TABLE IF NOT EXISTS requests ("
+    start = text.index(marker)
+    end = text.index("\n);", start) + 3
+    return text[start:end].replace(marker, "CREATE TABLE requests_widened (", 1)
+
+
+async def _widen_state_check(conn: aiosqlite.Connection) -> None:
+    """Give an existing store a `requests.state` that can hold `withdrawn`.
+
+    SQLite has no `ALTER TABLE ... ALTER CONSTRAINT`, so a new value in a CHECK
+    costs a rebuild. Idempotent by inspection: if the live table's own SQL
+    already names the value, there is nothing to do -- which is why this is a
+    check on `sqlite_master.sql` rather than a version number nothing else
+    keeps. Copying is by column *intersection* with the live table, so a store
+    one phase behind gains nothing it does not have (those columns are added by
+    `_add_missing_columns`, which runs first).
+
+    The views are dropped first for the reason `_migrate_requests` documents at
+    length: with `legacy_alter_table` off, SQLite re-parses every view during a
+    RENAME and fails on a view left standing over the table this transaction
+    just dropped. They come back in `_apply_schema` -- and that is the second
+    thing this migration buys: `v_done` is `CREATE VIEW IF NOT EXISTS`, so a
+    deployed store would otherwise keep a definition that cannot show a
+    withdrawn row.
+    """
+    async with conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'requests'"
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None or not row["sql"] or "'withdrawn'" in row["sql"]:
+        return
+
+    log.info("rebuilding requests: the state CHECK learns 'withdrawn'")
+    await _drop_views(conn)
+    await conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        await conn.execute("BEGIN IMMEDIATE")
+        await conn.execute("DROP TABLE IF EXISTS requests_widened")
+        await conn.execute(_rows_final_said_requests_ddl())
+        async with conn.execute("PRAGMA table_info(requests)") as cur:
+            columns = [r["name"] for r in await cur.fetchall()]
+        names = ", ".join(columns)
+        await conn.execute(
+            f"INSERT INTO requests_widened ({names}) SELECT {names} FROM requests"
+        )
+        await conn.execute("DROP TABLE requests")
+        await conn.execute("ALTER TABLE requests_widened RENAME TO requests")
+        await conn.execute("COMMIT")
+    except Exception:
+        await conn.execute("ROLLBACK")
+        raise
+    finally:
+        await conn.execute("PRAGMA foreign_keys=ON")
+
+
 # The lease a claim takes by default. Policy, not a literal in the statement:
 # phase 2 learned this with `MAX_POLLS`, and the same rule applies before it can
 # calcify. Overridable per call so the exit test does not need a 15-minute sleep.
@@ -294,6 +359,20 @@ LEASE_SECONDS = 900
 # Where a run can end (§3.1). `running` is the claimant's, not the runner's, and
 # the three below are the only states `settle` may write.
 TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
+
+
+class WithdrawRefused(Exception):
+    """`withdraw` said no, with one of a closed set of reasons."""
+
+    REASONS = frozenset({"not_found", "wrong_state"})
+
+    def __init__(self, reason: str, state: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.state = state
+
+    def as_text(self) -> str:
+        return f"withdraw_refused: {self.reason} (state={self.state})"
 
 
 class ApproveRefused(Exception):
@@ -504,6 +583,7 @@ class Store:
                 await conn.execute(pragma)
             await _add_missing_columns(conn)
             await _migrate_requests(conn)
+            await _widen_state_check(conn)
             await _migrate_events(conn)
             await _heal_views(conn)
             await _apply_schema(conn)
@@ -797,6 +877,81 @@ class Store:
                 )
                 await self.conn.execute("COMMIT")
             except ApproveRefused:
+                await self.conn.execute("ROLLBACK")
+                raise
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        return (await self.get_request(request_id) or row), True
+
+    async def withdraw(
+        self,
+        request_id: str,
+        actor: str,
+        note: str | None = None,
+        *,
+        now: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """`draft` (or `blocked`) -> `withdrawn`. Returns `(row, changed)`.
+
+        Withdrawing is a decision about a row **nobody has run**: the draft that
+        was filed twice, the intent that is never going to get a plan. It is not
+        a delete -- the row, its quote, its events and the `why` a person typed
+        all stay, and the badge changes. A deleted row would leave a hole where
+        a filing used to be, and "I changed my mind" is a fact about the
+        request, not a correction of the record.
+
+        It is not the inverse of approval either. Only `draft` is accepted:
+        `approved` is refused because an approval authorises one attempt, and
+        once the runner may hold the lease, stopping the work is the runner's
+        business -- writing `withdrawn` under a running claim would be this
+        process claiming a cancellation it cannot enforce. Everything past that
+        is history and answers to `retry`, not to `withdraw`.
+
+        `blocked` is refused for a duller reason: two CHECKs encode "a blocked
+        row has no Job and no estimate", so a withdrawn row that never had one
+        would need both relaxed. That is a schema decision about what a
+        never-bound row is, and taking it here would smuggle it in.
+
+        Withdrawing twice is a no-op with no second event, for the reason
+        approval is: a retried call must not be able to inflate the record.
+        """
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = await self._select(request_id)
+                if row is None:
+                    raise WithdrawRefused("not_found")
+                state = row["state"]
+                if state == "withdrawn":
+                    await self.conn.execute("ROLLBACK")
+                    return row, False
+                if state != "draft":
+                    raise WithdrawRefused("wrong_state", state)
+                await self.conn.execute(
+                    "UPDATE requests SET state = 'withdrawn', updated_at = ? "
+                    "WHERE id = ? AND state = ?",
+                    (ts, request_id, state),
+                )
+                await self._event(
+                    request_id,
+                    ts,
+                    "human",
+                    "withdrawn",
+                    {
+                        "actor": actor,
+                        "note": note,
+                        # From which state it was withdrawn, because `blocked`
+                        # and `draft` mean different things about how far this
+                        # request ever got.
+                        "was": state,
+                        **(context or {}),
+                    },
+                )
+                await self.conn.execute("COMMIT")
+            except WithdrawRefused:
                 await self.conn.execute("ROLLBACK")
                 raise
             except Exception:

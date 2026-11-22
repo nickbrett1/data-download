@@ -35,6 +35,7 @@ from .db import (
     ApproveRefused,
     EscalateRefused,
     Store,
+    WithdrawRefused,
     canonical_json,
     payload_hash,
     utcnow,
@@ -158,7 +159,10 @@ def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
         facet = "todo"
     elif row.get("state") == "running":
         facet = "working"
-    elif row.get("state") in TERMINAL_STATES:
+    elif row.get("state") in TERMINAL_STATES or row.get("state") == "withdrawn":
+        # `withdrawn` is settled too: nothing is expected of it, and it landed
+        # nothing. It goes in the book with the finished rows rather than in
+        # `other`, because `other` is for states this code has never heard of.
         facet = "done"
     else:  # a state added later must still render, not vanish
         facet = "other"
@@ -954,6 +958,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "currency": "USD",
                 "priced_at": utcnow(),
             }
+        )
+
+    @app.post("/v1/requests/{request_id}/withdraw")
+    async def withdraw_request(request: Request, request_id: str) -> JSONResponse:
+        """Withdraw a filed draft before anyone approves or runs it.
+
+        The door is retry's: a `submit` token or an attested approver. Filing,
+        withdrawing and re-filing are three halves of one decision and none of
+        them spends money -- the approval is still the spend, and it is still a
+        person's.
+
+        There is no DELETE. The row, its quote and its events stay and its badge
+        changes to `withdrawn`, which is the difference between "I changed my
+        mind" and "this never happened". `note` is accepted because *why* a
+        request was dropped is the sort of thing nobody remembers in a month;
+        `actor` in the body is refused for the reason the approve route refuses
+        it: the attested login is the actor, and a self-declared second one would
+        be a second way in.
+        """
+        actor = auth.require_submit_or_approver(request)
+        store = await _store(request)
+
+        raw = await request.body()
+        note = None
+        if raw.strip():
+            try:
+                body = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise errors.invalid_body("body is not valid JSON") from None
+            if not isinstance(body, dict):
+                raise errors.invalid_body("body must be a JSON object")
+            if body.get("actor") is not None:
+                raise errors.invalid_body(
+                    "actor is not accepted: the actor is the token's name or "
+                    "the tailnet login `tailscale serve` asserts, so it cannot "
+                    "be declared in the body"
+                )
+            note = body.get("note")
+            if note is not None and not isinstance(note, str):
+                raise errors.invalid_body("note must be a string")
+
+        try:
+            row, changed = await store.withdraw(
+                request_id, actor, note, context={"via": "serve"}
+            )
+        except WithdrawRefused as exc:
+            if exc.reason == "not_found":
+                raise errors.not_found(f"no request with id {request_id!r}") from None
+            raise errors.withdraw_refused(exc.reason, exc.state) from None
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "request_id": row["id"],
+                "state": row["state"],
+                # False for a second withdrawal: idempotent, no second event.
+                "withdrawn": changed,
+            },
         )
 
     @app.post("/v1/requests/{request_id}/escalate", status_code=202)

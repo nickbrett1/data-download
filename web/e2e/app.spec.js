@@ -1594,3 +1594,131 @@ test.describe("a retry files the same request again", () => {
     );
   });
 });
+
+test.describe("a drafted request can be withdrawn", () => {
+  // The case: a draft nobody wants — filed twice, or filed by mistake. Until
+  // this card the only ways out were approving it (a spend) or editing the
+  // store (a lie about the record). Withdrawing keeps the row: it is a
+  // statement about a filing, not a deletion.
+  const withdrawn = {
+    request_id: "req_draft01",
+    state: "withdrawn",
+    withdrawn: true,
+  };
+
+  test("asks twice, then withdraws, and says the row stays", async ({
+    page,
+  }) => {
+    let posted = null;
+    await page.route("**/v1/requests/*/withdraw", async (route) => {
+      posted = route.request().url();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(withdrawn),
+      });
+    });
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+
+    const card = page.locator(".block.withdraw");
+    await expect(card).toBeVisible();
+    // What it does is stated before the first click, including the part that
+    // matters: nothing is spent, and the row is not deleted.
+    await expect(card).toContainText("nothing is spent");
+    await expect(card).toContainText("marked");
+
+    // The first click only asks. Nothing has been posted.
+    await page.getByRole("button", { name: "Withdraw this request" }).click();
+    expect(posted).toBeNull();
+    await expect(card).toContainText("Yes, withdraw it");
+
+    await page.getByRole("button", { name: "Yes, withdraw it" }).click();
+    await expect(card).toContainText("Withdrawn.");
+    expect(posted).toContain("/v1/requests/req_draft01/withdraw");
+  });
+
+  test("the first click can be taken back", async ({ page }) => {
+    let posted = null;
+    await page.route("**/v1/requests/*/withdraw", async (route) => {
+      posted = route.request().url();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(withdrawn),
+      });
+    });
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+
+    await page.getByRole("button", { name: "Withdraw this request" }).click();
+    await page.getByRole("button", { name: "Keep it" }).click();
+
+    await expect(
+      page.getByRole("button", { name: "Withdraw this request" }),
+    ).toBeVisible();
+    expect(posted).toBeNull();
+  });
+
+  test("is not offered once the request has been approved", async ({
+    page,
+  }) => {
+    // Approving authorises exactly one attempt; taking it back is not a
+    // book-keeping change, and the server refuses it as well.
+    await mock(page, {
+      detail: { ...draftDetail, state: "approved", facet: "todo" },
+    });
+    await page.goto("/requests/req_draft01");
+    await expect(page.locator(".block.withdraw")).toHaveCount(0);
+  });
+
+  test("is not offered on a row that has already run", async ({ page }) => {
+    await mock(page, {
+      detail: {
+        ...draftDetail,
+        state: "failed",
+        facet: "done",
+        failure: { code: "driver_not_ready", detail: "no driver" },
+      },
+    });
+    await page.goto("/requests/req_draft01");
+    await expect(page.locator(".block.withdraw")).toHaveCount(0);
+  });
+
+  test("a login that may read but not file is told so, and gets no button", async ({
+    page,
+  }) => {
+    await mock(page, {
+      detail: draftDetail,
+      who: { login: "someone-else@example.com", approver: false },
+    });
+    await page.goto("/requests/req_draft01");
+    const card = page.locator(".block.withdraw");
+    await expect(card).toContainText("DATA_DOWNLOAD_APPROVERS");
+    await expect(card.getByRole("button")).toHaveCount(0);
+  });
+
+  test("the server's own refusal is what the page shows", async ({ page }) => {
+    await page.route("**/v1/requests/*/withdraw", (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "withdraw_refused",
+            message:
+              "only a request waiting for approval can be withdrawn: this " +
+              "one has been authorised, has run, or was never bound to a plan",
+          },
+        }),
+      }),
+    );
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+    await page.getByRole("button", { name: "Withdraw this request" }).click();
+    await page.getByRole("button", { name: "Yes, withdraw it" }).click();
+    await expect(page.locator(".block.withdraw .failure")).toContainText(
+      "has been authorised",
+    );
+  });
+});

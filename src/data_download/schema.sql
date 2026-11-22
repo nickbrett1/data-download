@@ -19,7 +19,7 @@
 
 CREATE TABLE IF NOT EXISTS requests (
   id               TEXT PRIMARY KEY,
-  state            TEXT NOT NULL,          -- draft|blocked|approved|running|succeeded|landed_with_errors|failed
+  state            TEXT NOT NULL,          -- draft|blocked|approved|running|succeeded|landed_with_errors|failed|withdrawn
   body_kind        TEXT NOT NULL,          -- plan|intent
   plan_type        TEXT,                   -- NULL when body_kind='intent'
   job_json         TEXT,                   -- the bound Job (§2); NULL iff state='blocked'
@@ -44,7 +44,14 @@ CREATE TABLE IF NOT EXISTS requests (
   max_usd          REAL,                   -- the ceiling that travelled with the body
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
-  CHECK (state IN ('draft','blocked','approved','running','succeeded','landed_with_errors','failed')),
+  -- `withdrawn` is a person's decision about a row nobody has run yet: a draft
+  -- (or a blocked intent) that was filed and then thought better of. It is a
+  -- state rather than a DELETE because the store is a history book: the row,
+  -- its quote and its events stay, and the badge says nobody is expecting it
+  -- any more. Widening this CHECK is a table rebuild in SQLite (db.py,
+  -- `_widen_state_check`), which is also what re-creates the `IF NOT EXISTS`
+  -- views below on a deployed store.
+  CHECK (state IN ('draft','blocked','approved','running','succeeded','landed_with_errors','failed','withdrawn')),
   CHECK (body_kind IN ('plan','intent')),
   CHECK ((state = 'blocked') = (job_json IS NULL)),
   -- A repeated body is a second Request, not a duplicate to refuse (§5.6). The
@@ -107,10 +114,13 @@ SELECT id,
  WHERE state IN ('draft','approved')
  ORDER BY created_at ASC;
 
--- What got done. Only the three terminal states appear. There is no
--- `actual_usd` column this phase, so the estimate is shown without a
--- comparison; `had_errors` is the flag that keeps `landed_with_errors` from
--- reading as `succeeded`.
+-- What got done -- including what was deliberately *not* done. The three
+-- terminal states appear, and so does `withdrawn`: a row somebody cancelled
+-- before it ran landed nothing, but it still has to be visible, because a
+-- draft that quietly vanished from the book would read as a row that was never
+-- filed. There is no `actual_usd` column this phase, so the estimate is shown
+-- without a comparison; `had_errors` is the flag that keeps
+-- `landed_with_errors` from reading as `succeeded`.
 CREATE VIEW IF NOT EXISTS v_done AS
 SELECT id,
        state,
@@ -122,7 +132,7 @@ SELECT id,
        CASE WHEN state = 'landed_with_errors' THEN 1 ELSE 0 END AS had_errors,
        CASE WHEN state = 'succeeded' THEN 1 ELSE 0 END AS landed_clean
   FROM requests
- WHERE state IN ('succeeded','landed_with_errors','failed')
+ WHERE state IN ('succeeded','landed_with_errors','failed','withdrawn')
  ORDER BY updated_at DESC, rowid DESC;
 
 -- What is broken. Exactly three conditions, all breakage (§7.8.1):
