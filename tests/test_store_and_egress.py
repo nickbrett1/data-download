@@ -18,7 +18,7 @@ from data_download.db import Store, payload_hash
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src" / "data_download"
 
-FORBIDDEN_IMPORTS = ("httpx", "aiohttp", "urllib3", "requests", "socket", "http.client")
+FORBIDDEN_IMPORTS = ("httpx", "aiohttp", "urllib3", "requests", "socket")
 
 # Phase 4's one exception, and it is one named file rather than a package:
 # `vendor.py` is the only place a vendor client exists (§5.3). Everything else
@@ -27,6 +27,14 @@ FORBIDDEN_IMPORTS = ("httpx", "aiohttp", "urllib3", "requests", "socket", "http.
 # databento` out of the wrong module.
 VENDOR_IMPORTS = ("databento",)
 VENDOR_MODULE = "vendor.py"
+
+# Phase 5's split gives `http.client` the same treatment, for the same reason:
+# one named module may open a connection to the driver runtime, and it refuses
+# anything but loopback or a single-label compose service name (`runtime_http`).
+# A second import of `http.client` anywhere under `src/` is a second way out of
+# the container, so it fails here rather than in a review.
+RUNTIME_IMPORTS = ("http.client",)
+RUNTIME_MODULE = "runtime_http.py"
 
 
 def test_unusable_store_is_up_but_broken(tmp_path):
@@ -182,6 +190,11 @@ def test_no_vendor_client_or_network_import(path: Path):
             assert path.name == VENDOR_MODULE, (
                 f"{path.name} imports {module}; only {VENDOR_MODULE} may, because "
                 "the client stays in one place (§5.3)"
+            )
+        if module.startswith(RUNTIME_IMPORTS):
+            assert path.name == RUNTIME_MODULE, (
+                f"{path.name} imports {module}; only {RUNTIME_MODULE} may open a "
+                "connection to the driver runtime, so there is one call site to audit"
             )
 
 
