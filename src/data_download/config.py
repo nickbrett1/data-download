@@ -62,6 +62,20 @@ class Settings:
     # runner refuses rather than guessing a path: bytes in the wrong place are
     # bytes the operator will not find, on a request that then reads `succeeded`.
     datasets_dir: Path | None = None
+    # Phase 5.5/C: where the driver runtime lives, and the shared secret that
+    # lets this process talk to it. `None` for the URL means the client's own
+    # default (`http://data-download-drivers:8831`); `None` for the token means
+    # **no request can be made at all**, because the runtime refuses an
+    # unauthenticated caller and this process refuses to send one. Held here
+    # rather than read at the call site so one place decides whether this
+    # deployment can run a Job.
+    driver_runtime_url: str | None = None
+    driver_runtime_token: str | None = None
+
+    @property
+    def driver_ready(self) -> bool:
+        """Whether a Job could be run at all. False means refuse before claiming."""
+        return bool(self.driver_runtime_token)
 
     def scopes_for(self, token: str) -> frozenset[str] | None:
         return self.tokens.get(token)
@@ -247,6 +261,19 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
             "runner refuses rather than writing bytes to a path nobody named."
         )
 
+    driver_runtime_url = (env.get("DATA_DOWNLOAD_DRIVER_RUNTIME_URL") or "").strip() or None
+    driver_runtime_token = (env.get("DRIVER_RUNTIME_TOKEN") or "").strip() or None
+    if driver_runtime_token is None:
+        # Fail closed and say so: the runtime refuses an unauthenticated caller,
+        # and this process refuses to send one, so with no token no approved
+        # request can be run. Loud because the first symptom is a runner whose
+        # rows all settle `failed`, which looks like a vendor problem.
+        log.warning(
+            "DRIVER_RUNTIME_TOKEN is unset - no approved request can be run: the "
+            "runner refuses before claiming rather than sending an unauthenticated "
+            "verb. It must match the token in the driver runtime's environment."
+        )
+
     port_raw = (env.get("PORT") or "8820").strip()
     try:
         port = int(port_raw)
@@ -266,6 +293,8 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         code_ref=resolve_code_ref(env),
         quote=quote,
         datasets_dir=datasets_dir,
+        driver_runtime_url=driver_runtime_url,
+        driver_runtime_token=driver_runtime_token,
     )
 
 

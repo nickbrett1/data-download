@@ -24,6 +24,13 @@ Three things are deliberate:
    vocabulary for "the Job did not get that far" -- so `runner.run_one` needs no
    new branch.
 
+4. **Discovery is a route, not a directory read.** What is installed is the
+   runtime's fact, because the artefacts live in *its* filesystem. The app does
+   not mount that directory -- mounting it would give the trusted half a second
+   opinion about what is installed, and opinions about installed code are how a
+   half-copied artefact gets run. `installed()` asks `GET /v1/drivers` and
+   `driver_for(vendor)` picks the newest artefact that vendor declares.
+
 The deadline table duplicates `wire.DEADLINES` in `data-download-drivers` on
 purpose: the client's patience must not be dictated by the thing it is waiting
 for. The conformance suite (phase D) asserts the two tables agree, so the copy
@@ -33,6 +40,7 @@ cannot drift silently.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -67,6 +75,144 @@ class DriverUnavailable(interpreter.InterpreterError):
     instead of crashing -- the Job did not get as far as a verdict, which is
     exactly what that exception means.
     """
+
+
+@dataclass(frozen=True)
+class Artifact:
+    """One installed driver, as the runtime describes it in `GET /v1/drivers`."""
+
+    driver: str
+    version: str
+    vendor: str = ""
+    protocol: int = PROTOCOL_VERSION
+
+    def __str__(self) -> str:
+        return f"{self.driver} v{self.version}" + (f" ({self.vendor})" if self.vendor else "")
+
+
+def _endpoint(url: str | None) -> tuple[str, int]:
+    """`http://host:port` (or `host:port`) -> `(host, port)`.
+
+    A scheme other than http is refused: the hop is a compose network, so TLS
+    here would be decoration. Module-level so discovery and the session verbs
+    cannot disagree about how a URL is read.
+    """
+    text = url or os.environ.get("DATA_DOWNLOAD_DRIVER_RUNTIME_URL") or DEFAULT_URL
+    parts = urlsplit(text if "//" in text else f"//{text}")
+    if parts.scheme not in ("http", ""):
+        raise DriverUnavailable(f"driver runtime url {url!r} must be http, not {parts.scheme}")
+    if not parts.hostname:
+        raise DriverUnavailable(f"driver runtime url {url!r} names no host")
+    return parts.hostname, parts.port or DEFAULT_PORT
+
+
+def _token(token: str | None) -> str:
+    """The bearer token, resolved once. Empty is left empty so `runtime_http`
+    refuses it *before* a socket -- the failure names the setting instead of
+    turning into a 401 that reads like a wrong token."""
+    return token if token is not None else (os.environ.get("DRIVER_RUNTIME_TOKEN") or "")
+
+
+def installed(
+    *,
+    url: str | None = None,
+    token: str | None = None,
+    timeout: float | None = None,
+) -> list[Artifact]:
+    """Every driver the runtime has installed. Read-only; creates no session.
+
+    Raises `DriverUnavailable` when there is no conversation to have (no token,
+    unreachable runtime, a protocol version this client does not speak). An
+    *empty list* is not an error: a healthy runtime with nothing installed is a
+    real state, and the caller can tell the operator what to install.
+    """
+    host, port = _endpoint(url)
+    try:
+        status, payload = runtime_http.request(
+            host,
+            port,
+            "GET",
+            "/v1/drivers",
+            token=_token(token),
+            timeout=timeout or DEFAULT_TIMEOUT,
+        )
+    except runtime_http.RuntimeUnreachable as exc:
+        raise DriverUnavailable(f"could not list the drivers: {exc}") from exc
+
+    if not 200 <= status < 300:
+        error = payload.get("error") if isinstance(payload, dict) else {}
+        code = (error or {}).get("code") or "unknown"
+        detail = (error or {}).get("detail") or ""
+        raise DriverUnavailable(
+            f"could not list the drivers: {status} {code}" + (f" ({detail})" if detail else "")
+        )
+
+    protocol = payload.get("protocol")
+    if protocol is not None and protocol != PROTOCOL_VERSION:
+        # Refuse rather than guess: a runtime speaking version 2 may describe
+        # artefacts differently, and half-understanding discovery is how a
+        # driver gets addressed by fields that no longer mean what they meant.
+        raise DriverUnavailable(
+            f"the driver runtime speaks protocol {protocol}, this client speaks "
+            f"{PROTOCOL_VERSION}; upgrade whichever is older"
+        )
+
+    out: list[Artifact] = []
+    for entry in payload.get("drivers") or []:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        out.append(
+            Artifact(
+                driver=str(entry["name"]),
+                version=str(entry.get("version") or "1"),
+                vendor=str(entry.get("vendor") or ""),
+                protocol=int(entry.get("protocol") or PROTOCOL_VERSION),
+            )
+        )
+    return out
+
+
+def _version_key(version: str) -> tuple:
+    """`1.2.0` sorts above `1`; anything unparseable sorts below numbers.
+
+    Directory names are the runtime's to choose, so this must not raise on a
+    string it does not recognise -- a newer artefact with an odd version is
+    still the one to run, and refusing to pick would make an install invisible.
+    """
+    parts: list[tuple[int, int, str]] = []
+    for chunk in str(version).replace("-", ".").split("."):
+        if chunk.isdigit():
+            parts.append((1, int(chunk), ""))
+        else:
+            parts.append((0, 0, chunk))
+    return tuple(parts)
+
+
+def driver_for(
+    vendor: str,
+    *,
+    url: str | None = None,
+    token: str | None = None,
+    timeout: float | None = None,
+    artifacts: list[Artifact] | None = None,
+) -> Artifact | None:
+    """The newest installed driver that declares `vendor`, or `None`.
+
+    Binding is by **vendor**, not by plan type: `plan_types/*.yaml` already says
+    who sells the data, so an install needs no entry in this repo and no merge.
+    A vendor nobody has installed a driver for is `None` -- a refusal the caller
+    turns into a sentence, not an exception thrown across the boundary.
+    """
+    entries = installed(url=url, token=token, timeout=timeout) if artifacts is None else artifacts
+    wanted = " ".join(str(vendor or "").split()).lower()
+    if not wanted:
+        return None
+    matches = [
+        entry for entry in entries if " ".join(entry.vendor.split()).lower() == wanted
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda entry: _version_key(entry.version))
 
 
 class RemoteDriver:
@@ -111,14 +257,8 @@ class RemoteDriver:
 
     @staticmethod
     def _split(url: str) -> tuple[str, int]:
-        """`http://host:port` -> `(host, port)`. A scheme other than http is refused:
-        the hop is a compose network, so TLS here would be decoration."""
-        parts = urlsplit(url if "//" in url else f"//{url}")
-        if parts.scheme not in ("http", ""):
-            raise DriverUnavailable(f"driver runtime url {url!r} must be http, not {parts.scheme}")
-        if not parts.hostname:
-            raise DriverUnavailable(f"driver runtime url {url!r} names no host")
-        return parts.hostname, parts.port or DEFAULT_PORT
+        """`http://host:port` -> `(host, port)`. The same reading discovery uses."""
+        return _endpoint(url)
 
     def _post(
         self, verb: str, body: dict[str, Any], timeout: float | None = None

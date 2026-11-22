@@ -21,10 +21,19 @@ from conftest import PLAN_BODY, auth
 from data_download.app import create_app
 from data_download.db import Store
 from data_download.runner import run_one
+from fake_runtime import FakeRuntime
 
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+@pytest.fixture
+def wire(tmp_path):
+    """The driver runtime, sharing the store path the page reads (§the one
+    invariant: both containers mount it at the same path)."""
+    with FakeRuntime(tmp_path / "datasets", vendor="Databento", driver="databento") as runtime:
+        yield runtime
 
 
 def _client_with(settings, datasets_dir: Path) -> TestClient:
@@ -38,7 +47,7 @@ def _file(client, body=None) -> str:
     return response.json()["request_id"]
 
 
-async def _land(settings, datasets_dir: Path, request_id: str, *, mode="clean"):
+async def _land(settings, datasets_dir: Path, request_id: str, wire, *, mode="clean"):
     store = Store(str(settings.db_path))
     await store.connect()
     try:
@@ -48,6 +57,8 @@ async def _land(settings, datasets_dir: Path, request_id: str, *, mode="clean"):
             datasets_dir=datasets_dir,
             owner="host:1:abc",
             mode=mode,
+            driver_url=wire.url,
+            driver_token=wire.token,
         )
     finally:
         await store.close()
@@ -72,12 +83,12 @@ async def _approve_and_claim(settings, request_id: str, owner="host:1:abc"):
         await store.close()
 
 
-def test_a_landed_request_is_listed_under_its_vendor_and_dataset(settings, tmp_path):
+def test_a_landed_request_is_listed_under_its_vendor_and_dataset(settings, tmp_path, wire):
     datasets = tmp_path / "datasets"
     with _client_with(settings, datasets) as client:
         request_id = _file(client)
         _run(_approve(settings, request_id))
-        _run(_land(settings, datasets, request_id))
+        _run(_land(settings, datasets, request_id, wire))
 
         body = client.get("/ui/datasets.json").json()
 
@@ -100,7 +111,7 @@ def test_a_landed_request_is_listed_under_its_vendor_and_dataset(settings, tmp_p
     assert request["verdict"] == "pass"
     # The driver is a fact in the payload; the page does not turn it into a
     # badge (whether the bytes are real is read here, or in landing.json).
-    assert request["driver"] == "StubDatabentoDriver"
+    assert request["driver"] == "databento"
     assert "stub" not in request
     assert request["schema"] == "trades"
     assert request["symbols"] == ["ES.c.0"]
@@ -142,13 +153,13 @@ def test_a_running_request_lists_the_bytes_it_already_has(settings, tmp_path):
     assert request["files"][0]["sha256"] is None  # never hashed for a listing
 
 
-def test_a_settled_row_whose_directory_is_gone_says_so(settings, tmp_path):
+def test_a_settled_row_whose_directory_is_gone_says_so(settings, tmp_path, wire):
     """`succeeded` with no bytes is the one state a browser must not paper over."""
     datasets = tmp_path / "datasets"
     with _client_with(settings, datasets) as client:
         request_id = _file(client)
         _run(_approve(settings, request_id))
-        _run(_land(settings, datasets, request_id))
+        _run(_land(settings, datasets, request_id, wire))
         # Somebody cleaned the share.
         import shutil
 
@@ -182,12 +193,12 @@ def test_an_unconfigured_root_is_reported_rather_than_empty(settings):
     assert body["vendors"] == []
 
 
-def test_a_landed_file_downloads_as_an_attachment(settings, tmp_path):
+def test_a_landed_file_downloads_as_an_attachment(settings, tmp_path, wire):
     datasets = tmp_path / "datasets"
     with _client_with(settings, datasets) as client:
         request_id = _file(client)
         _run(_approve(settings, request_id))
-        _run(_land(settings, datasets, request_id))
+        _run(_land(settings, datasets, request_id, wire))
 
         url = f"/datasets/file/databento/GLBX.MDP3/{request_id}/GLBX.MDP3-2026-10-01.dbn.zst"
         response = client.get(url)
@@ -212,14 +223,14 @@ def test_a_file_url_cannot_climb_out_of_the_root(settings, tmp_path, url):
         assert client.get(url).status_code == 404
 
 
-def test_the_landing_json_is_not_downloadable_as_data(settings, tmp_path):
+def test_the_landing_json_is_not_downloadable_as_data(settings, tmp_path, wire):
     """Provenance is beside `files/`, so the only files a URL can reach are the
     ones the manifest lists -- `landing.json` is not under `files/`."""
     datasets = tmp_path / "datasets"
     with _client_with(settings, datasets) as client:
         request_id = _file(client)
         _run(_approve(settings, request_id))
-        _run(_land(settings, datasets, request_id))
+        _run(_land(settings, datasets, request_id, wire))
         response = client.get(
             f"/datasets/file/databento/GLBX.MDP3/{request_id}/landing.json"
         )
@@ -233,13 +244,13 @@ def test_the_page_is_served_and_reads_nothing_itself(settings, tmp_path, built_w
     assert "built" in response.text
 
 
-def test_the_tree_matches_where_the_runner_writes(settings, tmp_path):
+def test_the_tree_matches_where_the_runner_writes(settings, tmp_path, wire):
     """The page and the runner must not disagree about the layout."""
     datasets = tmp_path / "datasets"
     with _client_with(settings, datasets) as client:
         request_id = _file(client)
         _run(_approve(settings, request_id))
-        result = _run(_land(settings, datasets, request_id))
+        result = _run(_land(settings, datasets, request_id, wire))
         body = client.get("/ui/datasets.json").json()
 
     listed = body["vendors"][0]["datasets"][0]["requests"][0]

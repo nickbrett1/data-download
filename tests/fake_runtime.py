@@ -60,9 +60,26 @@ def _content(name: str, vendor_job_id: str) -> bytes:
 class FakeRuntime:
     """One HTTP server, one session per `POST /v1/sessions`, stub semantics."""
 
-    def __init__(self, datasets_dir: Path | str) -> None:
+    def __init__(
+        self,
+        datasets_dir: Path | str,
+        vendor: str = "Stub",
+        driver: str = "stub",
+    ) -> None:
         self.datasets_dir = Path(datasets_dir)
-        self.datasets_dir.mkdir(parents=True, exist_ok=True)
+        # Deliberately not created here: the runner creates the request root
+        # before it opens a session, and "nothing was written at all" is a fact
+        # some tests assert by the directory's absence.
+        #: Which vendor this fake stands in for. A real runtime declares the
+        #: vendor an artefact serves; the runner binds drivers by vendor, so a
+        #: test that wants the Databento plan type to find a driver says so here
+        #: rather than teaching `driver_for` a special case.
+        self.vendor = vendor
+        self.driver = driver
+        #: When set, what `GET /v1/drivers` answers instead. Discovery is the
+        #: one route a test needs to bend to see a protocol mismatch or two
+        #: installed versions.
+        self.drivers: dict[str, Any] | None = None
         self.token = secrets.token_urlsafe(24)
         self.requests: list[tuple[str, str]] = []  # (method, path), for assertions
         self.sessions: dict[str, dict[str, Any]] = {}
@@ -140,10 +157,14 @@ class FakeRuntime:
                 if path == "/v1/drivers":
                     if not self._authorised():
                         return
+                    if runtime.drivers is not None:
+                        self._json(200, dict(runtime.drivers))
+                        return
                     self._json(200, {
                         "protocol": PROTOCOL_VERSION,
                         "drivers": [{
-                            "name": "stub", "version": "1", "vendor": "Stub",
+                            "name": runtime.driver, "version": "1",
+                            "vendor": runtime.vendor,
                             "protocol": PROTOCOL_VERSION,
                             "installed_at": "2026-11-22T00:00:00Z",
                         }],
@@ -184,7 +205,7 @@ class FakeRuntime:
     def _create(self, body: dict[str, Any]) -> dict[str, Any]:
         if body.get("protocol") != PROTOCOL_VERSION:
             raise _Failure(400, "bad_request", "unsupported protocol version")
-        if body.get("driver") != "stub":
+        if body.get("driver") != self.driver:
             raise _Failure(409, "driver_missing", f"no driver {body.get('driver')!r}")
         root = Path(str(body.get("root") or ""))
         if root != self.datasets_dir and self.datasets_dir not in root.parents:

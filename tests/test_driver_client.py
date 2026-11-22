@@ -1,21 +1,20 @@
-"""Phase B: the driver across the wire, and the proof that nothing changed.
+"""The driver across the wire: the transport, and the rules that keep it safe.
 
-The claim this file has to earn is narrow and unforgiving: **`RemoteDriver` is a
-transport, not a behaviour change.** So the centre of the file is not "the eight
-verbs return the right shapes" (that is phase A's, in the other repo) but:
+Phase B's centre was a parity test -- `RemoteDriver` and the in-process stub
+producing an identical `Verdict` field by field -- because at that moment both
+implementations existed in this repo. Phase C deleted the in-process driver, so
+there is no longer an in-repo reference to be equal to. What replaces it is the
+next level up: `test_runner.py` drives a whole approved request over this wire
+and asserts the landing, the digest and the state, which is the same claim made
+where it is observable. The cross-repo version of the parity claim is phase D's
+conformance suite, which runs the artefact's own answers against this one.
 
-    interpreter.run(job, RemoteDriver(...)) == interpreter.run(job, StubDatabentoDriver(...))
-
-asserted field by field, for every mode and both `on_failure` policies. If a
-single field differs -- a verdict, a disposition, a row count, the step list --
-the wire is doing something to the answer, and that is the bug this phase exists
-to catch before any real driver is behind it.
-
-The rest are the rules that make the transport safe rather than merely working:
-a missing credential never sends, a `dest` that climbs never travels, a refusal
-keeps the runtime's own code, and a broken verifier reaches `classify()` intact
-so it can be called `verifier_error` instead of being smoothed into a plausible
-shortfall.
+What is asserted here is therefore the transport itself: the eight verbs answer
+in the shape the interpreter asks for, a missing credential never sends, a
+`dest` that climbs never travels, a refusal keeps the runtime's own code, and a
+broken verifier reaches `classify()` intact so it can be called `verifier_error`
+instead of being smoothed into a plausible shortfall. Plus discovery, which is
+how the runner finds out what is installed.
 """
 
 from __future__ import annotations
@@ -26,11 +25,13 @@ from conftest import PLAN_BODY
 from data_download import interpreter
 from data_download.driver_client import (
     PROTOCOL_VERSION,
+    Artifact,
     DriverUnavailable,
     RemoteDriver,
+    driver_for,
+    installed,
 )
 from data_download.profiles import databento_batch_download as databento
-from data_download.stub import StubDatabentoDriver
 from fake_runtime import FakeRuntime
 
 
@@ -48,57 +49,17 @@ def _driver(runtime, root, mode="clean"):
     return RemoteDriver(root, mode, url=runtime.url, token=runtime.token)
 
 
-# -- the exit test -----------------------------------------------------------
-
-
-@pytest.mark.parametrize("mode", ["clean", "short", "nothing"])
-@pytest.mark.parametrize("on_failure", ["quarantine", "commit_marked"])
-def test_the_wire_produces_the_same_verdict_as_the_in_process_driver(
-    tmp_path, mode, on_failure
-):
-    """The phase's whole exit test: identical Verdict, field by field."""
-    remote_root = _root(tmp_path / "remote", "parity")
-    local_root = _root(tmp_path / "local", "parity")
-
-    with FakeRuntime(tmp_path / "remote") as runtime:
-        remote = _driver(runtime, remote_root, mode)
-        try:
-            over_the_wire = interpreter.run(_job(on_failure), remote)
-        finally:
-            remote.close()
-
-    in_process = interpreter.run(_job(on_failure), StubDatabentoDriver(local_root, mode))
-
-    assert over_the_wire.as_dict() == in_process.as_dict()
-
-    # And the bytes agree too, not just the verdict that summarised them: the
-    # same names landed, and each says what it is.
-    #
-    # `_landed()` reads a missing `files/` as empty rather than failing, because
-    # that is how the verifier reads it and the two implementations differ
-    # harmlessly here: the artefact (and `fake_runtime`) create the staging
-    # directory even when the vendor published nothing, while the app's
-    # in-process stub leaves it uncreated in `nothing` mode. The directory's
-    # existence is not a file fact; `staged: {}` is the claim, and both sides
-    # make it. The artefact's behaviour is the one that survives phase C.
-    landed_remote = _landed(remote_root)
-    landed_local = _landed(local_root)
-    assert landed_remote == landed_local
-    for name in landed_remote:
-        assert (remote_root / "files" / name).read_bytes().startswith(b"STUB: not market data.")
-        assert (local_root / "files" / name).read_bytes().startswith(b"STUB: not market data.")
-
-
-def _landed(root) -> list[str]:
-    staging = root / "files"
-    if not staging.is_dir():
-        return []
-    return sorted(p.name for p in staging.iterdir() if p.is_file())
+# -- the wire answers what the interpreter asked for ------------------------
 
 
 def test_the_wire_is_the_one_thing_that_changed(tmp_path):
-    """Named explicitly, because the parity test would pass even if both were
-    wrong in the same way: clean mode is a pass that commits."""
+    """A pass, end to end, with the numbers named.
+
+    This is the anchor the parity test used to be: with the in-process driver
+    gone, the only way to say "the wire changed nothing" is to name what the
+    wire produced. Same verdict a clean run always produced, same seven steps in
+    the same order, same two files and 2000 rows.
+    """
     remote_root = _root(tmp_path / "remote", "clean")
     with FakeRuntime(tmp_path / "remote") as runtime:
         verdict = interpreter.run(_job(), _driver(runtime, remote_root))
@@ -287,3 +248,61 @@ def test_a_runtime_speaking_another_protocol_is_a_clear_refusal(tmp_path):
         )
         with pytest.raises(DriverUnavailable, match="unsupported protocol"):
             driver.open()
+
+
+# -- discovery: what does the runtime say it has? -------------------------
+
+
+def test_discovery_lists_what_the_runtime_has_installed(tmp_path):
+    with FakeRuntime(tmp_path, vendor="Databento", driver="databento") as runtime:
+        entries = installed(url=runtime.url, token=runtime.token)
+
+    assert [str(entry) for entry in entries] == ["databento v1 (Databento)"]
+    # And it is read-only: listing must not create the session it lists for.
+    assert not [path for method, path in runtime.requests if method == "POST"]
+
+
+def test_discovery_without_a_token_sends_nothing(tmp_path, monkeypatch):
+    """Same rule as the verbs: the failure names the setting, and no socket opens."""
+    monkeypatch.delenv("DRIVER_RUNTIME_TOKEN", raising=False)
+    with FakeRuntime(tmp_path) as runtime:
+        with pytest.raises(DriverUnavailable, match="DRIVER_RUNTIME_TOKEN"):
+            installed(url=runtime.url, token="")
+    assert runtime.requests == []
+
+
+def test_a_driver_is_bound_by_vendor_not_by_name(tmp_path):
+    """`plan_types/*.yaml` says who sells the data; the runtime says who serves
+    it. Matching on the vendor is what lets an install need no app-repo change."""
+    with FakeRuntime(tmp_path, vendor="Databento", driver="databento") as runtime:
+        found = driver_for("databento", url=runtime.url, token=runtime.token)
+        missing = driver_for("Refinitiv", url=runtime.url, token=runtime.token)
+
+    assert found is not None and found.driver == "databento"
+    assert missing is None
+
+
+def test_the_newest_installed_version_wins():
+    entries = [
+        Artifact(driver="databento", version="1.9.0", vendor="Databento"),
+        Artifact(driver="databento", version="1.10.0", vendor="Databento"),
+        Artifact(driver="databento", version="1.2.0", vendor="Databento"),
+        Artifact(driver="stub", version="2", vendor="Stub"),
+    ]
+    chosen = driver_for("Databento", artifacts=entries)
+    assert chosen is not None and chosen.version == "1.10.0"  # not "1.9.0" by string order
+
+
+def test_a_runtime_speaking_another_protocol_refuses_discovery_too(tmp_path):
+    """Half-understanding discovery is how a driver gets addressed by fields
+    that no longer mean what they meant."""
+    with FakeRuntime(tmp_path) as runtime:
+        runtime.drivers = {"protocol": PROTOCOL_VERSION + 1, "drivers": []}
+        with pytest.raises(DriverUnavailable, match="speaks protocol"):
+            installed(url=runtime.url, token=runtime.token)
+
+
+def test_a_wrong_token_is_the_runtime_s_refusal_not_a_local_guess(tmp_path):
+    with FakeRuntime(tmp_path) as runtime:
+        with pytest.raises(DriverUnavailable, match="401"):
+            installed(url=runtime.url, token="not-the-minted-token")

@@ -28,10 +28,17 @@ Four rules, in the order they bite:
    `commit_marked` -> `landed_with_errors`, `quarantine` -> `failed`. The
    runner maps; it never overrules `interpreter.classify`.
 
-The driver is injected. Today `main()` builds `stub.StubDatabentoDriver`, which
-writes placeholder bytes that say so; the real Databento driver slots into the
-same argument without this module changing, which is how the stub earns its
-keep.
+5. **The driver is in another container.** Everything the runner needs to know
+   about it — that one is installed for this vendor, which version, and what it
+   answers — is asked over the wire (`driver_client`). The app does not mount
+   the artefacts directory and does not import a vendor SDK: a new driver is an
+   install in the other container, not a deploy of this one.
+
+The driver is injected. `run()` hands over a `driver_client.RemoteDriver`
+pointed at whatever the runtime says it has installed for this row's vendor; a
+test hands over its own factory instead. The eight verbs are the interface, so
+this module does not know whether they are answered in this process or in
+another container — which is what made moving the stub out cheap.
 """
 
 from __future__ import annotations
@@ -40,6 +47,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import re
 import sys
 from collections.abc import Callable
@@ -47,13 +55,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import interpreter
+from . import driver_client, interpreter
 from . import job as job_mod
 from .claim import default_owner
 from .config import find_plan_types_dir, load_settings
 from .db import ClaimRefused, Store, utcnow
 from .registry import Registry, load_registry
-from .stub import StubDatabentoDriver, staged_files
 
 # Bumped when this module's behaviour changes, and recorded in `landing.json` and
 # the `landed` event. `interpreter_version` is separate: which flow ran and which
@@ -88,6 +95,7 @@ class RunRefused(Exception):
             "job_missing",
             "job_invalid",
             "job_hash_mismatch",
+            "driver_not_ready",
         }
     )
 
@@ -191,6 +199,50 @@ def bundle_digest(files: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> s
     return hashlib.sha256(manifest.encode("utf-8")).hexdigest()
 
 
+def staged_files(dest: Path) -> dict[str, dict[str, Any]]:
+    """What is on disk under `dest`, hashed.
+
+    The runner reads this to record what it landed, and it is deliberately the
+    same reading the verifier does: a landing recorded by a different rule than
+    the one that judges it is two beliefs about one directory. (It lived in the
+    driver until the driver moved out of this process; a driver that is asked
+    "what did you write" could answer anything, and this half is trusted.)
+    """
+    staged: dict[str, dict[str, Any]] = {}
+    if not dest.is_dir():
+        return staged
+    for path in sorted(dest.iterdir()):
+        if not path.is_file():
+            continue
+        payload = path.read_bytes()
+        staged[path.name] = {
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "rows": payload.count(b"\n") - 1,  # the header line is not a row
+        }
+    return staged
+
+
+def driver_name(driver: Any) -> str:
+    """Who produced the bytes, in the words the operator can act on.
+
+    For a `RemoteDriver` that is the **artefact** name the runtime reports
+    (`stub`, `databento`), not the class name `RemoteDriver` -- the class is the
+    same for every driver on the planet and would make `landing.json` say
+    nothing about which code wrote the files.
+    """
+    name = getattr(driver, "driver", None)
+    return str(name) if name else type(driver).__name__
+
+
+def driver_version(driver: Any) -> str | None:
+    """The version the session actually ran, preferring the runtime's answer."""
+    for attribute in ("session_driver_version", "driver_version"):
+        value = getattr(driver, attribute, None)
+        if value:
+            return str(value)
+    return None
+
+
 def landed_files(root: Path, dest: str) -> tuple[dict[str, Any], ...]:
     """Every file the run put under its `dest`, with size and hash."""
     base = Path(str(dest))
@@ -239,11 +291,19 @@ async def run_one(
     owner: str | None = None,
     mode: str = "clean",
     lease_seconds: int | None = None,
-    driver_factory: Callable[..., Any] = StubDatabentoDriver,
+    driver_factory: Callable[..., Any] | None = None,
+    driver_url: str | None = None,
+    driver_token: str | None = None,
     registry: Registry | None = None,
     now: str | None = None,
 ) -> RunResult:
-    """Claim one row, run its Job, settle it. Raises `ClaimRefused` if not ours."""
+    """Claim one row, run its Job, settle it. Raises `ClaimRefused` if not ours.
+
+    `driver_factory` is for tests that want to stand in for the runtime. Left
+    `None`, the driver is discovered and driven over the wire — the path every
+    deployment takes, so the tests that use it are testing what runs.
+    """
+    token = driver_token if driver_token is not None else (os.environ.get("DRIVER_RUNTIME_TOKEN") or None)
     if datasets_dir is None:
         # Fail closed: writing bytes somewhere nobody named is worse than not
         # running, because the Request then looks done and the bytes are lost.
@@ -253,6 +313,18 @@ async def run_one(
         )
     if not REQUEST_ID_RE.match(request_id or ""):
         raise RunRefused("bad_request_id", f"{request_id!r} is not a request id")
+
+    if driver_factory is None and not token:
+        # Before the claim, like the datasets check: a row that cannot be run
+        # must stay `approved`, not become a `failed` row that looks like a
+        # vendor outcome. The runtime refuses an unauthenticated caller, so
+        # there is nothing this process could do with the row anyway.
+        raise RunRefused(
+            "driver_not_ready",
+            "no driver runtime token: set DRIVER_RUNTIME_TOKEN to the driver "
+            "runtime's token (and DATA_DOWNLOAD_DRIVER_RUNTIME_URL if it is not "
+            "http://data-download-drivers:8831)",
+        )
 
     owner = owner or default_owner()
     row = await store.claim(request_id, owner, lease_seconds=lease_seconds)
@@ -312,12 +384,49 @@ async def run_one(
                 {"error": "job_invalid", "detail": f"dest {dest!r} is not relative"},
                 now=now,
             )
+        # Discovery before anything is created: a row with no driver for its
+        # vendor must not leave an empty request directory behind, which would
+        # read as "an attempt happened and produced nothing" when in fact no
+        # attempt could start.
+        if driver_factory is not None:
+            driver = driver_factory(root, mode)
+        else:
+            try:
+                entries = driver_client.installed(url=driver_url, token=token)
+            except driver_client.DriverUnavailable as exc:
+                return await _settle_refusal(
+                    store, request_id, owner, "failed",
+                    {"error": "driver_not_ready", "detail": str(exc)},
+                    dest=root, dataset=dataset, mode=mode, now=now,
+                )
+            artifact = driver_client.driver_for(vendor, artifacts=entries)
+            if artifact is None:
+                # Named, with what *is* installed: the operator's next move is
+                # "install the driver for this vendor", and the container that
+                # can do that is not this one.
+                available = ", ".join(str(entry) for entry in entries) or "nothing"
+                return await _settle_refusal(
+                    store, request_id, owner, "failed",
+                    {
+                        "error": "driver_not_ready",
+                        "detail": f"no driver is installed for vendor {vendor!r} "
+                        f"(installed: {available})",
+                    },
+                    dest=root, dataset=dataset, mode=mode, now=now,
+                )
+            driver = driver_client.RemoteDriver(
+                root,
+                mode,
+                url=driver_url,
+                token=token,
+                driver=artifact.driver,
+                driver_version=artifact.version,
+            )
         root.mkdir(parents=True, exist_ok=True)
         # The staging directory exists for the attempt even when the vendor
         # publishes nothing: `absent` is a file fact, not a missing directory.
         (root / relative).mkdir(parents=True, exist_ok=True)
 
-        driver = driver_factory(root, mode)
         try:
             verdict = interpreter.run(job, driver)
         except interpreter.InterpreterError as exc:
@@ -326,6 +435,12 @@ async def run_one(
                 {"error": "interpreter_error", "detail": str(exc)},
                 dest=root, dataset=dataset, mode=mode, now=now,
             )
+        finally:
+            # A session is a process in the other container. Nothing else closes
+            # it, and a leaked one holds a child until its deadline.
+            close = getattr(driver, "close", None)
+            if callable(close):
+                close()
 
         files = landed_files(root, dest)
         state = state_for(verdict.disposition)
@@ -341,7 +456,8 @@ async def run_one(
                 "state": state,
                 "verdict": verdict.verdict,
                 "disposition": verdict.disposition,
-                "driver": f"{type(driver).__name__}",
+                "driver": driver_name(driver),
+                "driver_version": driver_version(driver),
                 "driver_mode": mode,
                 "dest": str(root / dest),
                 "files": list(files),
@@ -364,7 +480,8 @@ async def run_one(
                 "dest": str(root / dest),
                 "files": len(files),
                 "bytes": sum(int(f["bytes"]) for f in files),
-                "driver": type(driver).__name__,
+                "driver": driver_name(driver),
+                "driver_version": driver_version(driver),
             },
             now=now,
         )
@@ -464,6 +581,8 @@ async def run(args: argparse.Namespace) -> int:
                     owner=args.owner,
                     mode=args.mode,
                     lease_seconds=args.lease_seconds,
+                    driver_url=settings.driver_runtime_url,
+                    driver_token=settings.driver_runtime_token,
                     registry=registry,
                 )
             except ClaimRefused as exc:
@@ -508,7 +627,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m data_download.runner",
         description=(
-            "Claim one approved request, run its Job against the stub vendor, "
+            "Claim one approved request, run its Job through the driver runtime, "
             "land the bytes under the datasets directory, and settle the row."
         ),
     )
@@ -520,7 +639,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--owner", default=None, help="the claimant (default: host:pid:uuid)")
     parser.add_argument("--lease-seconds", type=int, default=None)
-    parser.add_argument("--mode", choices=("clean", "short", "nothing"), default="clean")
+    parser.add_argument(
+        "--mode",
+        choices=("clean", "short", "nothing"),
+        default="clean",
+        help="driver option passed to the runtime: how the stub should fail",
+    )
     parser.add_argument(
         "--datasets-dir",
         default=None,

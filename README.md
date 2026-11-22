@@ -205,14 +205,19 @@ beside `files/` rather than inside it, because a file inside the staging
 directory would be staged-but-not-in-the-vendor-manifest and the shared verifier
 would rightly call a good landing a contradiction.
 
-**The driver today is a stub.** `stub.StubDatabentoDriver` makes no network
-call, holds no credential, and writes files that literally begin `STUB:`; it
-cannot spend and it cannot produce data. What it proves is the runner: the
-claim, the path, the digest, the settlement, the events. The interpreter's
-Driver protocol is unchanged, so the real Databento driver slots in behind the
-same `run_one(..., driver_factory=...)` argument. Until it does, an approved
-request run through this path lands placeholder bytes — deliberately, so the
-first real download is not also the first test of the lease.
+**The driver is in another container.** `driver_client.RemoteDriver` sends the
+interpreter's eight verbs over HTTP to `data-download-drivers`, one session (and
+one child process there) per run, closed in a `finally`. The stub artefact
+behind it makes no network call from *this* process, holds no credential here,
+and writes files that literally begin `STUB:`; what it proves is the runner —
+the claim, the path, the digest, the settlement, the events — and the transport.
+Which driver runs is discovered, not compiled in: `GET /v1/drivers` is asked who
+serves this row's vendor, and a vendor with no installed artefact settles
+`failed` with `driver_not_ready` naming what *is* installed. With no
+`DRIVER_RUNTIME_TOKEN` the runner refuses **before** the claim, so an un-runnable
+row stays `approved` instead of becoming a `failed` row that reads like a vendor
+outcome. A new driver is an install in the other container, not a deploy of this
+one — which is why the artefact directory is not mounted here.
 
 ## When the registry moves
 
