@@ -105,6 +105,21 @@ def tailnet_login(request: Request, settings=None) -> str | None:
     return request.headers.get(LOGIN_HEADER, "").strip() or None
 
 
+def require_submit_or_approver(request: Request) -> str:
+    """A token holding `submit`, or an attested approver.
+
+    Retry is the one write that serves both callers. An agent re-filing its own
+    work presents a token; the page's button has none -- it carries the tailnet
+    identity `tailscale serve` asserted, which is the same door `approve` uses.
+    Neither is weaker than it sounds, because a retry only writes a `draft`:
+    the spend is authorised later, by an approval, with the quote in view.
+    """
+    token = _token_from_header(request)
+    if token is not None:
+        return require_scope(request, "submit")[0]
+    return require_approver(request)
+
+
 def require_approver(request: Request) -> str:
     """Who is spending, or a refusal.
 

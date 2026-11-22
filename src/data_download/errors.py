@@ -49,6 +49,11 @@ NOT_FOUND = "not_found"
 NOT_ATTESTED = "not_attested"
 NOT_AN_APPROVER = "not_an_approver"
 
+# Nor §7.4's. A retry writes a new request and spends nothing by itself, so its
+# refusals are about the *row* rather than the body: a row that has not settled,
+# or one whose failure the same bytes will reproduce.
+NOT_RETRYABLE = "not_retryable"
+
 
 def invalid_body(message: str) -> ApiError:
     return ApiError(400, INVALID_BODY, message)
@@ -193,4 +198,34 @@ def approve_refused(reason: str, state: object) -> ApiError:
         messages.get(reason, "the request could not be approved"),
         reason=reason,
         state=state,
+    )
+
+
+def not_retryable(
+    reason: str, state: object, request_id: str, **extra: Any
+) -> ApiError:
+    """A refusal to re-file a row, naming which kind of refusal it is.
+
+    `not_settled` means there is no outcome to retry yet; `same_bytes` means
+    the row failed a check the identical body would fail again. Both carry the
+    id back, because the caller's next move is about that row either way.
+    """
+    messages = {
+        "not_settled": (
+            "only a settled row can be retried: this one is still in flight"
+        ),
+        "same_bytes": (
+            "this row failed a check the same bytes would fail again "
+            "(the vendor's files and the manifest are both immutable); "
+            "re-filing deliberately is a submit, not a retry"
+        ),
+    }
+    return ApiError(
+        409,
+        NOT_RETRYABLE,
+        messages.get(reason, "this request cannot be retried"),
+        reason=reason,
+        state=state,
+        request_id=request_id,
+        **extra,
     )

@@ -92,6 +92,7 @@ matter:
 | `POST /v1/requests/{id}/escalate` | `escalate` |
 | `POST /v1/quotes` | `read` — a question, not a purchase: it prices a request's Job and writes nothing |
 | `POST /v1/requests/{id}/approve` | a tailnet login, asserted by `tailscale serve` and named in `DATA_DOWNLOAD_APPROVERS` |
+| `POST /v1/requests/{id}/retry` | either a `submit` token or that same tailnet login — it files a `draft`, which spends nothing until somebody approves it |
 | `python -m data_download.approve` | a shell on the host: no route, no credential, no identity |
 
 Approval started as a shell command with no route at all, on the argument that a
@@ -218,6 +219,35 @@ serves this row's vendor, and a vendor with no installed artefact settles
 row stays `approved` instead of becoming a `failed` row that reads like a vendor
 outcome. A new driver is an install in the other container, not a deploy of this
 one — which is why the artefact directory is not mounted here.
+
+## Retrying a failed request
+
+A failed row is history and stays history. `POST /v1/requests/{id}/retry` does
+not rewind it: the route rebuilds the original body (from `intent_json`, or
+from `plan_type`/`params_json`/`max_usd`, carrying the Job's `verify.on_failure`
+policy across) and sends it through the **same** `_accept_submission` the submit
+route uses — the same binding, the same pricing, the same ceiling check, the
+same duplicate rule. What comes back is a new Request: a new id, a fresh quote
+against today's prices, its own output directory, its own events, and
+`retried_from` naming the row it came from. It lands in `draft`, because an
+approval authorises one attempt; the retry has not authorised anything and still
+spends nothing.
+
+Rewinding was rejected on purpose. `approve()` is `draft -> approved` only, and
+an approval is a statement about one attempt; making `failed -> approved` legal
+would rewrite the events, the recorded errors and the output directory of a row
+that already ran, and would let a green badge replace a red one without anyone
+asking a second time.
+
+Retryability is keyed off the failure, not the state alone. `failed` and
+`landed_with_errors` can be retried, except when the failure is
+`verify_shortfall` or `verify_contradiction`: those compare the vendor's bytes
+against an immutable manifest, so the same bytes would fail the same way and
+"retry" would only spend again to learn that. The page mirrors
+`UNRETRYABLE_FAILURES` in `format.js` so it never offers a verb the server would
+refuse, and shows the server's own refusal text when a stale page tries anyway.
+The check is `409 not_retryable`, with `reason: not_settled` for a row still in
+flight and `reason: same_bytes` for the immutable-verdict cases.
 
 ## When the registry moves
 

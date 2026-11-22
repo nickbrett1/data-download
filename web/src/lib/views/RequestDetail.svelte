@@ -16,11 +16,20 @@
    */
   import AppMark from "$lib/components/AppMark.svelte";
   import ApproveCard from "$lib/components/ApproveCard.svelte";
+  import RetryCard from "$lib/components/RetryCard.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DetailPanel from "$lib/components/nb/DetailPanel.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import { getView } from "$lib/api";
-  import { age, bound, filed, stateLabel, stateTone, usd } from "$lib/format";
+  import {
+    age,
+    bound,
+    filed,
+    isRetryable,
+    stateLabel,
+    stateTone,
+    usd,
+  } from "$lib/format";
 
   // The three blocked facets are the same state and three different answers to
   // "what next", so the meta row asks the question the label answers.
@@ -294,6 +303,13 @@
             <p class="failed-detail">{data.failure.detail}</p>
           {/if}
         </section>
+        <!-- Beside the reason, because that is where the reader's next question
+             is. Offered only where a retry can change anything: the server
+             refuses a row that has not settled, and refuses a verifier's
+             verdict, and `isRetryable` mirrors that set. -->
+        {#if isRetryable(data)}
+          <RetryCard requestId={data.id} />
+        {/if}
       {/if}
 
       <!-- First, because it is the question somebody opened this page to ask.

@@ -1483,3 +1483,114 @@ test.describe("a failure says why", () => {
     await expect(page.locator(".block.failed")).toHaveCount(0);
   });
 });
+
+test.describe("a retry files the same request again", () => {
+  // The failure this exists for is `driver_not_ready`: the repair happens in
+  // another container, and the row that failed cannot be approved or run —
+  // it is history. So the page offers a *new* request, and says so.
+  const failed = (failure) => ({
+    ...draftDetail,
+    state: "failed",
+    facet: "done",
+    facet_label: "Finished",
+    failure,
+  });
+
+  const DRIVERLESS = {
+    code: "driver_not_ready",
+    detail:
+      "no driver is installed for vendor 'Databento' (installed: stub v1 (Stub))",
+  };
+
+  test("offers the verb, and files a new request rather than rewinding", async ({
+    page,
+  }) => {
+    let posted = null;
+    await page.route("**/v1/requests/*/retry", async (route) => {
+      posted = route.request().url();
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          request_id: "req_9f2c41ab",
+          state: "draft",
+          retried_from: "req_draft01",
+          quote_usd: 1.466523885727,
+        }),
+      });
+    });
+    await mock(page, { detail: failed(DRIVERLESS) });
+    await page.goto("/requests/req_draft01");
+
+    const card = page.locator(".block.retry");
+    await expect(card).toBeVisible();
+    // What it will do is stated before the click, including the part that
+    // matters: nothing is spent until the new one is approved.
+    await expect(card).toContainText("waiting for approval");
+    await page.getByRole("button", { name: "Retry as a new request" }).click();
+
+    await expect(card).toContainText("req_9f2c41ab");
+    await expect(card).toContainText("$1.4665");
+    expect(posted).toContain("/v1/requests/req_draft01/retry");
+    // The reason block is still there: the old row is unchanged, and the page
+    // is still its page.
+    await expect(page.locator(".block.failed")).toContainText(
+      "driver_not_ready",
+    );
+  });
+
+  test("is not offered where the same bytes would fail again", async ({
+    page,
+  }) => {
+    // A verifier's verdict is a property of the vendor's files and the
+    // manifest. Both are immutable, so a retry is the same money twice.
+    await mock(page, {
+      detail: failed({ code: "verify_shortfall", detail: "3 of 5 files" }),
+    });
+    await page.goto("/requests/req_draft01");
+    await expect(page.locator(".block.failed")).toBeVisible();
+    await expect(page.locator(".block.retry")).toHaveCount(0);
+  });
+
+  test("is not offered on a row that has not settled", async ({ page }) => {
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+    await expect(page.locator(".block.retry")).toHaveCount(0);
+  });
+
+  test("a login that may read but not file is told so, and gets no button", async ({
+    page,
+  }) => {
+    await mock(page, {
+      detail: failed(DRIVERLESS),
+      who: { login: "guest@example.com", approver: false },
+    });
+    await page.goto("/requests/req_draft01");
+    const card = page.locator(".block.retry");
+    await expect(card).toContainText("DATA_DOWNLOAD_APPROVERS");
+    await expect(card.getByRole("button")).toHaveCount(0);
+  });
+
+  test("the server's own refusal is what the page shows", async ({ page }) => {
+    await page.route("**/v1/requests/*/retry", (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "not_retryable",
+            message:
+              "this row failed a check the same bytes would fail again " +
+              "(the vendor's files and the manifest are both immutable)",
+          },
+        }),
+      }),
+    );
+    await mock(page, { detail: failed(DRIVERLESS) });
+    await page.goto("/requests/req_draft01");
+    await page.getByRole("button", { name: "Retry as a new request" }).click();
+    await expect(page.locator(".block.retry .failure")).toContainText(
+      "immutable",
+    );
+  });
+});

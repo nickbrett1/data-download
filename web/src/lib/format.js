@@ -203,3 +203,26 @@ export function stateDetail(row) {
   // `landed with errors` is deliberately absent: the badge says it.
   return null;
 }
+
+/** The failures a retry cannot fix — the same two `app.py` refuses.
+ *
+ * A verifier compares the vendor's bytes against the manifest, and neither of
+ * those changes because somebody pressed a button: the same body filed again is
+ * checked to the same verdict. Everything else that settles is worth another
+ * attempt (`driver_not_ready` once an artefact is installed, `vendor_error`,
+ * `timeout`, `budget_refused` once the ceiling is raised), and the page decides
+ * whether to offer the verb from exactly this set, so the button and the server
+ * cannot disagree about what is retryable.
+ */
+const UNRETRYABLE_FAILURES = new Set([
+  "verify_shortfall",
+  "verify_contradiction",
+]);
+
+/** Only a settled row with a reason a retry could change is offered the verb. */
+export function isRetryable(row) {
+  if (!row?.failure?.code) return false;
+  if (row.state !== "failed" && row.state !== "landed_with_errors")
+    return false;
+  return !UNRETRYABLE_FAILURES.has(row.failure.code);
+}

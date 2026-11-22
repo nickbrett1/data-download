@@ -445,6 +445,52 @@ def _gap_of(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+# A retry is only honest for a row that has finished. `draft`/`approved` have
+# not run yet (approve or run them), and `running` is somebody's work in flight.
+RETRYABLE_STATES = frozenset({"failed", "landed_with_errors"})
+
+# The failures a retry cannot fix. The verifier compares the vendor's bytes
+# against the manifest, and both are immutable -- so the same body, filed again,
+# is checked to the same verdict. Everything else that settles is worth another
+# attempt (`driver_not_ready` once the artefact is installed, `vendor_error`,
+# `timeout`, `budget_refused` once the ceiling is raised), and the page keys its
+# button off this same set so the two cannot disagree about what is retryable.
+UNRETRYABLE_FAILURES = frozenset({"verify_shortfall", "verify_contradiction"})
+
+
+def _retry_body(row: Any) -> dict[str, Any]:
+    """The body to file again, rebuilt from what the row stored.
+
+    An intent kept its whole verbatim body, so re-filing it is exact. A plan
+    kept `params_json` and the sealed Job; the Job is the only place the verify
+    policy survives (`params` do not carry it), and a Job cannot be re-bound
+    without one -- so it is read back off the verify step rather than guessed.
+    A plan whose Job lost its verify step is a hand-edited row: filing it
+    without a policy would have `validate_plan` refuse it, naming the field.
+    """
+    if row["body_kind"] == "intent":
+        return json.loads(row["intent_json"])
+    body = {
+        "kind": "plan",
+        "plan_type": row["plan_type"],
+        "params": json.loads(row["params_json"]),
+        "max_usd": row["max_usd"],
+        "why": row["why"] if "why" in row.keys() else None,
+    }
+    job = json.loads(row["job_json"]) if row["job_json"] else {}
+    verify = next(
+        (
+            step.get("kwargs") or {}
+            for step in job.get("steps", [])
+            if step.get("kind") == "verify"
+        ),
+        {},
+    )
+    if verify.get("on_failure"):
+        body["verify"] = {"on_failure": verify["on_failure"]}
+    return body
+
+
 def _failure_of(raw: Any) -> dict[str, str] | None:
     """Why a settled row did not land cleanly, in the reader's words.
 
@@ -617,14 +663,71 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not isinstance(body, dict):
             raise errors.invalid_body("body must be a JSON object")
 
-        kind = body.get("kind")
-        now = utcnow()
-        digest = payload_hash(body)
-        # §5.6: exactly-once is opt-in, by the caller, because the caller is the
-        # only party who knows whether a repeat is a retry or a second request.
         idempotency_key = (request.headers.get("Idempotency-Key") or "").strip() or None
         if idempotency_key and len(idempotency_key) > 200:
             raise errors.invalid_body("Idempotency-Key must be at most 200 characters")
+        return await _accept_submission(
+            request, store, body, idempotency_key=idempotency_key
+        )
+
+    @app.post("/v1/requests/{request_id}/retry", status_code=202)
+    async def retry_request(request: Request, request_id: str) -> JSONResponse:
+        """File the same body again, as a new Request.
+
+        A retry is a *new* request, never a rewound one. `failed` is history:
+        its events, its `errors_json` and its output directory describe an
+        attempt that happened, and the approval that preceded it authorised
+        that attempt and no other. So this rebuilds the body from what was
+        stored and sends it down exactly the path a submit takes -- re-priced,
+        re-checked against the same ceiling, `duplicate_of` pointing back at
+        the row it came from -- and leaves the new row in `draft`.
+
+        That last part is the point: a retry spends nothing by itself. Somebody
+        still approves it, with the new quote in front of them, which is how
+        every other purchase on this service is authorised.
+
+        Two doors, because there are two callers. A token holding `submit` is
+        an agent re-filing its own work; an attested tailnet approver is the
+        button on the page, which holds no credential by design.
+        """
+        auth.require_submit_or_approver(request)
+        store = await _store(request)
+        row = await store.get_request(request_id)
+        if row is None:
+            raise errors.not_found(f"no request {request_id!r}")
+        if row["state"] not in RETRYABLE_STATES:
+            raise errors.not_retryable("not_settled", row["state"], request_id)
+        failure = _failure_of(row["errors_json"])
+        if failure and failure["code"] in UNRETRYABLE_FAILURES:
+            # The same bytes, checked again, by a verifier that has not changed.
+            raise errors.not_retryable(
+                "same_bytes", row["state"], request_id, failure=failure["code"]
+            )
+        return await _accept_submission(
+            request,
+            store,
+            _retry_body(row),
+            idempotency_key=None,
+            retried_from=request_id,
+        )
+
+    async def _accept_submission(
+        request: Request,
+        store: Any,
+        body: dict[str, Any],
+        *,
+        idempotency_key: str | None,
+        retried_from: str | None = None,
+    ) -> JSONResponse:
+        """One body, from validation to a stored row -- submit and retry alike.
+
+        Split out when retry arrived, and deliberately not copied: pricing, the
+        ceiling, binding and duplicate detection are the rules of *filing*, and
+        a second implementation would be a second set of them.
+        """
+        kind = body.get("kind")
+        now = utcnow()
+        digest = payload_hash(body)
 
         # What the vendor said this request costs, for the response only. The
         # row carries it as `estimate_usd`, except where the ceiling refused it
@@ -774,6 +877,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             raise errors.invalid_body("kind must be 'plan' or 'intent'")
 
+        if retried_from is not None:
+            # On the event, not in `why`: the human's sentence is theirs, and a
+            # provenance note pasted into it would be a second author.
+            event_detail["retried_from"] = retried_from
+
         stored, created, duplicate_of = await store.insert_request(
             row=row, event_detail=event_detail
         )
@@ -798,6 +906,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # Informational: an earlier Request with the same body. This one
                 # still exists, with its own id and its own output directory.
                 "duplicate_of": duplicate_of,
+                # Present only on a retry: the row this one was rebuilt from.
+                **({"retried_from": retried_from} if retried_from else {}),
             },
         )
 
