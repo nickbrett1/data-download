@@ -167,8 +167,8 @@ def over_ceiling(estimate_usd: float, max_usd: float) -> ApiError:
     return ApiError(
         422,
         OVER_CEILING,
-        f"this request prices at ${estimate_usd:.4f}, above its "
-        f"ceiling of ${max_usd:.4f}",
+        f"this request prices at ${estimate_usd:.2f}, above its "
+        f"ceiling of ${max_usd:.2f}",
         estimate_usd=estimate_usd,
         max_usd=max_usd,
     )

@@ -95,7 +95,7 @@ test.describe("the request book", () => {
 
     const first = page.locator(".tbl-row").first();
     // Phase 4: the quote is on the row, at the precision a purchase needs.
-    await expect(first.locator(".quote")).toHaveText("$0.0412");
+    await expect(first.locator(".quote")).toHaveText("$0.04");
     // When it was filed, in a form a person reads. Not "1h 4m": an age answers
     // a question nobody asked and has to be converted back into a clock.
     await expect(first.locator(".filed")).toHaveText("14 Nov 23:10");
@@ -870,7 +870,7 @@ test.describe("naming a request, and opening it", () => {
       expect(cells[key].label).toBeCloseTo(cells.window.label, 0);
       expect(cells[key].value).toBeCloseTo(cells.window.value, 0);
     }
-    await expect(request.locator(".spec")).toContainText("$0.8115");
+    await expect(request.locator(".spec")).toContainText("$0.81");
     await expect(request.locator(".spec")).toContainText("$5");
   });
 
@@ -997,7 +997,7 @@ test.describe("approving a request", () => {
     // the vendor gave for this Job and the ceiling the approval authorises.
     // Two figures, no prose -- the sentence around them only got in the way.
     const ask = page.locator(".approve .ask");
-    await expect(ask).toHaveText("Quoted $0.8115. Approves up to $5.");
+    await expect(ask).toHaveText("Quoted $0.81. Approves up to $5.");
     expect(seen).toHaveLength(0);
 
     await noteField(page).fill("ES two days");
@@ -1024,7 +1024,7 @@ test.describe("approving a request", () => {
     await expect(ask).not.toContainText("ceiling it carries");
     await expect(ask).not.toContainText("up to");
     await expect(ask).toHaveText(
-      "Quoted $0.8115. No ceiling — nothing here bounds the spend.",
+      "Quoted $0.81. No ceiling — nothing here bounds the spend.",
     );
     await expect(approveButton(page)).toHaveText("Approve");
   });
@@ -1560,7 +1560,7 @@ test.describe("a retry files the same request again", () => {
 
     // The answer is the one thing it does say: what was filed, for how much.
     await expect(card).toContainText("req_9f2c41ab");
-    await expect(card).toContainText("$1.4665");
+    await expect(card).toContainText("$1.47");
     await expect(card).toContainText("waiting for approval");
     expect(posted).toContain("/v1/requests/req_draft01/retry");
     // The reason block is still there: the old row is unchanged, and the page

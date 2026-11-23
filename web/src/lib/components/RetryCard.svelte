@@ -23,6 +23,7 @@
    * would refuse.
    */
   import { getView, postJson } from "$lib/api";
+  import { usd } from "$lib/format";
 
   let { requestId } = $props();
 
@@ -70,7 +71,7 @@
         ><code>{filed.request_id}</code></a
       >, quoting {filed.quote_usd === null || filed.quote_usd === undefined
         ? "nothing"
-        : `$${Number(filed.quote_usd).toFixed(4)}`} — waiting for approval.
+        : usd(filed.quote_usd)} — waiting for approval.
     </p>
   {:else if whoFailure}
     <p class="failure">{whoFailure}</p>

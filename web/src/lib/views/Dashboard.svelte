@@ -206,9 +206,8 @@
             {/if}
           </span>
           <!-- The quote is a number, and it is the number the ceiling was
-               compared against -- four decimals, because 4c and 4.9c are
-               different purchases. A row with nothing to quote says so with a
-               dash, not a zero: `$0.0000` would read as a free download. -->
+               compared against. A row with nothing to quote says so with a
+               dash, not a zero: `$0.00` would read as a free download. -->
           <span class="num quote">{usd(request.estimate_usd)}</span>
           <span class="num filed">{filed(request.created_at)}</span>
         {/snippet}

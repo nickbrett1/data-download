@@ -54,19 +54,25 @@ export function stateLabel(state) {
   return STATE_LABELS[state] ?? state;
 }
 
-/** `$0.0412`, or an em dash. A price that rounds to `$0.04` hides the difference
- * between a plan that costs 4c and one that costs 4.9c, which is the whole
- * reason the column exists. */
+/** `$0.04`, or an em dash. Cents are the unit a person buys in.
+ *
+ * It was four decimals, on the argument that 4c and 4.9c are different
+ * purchases. True of a vendor's invoice, and not true of this screen: the
+ * reader is deciding whether a figure is roughly what they expected, and the
+ * fourth decimal is noise in a decision that has a ceiling on it anyway. The
+ * exact number is still stored, still compared against the ceiling, and still
+ * in the API -- this is the display. */
 export function usd(value) {
   if (value === null || value === undefined) return "—";
-  return `$${Number(value).toFixed(4)}`;
+  return `$${Number(value).toFixed(2)}`;
 }
 
 /** A ceiling, not a price: `$5`, `$5.50`, `$120`.
  *
- * Four decimals belong on a quote -- 4c and 4.9c are different purchases -- and
- * nowhere near the sentence "approve up to…", where nobody authorises
- * `$5.0000`. Same number, different question, so a second formatter. */
+ * The trailing `.00` stays off. A price reads as money spent (`$5.00`, two
+ * decimals always); a ceiling reads as a limit somebody typed, and nobody
+ * authorises "up to $5.00" -- they typed 5. Same number, different question,
+ * so a second formatter. */
 export function bound(value) {
   if (value === null || value === undefined) return "—";
   const amount = Number(value);
