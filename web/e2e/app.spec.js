@@ -980,7 +980,10 @@ test.describe("approving a request", () => {
     );
     await expect(page.locator(".approve .fields label")).toHaveCount(1);
     await expect(approveButton(page)).toBeEnabled();
-    await expect(approveButton(page)).toContainText("$5");
+    // The ceiling is in the line above the button, not in the button's own
+    // word: the button says what the click does, and says it once.
+    await expect(approveButton(page)).toHaveText("Approve");
+    await expect(page.locator(".approve .ask")).toContainText("up to $5");
   });
 
   test("the numbers are read before the click, and one click is the spend", async ({
@@ -992,13 +995,9 @@ test.describe("approving a request", () => {
 
     // What is being authorised is on the page before anybody clicks: the quote
     // the vendor gave for this Job and the ceiling the approval authorises.
-    // It used to be a second screen between two clicks -- a layer of approval
-    // asking the question the first click had already asked.
+    // Two figures, no prose -- the sentence around them only got in the way.
     const ask = page.locator(".approve .ask");
-    await expect(ask).toContainText(
-      "The vendor quoted $0.8115 for exactly this Job.",
-    );
-    await expect(ask).toContainText("Approving authorises up to $5.");
+    await expect(ask).toHaveText("Quoted $0.8115. Approves up to $5.");
     expect(seen).toHaveLength(0);
 
     await noteField(page).fill("ES two days");
@@ -1024,16 +1023,10 @@ test.describe("approving a request", () => {
     const ask = page.locator(".approve .ask");
     await expect(ask).not.toContainText("ceiling it carries");
     await expect(ask).not.toContainText("up to");
-    await expect(ask).toContainText(
-      "This request carries no ceiling, so nothing here bounds what it may cost.",
+    await expect(ask).toHaveText(
+      "Quoted $0.8115. No ceiling — nothing here bounds the spend.",
     );
-    await expect(ask).toContainText("quoted $0.8115");
     await expect(approveButton(page)).toHaveText("Approve");
-    // Sentences, not words run together: the card used to render
-    // "…?The vendor quoted…" with no space after the question mark.
-    const said = (await ask.textContent()).replace(/\s+/g, " ");
-    expect(said).toContain("Job. This request carries no ceiling");
-    expect(said).toContain("may cost. Nothing is downloaded here");
   });
 
   test("the token this card used to ask for is scrubbed from the browser", async ({
@@ -1085,10 +1078,10 @@ test.describe("approving a request", () => {
     await page.goto("/requests/req_draft01");
 
     await expect(page.locator(".approve .who")).toContainText(
-      "Approving as someone-else@example.com.",
+      "Approving as someone-else@example.com is refused",
     );
     await expect(page.locator(".approve .who")).toContainText(
-      "may read but not approve",
+      "DATA_DOWNLOAD_APPROVERS",
     );
     await expect(approveButton(page)).toHaveCount(0);
   });

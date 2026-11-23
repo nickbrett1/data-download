@@ -78,7 +78,6 @@
     maxUsd === null || maxUsd === undefined ? null : bound(maxUsd);
   const quote =
     estimateUsd === null || estimateUsd === undefined ? null : usd(estimateUsd);
-  const ready = $derived(who?.approver === true);
 
   async function approve() {
     stage = "busy";
@@ -99,64 +98,55 @@
 <section class="block approve">
   <p class="micro">spend</p>
   {#if done}
-    <p class="quiet">
-      Approved. The record has moved to <code>approved</code> and a
-      <code>human</code> event is on the trail; nothing is fetched by this page.
-    </p>
+    <p class="quiet">Approved.</p>
   {:else if whoFailure}
     <!-- No identity, so there is no verb to offer: not a disabled button, which
          would promise that something here could be fixed by clicking. -->
     <p class="failure">{whoFailure}</p>
-  {:else if !who}
-    <p class="quiet">Asking the server who this door thinks you are…</p>
-  {:else}
+  {:else if who && !who.approver}
     <p class="who">
-      Approving as <strong>{who.login}</strong>.
-      {#if !who.approver}
-        <span class="quiet"
-          >That login may read but not approve: it is not named in
-          <code>DATA_DOWNLOAD_APPROVERS</code>.</span
-        >
+      Approving as <strong>{who.login}</strong> is refused: not in
+      <code>DATA_DOWNLOAD_APPROVERS</code>.
+    </p>
+  {:else}
+    {#if who}
+      <p class="who">Approving as <strong>{who.login}</strong>.</p>
+    {/if}
+    <!-- Both numbers, before the click rather than between two of them: the
+         quote is what the vendor said this Job costs, the ceiling is what the
+         approval authorises. Two figures and no prose -- and a request with no
+         ceiling says that, because "up to" with nothing after it reads as a
+         bound where there is none. Nothing prints while the page is still
+         asking who you are; the button is disabled instead. -->
+    <p class="ask">
+      {#if quote}Quoted <strong>{quote}</strong>.{/if}
+      {#if ceiling}
+        Approves up to <strong>{ceiling}</strong>.
+      {:else}
+        No ceiling — nothing here bounds the spend.
       {/if}
     </p>
-    {#if ready}
-      <!-- Both numbers, before the click rather than between two of them. The
-           ceiling is what an approval authorises; the quote is what the vendor
-           said this exact Job costs. Said plainly: a request with no ceiling is
-           not bounded by a number this page can show, and that is worth
-           reading before the click rather than after it. -->
-      <p class="ask">
-        {#if quote}
-          The vendor quoted <strong>{quote}</strong> for exactly this Job.
-        {/if}
-        {#if ceiling}
-          Approving authorises up to <strong>{ceiling}</strong>.{:else}
-          This request carries no ceiling, so nothing here bounds what it may
-          cost.{/if}
-        Nothing is downloaded here — a runner picks up an approved row.
-      </p>
-      <div class="fields">
-        <label>
-          <span class="micro">note <span class="opt">(optional)</span></span>
-          <input
-            type="text"
-            bind:value={note}
-            placeholder="why this request is worth the money"
-            autocomplete="off"
-          />
-        </label>
-      </div>
-      <div class="row">
-        <button
-          class="btn primary"
-          type="button"
-          disabled={stage === "busy"}
-          onclick={approve}
-        >
-          Approve{ceiling ? ` up to ${ceiling}` : ""}
-        </button>
-      </div>
-    {/if}
+    <div class="fields">
+      <label>
+        <span class="micro">note <span class="opt">(optional)</span></span>
+        <input
+          type="text"
+          bind:value={note}
+          placeholder="why this request is worth the money"
+          autocomplete="off"
+        />
+      </label>
+    </div>
+    <div class="row">
+      <button
+        class="btn primary"
+        type="button"
+        disabled={stage === "busy" || !who}
+        onclick={approve}
+      >
+        Approve
+      </button>
+    </div>
   {/if}
   {#if failure}
     <p class="failure">{failure}</p>
