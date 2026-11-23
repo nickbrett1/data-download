@@ -21,7 +21,7 @@ const TONES = {
   blocked: "warn",
   // Not a colour with an opinion: nothing went wrong and nothing landed. The
   // word in the badge is what says it was a person's decision.
-  withdrawn: "",
+  cancelled: "",
 };
 
 export function stateTone(state) {
@@ -47,7 +47,7 @@ const STATE_LABELS = {
   landed_with_errors: "Landed with errors",
   failed: "Failed",
   // A decision, not an outcome: this request was taken back before it ran.
-  withdrawn: "Withdrawn",
+  cancelled: "Cancelled",
 };
 
 export function stateLabel(state) {
@@ -225,13 +225,13 @@ const UNRETRYABLE_FAILURES = new Set([
 ]);
 
 /** Finished, in whatever way: the states `archive` accepts. A draft is
- * withdrawn and an approved/running row is still happening, so neither is
+ * cancelled and an approved/running row is still happening, so neither is
  * offered -- the server refuses both, and the page must not promise otherwise. */
 const ARCHIVABLE_STATES = new Set([
   "succeeded",
   "landed_with_errors",
   "failed",
-  "withdrawn",
+  "cancelled",
 ]);
 
 export function isArchivable(row) {

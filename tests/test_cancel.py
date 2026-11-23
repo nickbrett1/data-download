@@ -1,12 +1,12 @@
-"""Withdraw: a filed row nobody has run can be taken back.
+"""Cancel: a filed row nobody has run can be taken back.
 
 The motivating case was the duplicate the retry proof left behind: two drafts,
 same body, one of them never wanted. There was no verb for that, so the only
 ways out were approving a request nobody wanted (a spend) or editing the
 database by hand (a lie about the record).
 
-What withdraw is *not*: a delete. The row, its quote, its `why` and its events
-all stay and the badge changes to `withdrawn` -- because "I changed my mind" is
+What cancel is *not*: a delete. The row, its quote, its `why` and its events
+all stay and the badge changes to `cancelled` -- because "I changed my mind" is
 a fact about the request, and a missing row reads as a request that was never
 filed. And it is not the inverse of approval: `approved` is refused, because an
 approval authorises one attempt and once the runner may hold the lease, stopping
@@ -54,24 +54,24 @@ def _events(db_path: Path, request_id: str) -> list[tuple[str, dict]]:
         conn.close()
 
 
-def test_a_draft_is_withdrawn_and_says_so(client, db_path):
+def test_a_draft_is_cancelled_and_says_so(client, db_path):
     request_id = _file(client)
 
     res = client.post(
-        f"/v1/requests/{request_id}/withdraw",
+        f"/v1/requests/{request_id}/cancel",
         json={"note": "filed twice by the retry proof; this is the spare"},
         headers=served(),
     )
     assert res.status_code == 200, res.text
     assert res.json() == {
         "request_id": request_id,
-        "state": "withdrawn",
-        "withdrawn": True,
+        "state": "cancelled",
+        "cancelled": True,
     }
-    assert _state(db_path, request_id) == "withdrawn"
+    assert _state(db_path, request_id) == "cancelled"
 
     events = _events(db_path, request_id)
-    assert [e for e, _ in events] == ["submitted", "withdrawn"]
+    assert [e for e, _ in events] == ["submitted", "cancelled"]
     detail = events[-1][1]
     assert detail["actor"] == "nick@example.com"
     assert detail["was"] == "draft"
@@ -79,32 +79,32 @@ def test_a_draft_is_withdrawn_and_says_so(client, db_path):
     assert detail["via"] == "serve"
 
 
-def test_a_withdrawn_row_keeps_its_body_and_its_reason(client, db_path):
-    """The record of what was asked for survives the withdrawal."""
+def test_a_cancelled_row_keeps_its_body_and_its_reason(client, db_path):
+    """The record of what was asked for survives the cancelal."""
     request_id = _file(client)
-    client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    client.post(f"/v1/requests/{request_id}/cancel", headers=served())
 
     row = client.get(f"/v1/requests/{request_id}", headers=auth()).json()
-    assert row["state"] == "withdrawn"
+    assert row["state"] == "cancelled"
     assert row["why"] == PLAN_BODY["why"]
     assert row["params"]["dataset"] == "GLBX.MDP3"
     assert row["max_usd"] == 5
 
 
-def test_withdrawing_twice_is_a_no_op_with_no_second_event(client, db_path):
+def test_cancelling_twice_is_a_no_op_with_no_second_event(client, db_path):
     request_id = _file(client)
-    client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    client.post(f"/v1/requests/{request_id}/cancel", headers=served())
 
-    res = client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    res = client.post(f"/v1/requests/{request_id}/cancel", headers=served())
     assert res.status_code == 200, res.text
-    assert res.json()["withdrawn"] is False
-    assert [e for e, _ in _events(db_path, request_id)] == ["submitted", "withdrawn"]
+    assert res.json()["cancelled"] is False
+    assert [e for e, _ in _events(db_path, request_id)] == ["submitted", "cancelled"]
 
 
-def test_a_blocked_intent_is_not_withdrawable_yet(client, db_path):
+def test_a_blocked_intent_is_not_cancelable_yet(client, db_path):
     """Deliberate: two CHECKs say "a blocked row has no Job and no estimate".
 
-    A withdrawn row that never had a Job would have to relax both, and that is a
+    A cancelled row that never had a Job would have to relax both, and that is a
     decision about what a never-bound row *is*, not a side effect of adding a
     button. Pinned here so the refusal is a choice on the record rather than an
     accident somebody later "fixes" by dropping the constraints.
@@ -112,14 +112,14 @@ def test_a_blocked_intent_is_not_withdrawable_yet(client, db_path):
     request_id = _file(client, INTENT_BODY)
     assert _state(db_path, request_id) == "blocked"
 
-    res = client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    res = client.post(f"/v1/requests/{request_id}/cancel", headers=served())
     assert res.status_code == 409, res.text
-    assert res.json()["error"]["code"] == "withdraw_refused"
+    assert res.json()["error"]["code"] == "cancel_refused"
     assert res.json()["error"]["state"] == "blocked"
     assert _state(db_path, request_id) == "blocked"
 
 
-def test_an_approved_row_cannot_be_withdrawn(client, db_path):
+def test_an_approved_row_cannot_be_cancelled(client, db_path):
     """An approval authorised one attempt; taking it back is not book-keeping."""
     request_id = _file(client)
     assert (
@@ -127,17 +127,17 @@ def test_an_approved_row_cannot_be_withdrawn(client, db_path):
         == 200
     )
 
-    res = client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    res = client.post(f"/v1/requests/{request_id}/cancel", headers=served())
     assert res.status_code == 409, res.text
     error = res.json()["error"]
-    assert error["code"] == "withdraw_refused"
+    assert error["code"] == "cancel_refused"
     assert error["reason"] == "wrong_state"
     assert error["state"] == "approved"
     assert "authorised" in error["message"]
     assert _state(db_path, request_id) == "approved"
 
 
-def test_a_failed_row_cannot_be_withdrawn(client, db_path):
+def test_a_failed_row_cannot_be_cancelled(client, db_path):
     """It already ran, and retry is the verb for "try that again"."""
     request_id = _file(client)
     conn = sqlite3.connect(db_path)
@@ -150,22 +150,22 @@ def test_a_failed_row_cannot_be_withdrawn(client, db_path):
     finally:
         conn.close()
 
-    res = client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    res = client.post(f"/v1/requests/{request_id}/cancel", headers=served())
     assert res.status_code == 409, res.text
     assert res.json()["error"]["state"] == "failed"
 
 
 def test_an_unknown_id_is_a_404(client):
-    res = client.post("/v1/requests/req_nope/withdraw", headers=served())
+    res = client.post("/v1/requests/req_nope/cancel", headers=served())
     assert res.status_code == 404, res.text
     assert res.json()["error"]["code"] == "not_found"
 
 
-def test_a_read_token_may_not_withdraw(client):
+def test_a_read_token_may_not_cancel(client):
     request_id = _file(client)
 
     res = client.post(
-        f"/v1/requests/{request_id}/withdraw", headers=auth("tok-read")
+        f"/v1/requests/{request_id}/cancel", headers=auth("tok-read")
     )
     assert res.status_code == 403, res.text
     assert _state_from(client, request_id) == "draft"
@@ -175,23 +175,23 @@ def _state_from(client, request_id: str) -> str:
     return client.get(f"/v1/requests/{request_id}", headers=auth()).json()["state"]
 
 
-def test_a_submit_token_may_withdraw_without_being_a_person(client, db_path):
-    """Filing and withdrawing are two halves of one decision, both spend-free."""
+def test_a_submit_token_may_cancel_without_being_a_person(client, db_path):
+    """Filing and cancelling are two halves of one decision, both spend-free."""
     request_id = _file(client)
 
     res = client.post(
-        f"/v1/requests/{request_id}/withdraw", headers=auth("tok-submit-only")
+        f"/v1/requests/{request_id}/cancel", headers=auth("tok-submit-only")
     )
     assert res.status_code == 200, res.text
     detail = _events(db_path, request_id)[-1][1]
     assert detail["actor"] == "tok-submit-only"
 
 
-def test_a_stranger_on_the_tailnet_may_not_withdraw(client):
+def test_a_stranger_on_the_tailnet_may_not_cancel(client):
     request_id = _file(client)
 
     res = client.post(
-        f"/v1/requests/{request_id}/withdraw",
+        f"/v1/requests/{request_id}/cancel",
         headers={"Tailscale-User-Login": "someone@example.com"},
     )
     assert res.status_code == 403, res.text
@@ -202,7 +202,7 @@ def test_the_page_door_works_with_no_credential(client):
     """The button on the page holds no token; Serve's login is the credential."""
     request_id = _file(client)
 
-    res = client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    res = client.post(f"/v1/requests/{request_id}/cancel", headers=served())
     assert res.status_code == 200, res.text
 
 
@@ -210,7 +210,7 @@ def test_an_undeclared_actor_is_refused(client):
     request_id = _file(client)
 
     res = client.post(
-        f"/v1/requests/{request_id}/withdraw",
+        f"/v1/requests/{request_id}/cancel",
         json={"actor": "somebody-else"},
         headers=served(),
     )
@@ -219,9 +219,9 @@ def test_an_undeclared_actor_is_refused(client):
     assert "actor is not accepted" in res.json()["error"]["message"]
 
 
-def test_a_withdrawn_row_is_not_pending_and_is_not_retryable(client):
+def test_a_cancelled_row_is_not_pending_and_is_not_retryable(client):
     request_id = _file(client)
-    client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    client.post(f"/v1/requests/{request_id}/cancel", headers=served())
 
     pending = client.get("/v1/requests", params={"state": "draft"}, headers=auth())
     assert request_id not in [r["id"] for r in pending.json()["items"]]
@@ -231,35 +231,35 @@ def test_a_withdrawn_row_is_not_pending_and_is_not_retryable(client):
     error = res.json()["error"]
     assert error["code"] == "not_retryable"
     assert error["reason"] == "not_settled"
-    assert "withdrawn" in error["message"]
+    assert "cancelled" in error["message"]
     assert "still in flight" not in error["message"]
 
 
-def test_a_withdrawn_row_is_kept_but_not_listed(client):
+def test_a_cancelled_row_is_kept_but_not_listed(client):
     """Settled, needing nothing: it is kept, and it is not clutter.
 
     The list is "what needs me". A cancelled draft needs nothing, so it comes
     out of `rows` -- and out of `total`, so the count matches what is drawn. It
-    is not gone: it is in the `withdrawn` facet, which the filter bar offers by
-    name, and `withdrawn` counts it for the badge that says so.
+    is not gone: it is in the `cancelled` facet, which the filter bar offers by
+    name, and `cancelled` counts it for the badge that says so.
     """
     request_id = _file(client)
-    client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    client.post(f"/v1/requests/{request_id}/cancel", headers=served())
 
     book = client.get("/ui/dashboard.json").json()
     assert request_id not in [r["id"] for r in book["rows"]]
     assert book["total"] == len(book["rows"]) == 0
-    assert book["withdrawn"] == 1
-    assert "withdrawn" in book["facet_order"] or "withdrawn" in book["facet_labels"]
+    assert book["cancelled"] == 1
+    assert "cancelled" in book["facet_order"] or "cancelled" in book["facet_labels"]
 
-    row = next(r for r in book["facets"]["withdrawn"] if r["id"] == request_id)
-    assert row["state"] == "withdrawn"
-    assert row["facet"] == "withdrawn"
-    assert row["facet_label"] == "Withdrawn"
+    row = next(r for r in book["facets"]["cancelled"] if r["id"] == request_id)
+    assert row["state"] == "cancelled"
+    assert row["facet"] == "cancelled"
+    assert row["facet_label"] == "Cancelled"
     assert row["failure"] is None
     # Everything the row knows is still there: it is filtered, not missing.
     detail = client.get(f"/ui/request/{request_id}.json").json()
-    assert detail["state"] == "withdrawn"
+    assert detail["state"] == "cancelled"
     assert detail["why"] == PLAN_BODY["why"]
 
 
@@ -268,13 +268,13 @@ def test_a_note_that_is_not_a_string_is_refused(client, note):
     request_id = _file(client)
 
     res = client.post(
-        f"/v1/requests/{request_id}/withdraw", json={"note": note}, headers=served()
+        f"/v1/requests/{request_id}/cancel", json={"note": note}, headers=served()
     )
     assert res.status_code == 400, res.text
     assert "note must be a string" in res.json()["error"]["message"]
 
 
-def test_an_old_store_is_rebuilt_so_it_can_hold_a_withdrawn_row(tmp_path: Path):
+def test_an_old_store_is_rebuilt_so_it_can_hold_a_cancelled_row(tmp_path: Path):
     """The migration, against a table that has the old CHECK.
 
     The deployed store is the one that matters: `CREATE TABLE IF NOT EXISTS`
@@ -291,9 +291,9 @@ def test_an_old_store_is_rebuilt_so_it_can_hold_a_withdrawn_row(tmp_path: Path):
     old_ddl = dbmod._rows_final_said_requests_ddl().replace(
         "CREATE TABLE requests_widened (", "CREATE TABLE requests ("
     )
-    # The definition as it shipped before `withdrawn`: the migration's whole
+    # The definition as it shipped before `cancelled`: the migration's whole
     # condition is the absence of that word from the live table's SQL.
-    conn.executescript(old_ddl.replace(",'withdrawn'", ""))
+    conn.executescript(old_ddl.replace(",'cancelled'", ""))
     conn.execute(
         "INSERT INTO requests (id, state, body_kind, params_json, payload_hash, "
         "job_json, created_at, updated_at) VALUES ('req_old', 'draft', 'plan', "
@@ -303,7 +303,7 @@ def test_an_old_store_is_rebuilt_so_it_can_hold_a_withdrawn_row(tmp_path: Path):
     sql = conn.execute(
         "SELECT sql FROM sqlite_master WHERE name = 'requests'"
     ).fetchone()[0]
-    assert "'withdrawn'" not in sql
+    assert "'cancelled'" not in sql
     conn.close()
 
     from data_download.db import Store
@@ -312,9 +312,9 @@ def test_an_old_store_is_rebuilt_so_it_can_hold_a_withdrawn_row(tmp_path: Path):
         store = Store(str(path))
         await store.connect()
         try:
-            row, changed = await store.withdraw("req_old", "nick@example.com")
+            row, changed = await store.cancel("req_old", "nick@example.com")
             assert changed is True
-            assert row["state"] == "withdrawn"
+            assert row["state"] == "cancelled"
         finally:
             await store.close()
 
@@ -325,10 +325,10 @@ def test_an_old_store_is_rebuilt_so_it_can_hold_a_withdrawn_row(tmp_path: Path):
         sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE name = 'requests'"
         ).fetchone()[0]
-        assert "'withdrawn'" in sql
+        assert "'cancelled'" in sql
         assert (
             conn.execute("SELECT state FROM requests WHERE id = 'req_old'").fetchone()[0]
-            == "withdrawn"
+            == "cancelled"
         )
         # v_done came back with the new definition, which is the half of the
         # migration a CHECK-only fix would have missed.
@@ -338,5 +338,58 @@ def test_an_old_store_is_rebuilt_so_it_can_hold_a_withdrawn_row(tmp_path: Path):
             ]
             == 1
         )
+    finally:
+        conn.close()
+
+
+def test_a_store_holding_the_old_word_is_renamed_on_the_way_across(tmp_path: Path):
+    """The word changed; the row must not be left behind by it.
+
+    A store created before the rename holds `withdrawn` in its CHECK and,
+    possibly, in a row. The new CHECK does not name that value, so the rebuild
+    has to copy the row across as `cancelled` — otherwise the deploy fails with
+    an IntegrityError on the one store that has data in it, or silently keeps a
+    second spelling of the same decision.
+    """
+    import asyncio
+
+    from data_download import db as dbmod
+    from data_download.db import Store
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    old_ddl = dbmod._rows_final_said_requests_ddl().replace(
+        "CREATE TABLE requests_widened (", "CREATE TABLE requests ("
+    )
+    # The definition as it shipped with the old word in it.
+    conn.executescript(old_ddl.replace("'cancelled'", "'withdrawn'"))
+    conn.execute(
+        "INSERT INTO requests (id, state, body_kind, params_json, payload_hash, "
+        "job_json, created_at, updated_at) VALUES ('req_old', 'withdrawn', "
+        "'plan', '{}', 'abc', '{}', '2026-11-01T00:00:00Z', "
+        "'2026-11-01T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+
+    async def open_store():
+        store = Store(str(path))
+        await store.connect()
+        return store
+
+    store = asyncio.run(open_store())
+    asyncio.run(store.close())
+
+    conn = sqlite3.connect(path)
+    try:
+        assert (
+            conn.execute("SELECT state FROM requests WHERE id = 'req_old'").fetchone()[0]
+            == "cancelled"
+        )
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'requests'"
+        ).fetchone()[0]
+        assert "'cancelled'" in sql
+        assert "'withdrawn'" not in sql
     finally:
         conn.close()

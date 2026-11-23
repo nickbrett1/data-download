@@ -1595,33 +1595,31 @@ test.describe("a retry files the same request again", () => {
   });
 });
 
-test.describe("a drafted request can be withdrawn", () => {
+test.describe("a drafted request can be cancelled", () => {
   // The case: a draft nobody wants — filed twice, or filed by mistake. Until
   // this card the only ways out were approving it (a spend) or editing the
-  // store (a lie about the record). Withdrawing keeps the row: it is a
+  // store (a lie about the record). Cancelling keeps the row: it is a
   // statement about a filing, not a deletion.
-  const withdrawn = {
+  const cancelled = {
     request_id: "req_draft01",
-    state: "withdrawn",
-    withdrawn: true,
+    state: "cancelled",
+    cancelled: true,
   };
 
-  test("asks twice, then withdraws, and says the row stays", async ({
-    page,
-  }) => {
+  test("asks twice, then cancels, and says the row stays", async ({ page }) => {
     let posted = null;
-    await page.route("**/v1/requests/*/withdraw", async (route) => {
+    await page.route("**/v1/requests/*/cancel", async (route) => {
       posted = route.request().url();
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(withdrawn),
+        body: JSON.stringify(cancelled),
       });
     });
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    const card = page.locator(".block.withdraw");
+    const card = page.locator(".block.cancel");
     await expect(card).toBeVisible();
     // What it does is stated before the first click, including the part that
     // matters: nothing is spent, and the row is not deleted.
@@ -1629,33 +1627,33 @@ test.describe("a drafted request can be withdrawn", () => {
     await expect(card).toContainText("marked");
 
     // The first click only asks. Nothing has been posted.
-    await page.getByRole("button", { name: "Withdraw this request" }).click();
+    await page.getByRole("button", { name: "Cancel this request" }).click();
     expect(posted).toBeNull();
-    await expect(card).toContainText("Yes, withdraw it");
+    await expect(card).toContainText("Yes, cancel it");
 
-    await page.getByRole("button", { name: "Yes, withdraw it" }).click();
-    await expect(card).toContainText("Withdrawn.");
-    expect(posted).toContain("/v1/requests/req_draft01/withdraw");
+    await page.getByRole("button", { name: "Yes, cancel it" }).click();
+    await expect(card).toContainText("Cancelled.");
+    expect(posted).toContain("/v1/requests/req_draft01/cancel");
   });
 
   test("the first click can be taken back", async ({ page }) => {
     let posted = null;
-    await page.route("**/v1/requests/*/withdraw", async (route) => {
+    await page.route("**/v1/requests/*/cancel", async (route) => {
       posted = route.request().url();
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(withdrawn),
+        body: JSON.stringify(cancelled),
       });
     });
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    await page.getByRole("button", { name: "Withdraw this request" }).click();
+    await page.getByRole("button", { name: "Cancel this request" }).click();
     await page.getByRole("button", { name: "Keep it" }).click();
 
     await expect(
-      page.getByRole("button", { name: "Withdraw this request" }),
+      page.getByRole("button", { name: "Cancel this request" }),
     ).toBeVisible();
     expect(posted).toBeNull();
   });
@@ -1669,7 +1667,7 @@ test.describe("a drafted request can be withdrawn", () => {
       detail: { ...draftDetail, state: "approved", facet: "todo" },
     });
     await page.goto("/requests/req_draft01");
-    await expect(page.locator(".block.withdraw")).toHaveCount(0);
+    await expect(page.locator(".block.cancel")).toHaveCount(0);
   });
 
   test("is not offered on a row that has already run", async ({ page }) => {
@@ -1682,7 +1680,7 @@ test.describe("a drafted request can be withdrawn", () => {
       },
     });
     await page.goto("/requests/req_draft01");
-    await expect(page.locator(".block.withdraw")).toHaveCount(0);
+    await expect(page.locator(".block.cancel")).toHaveCount(0);
   });
 
   test("a login that may read but not file is told so, and gets no button", async ({
@@ -1693,21 +1691,21 @@ test.describe("a drafted request can be withdrawn", () => {
       who: { login: "someone-else@example.com", approver: false },
     });
     await page.goto("/requests/req_draft01");
-    const card = page.locator(".block.withdraw");
+    const card = page.locator(".block.cancel");
     await expect(card).toContainText("DATA_DOWNLOAD_APPROVERS");
     await expect(card.getByRole("button")).toHaveCount(0);
   });
 
   test("the server's own refusal is what the page shows", async ({ page }) => {
-    await page.route("**/v1/requests/*/withdraw", (route) =>
+    await page.route("**/v1/requests/*/cancel", (route) =>
       route.fulfill({
         status: 409,
         contentType: "application/json",
         body: JSON.stringify({
           error: {
-            code: "withdraw_refused",
+            code: "cancel_refused",
             message:
-              "only a request waiting for approval can be withdrawn: this " +
+              "only a request waiting for approval can be cancelled: this " +
               "one has been authorised, has run, or was never bound to a plan",
           },
         }),
@@ -1715,40 +1713,40 @@ test.describe("a drafted request can be withdrawn", () => {
     );
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
-    await page.getByRole("button", { name: "Withdraw this request" }).click();
-    await page.getByRole("button", { name: "Yes, withdraw it" }).click();
-    await expect(page.locator(".block.withdraw .failure")).toContainText(
+    await page.getByRole("button", { name: "Cancel this request" }).click();
+    await page.getByRole("button", { name: "Yes, cancel it" }).click();
+    await expect(page.locator(".block.cancel .failure")).toContainText(
       "has been authorised",
     );
   });
 });
 
-test.describe("a withdrawn request is kept, not listed", () => {
+test.describe("a cancelled request is kept, not listed", () => {
   // The list answers "what needs me". A cancelled draft needs nothing, so the
   // server takes it out of `rows` and out of `total` — a count that disagrees
   // with what is drawn is the bug this is pinning. It is not gone: it is in the
-  // `withdrawn` facet, offered by name in the filter bar.
-  const withWithdrawn = (() => {
+  // `cancelled` facet, offered by name in the filter bar.
+  const withCancelled = (() => {
     const row = {
       ...dashboard.rows[0],
       seq: 9,
       id: "req_gone0001",
-      state: "withdrawn",
-      facet: "withdrawn",
-      facet_label: "Withdrawn",
+      state: "cancelled",
+      facet: "cancelled",
+      facet_label: "Cancelled",
       failure: null,
       stuck_condition: null,
       stuck_detail: null,
       approved_unclaimed: false,
     };
     // The server's own output, not the store: `rows` is already the list minus
-    // what needs nothing, and the withdrawn row lives in its facet alone.
-    const facets = { ...dashboard.facets, withdrawn: [row] };
-    return { ...dashboard, facets, withdrawn: 1 };
+    // what needs nothing, and the cancelled row lives in its facet alone.
+    const facets = { ...dashboard.facets, cancelled: [row] };
+    return { ...dashboard, facets, cancelled: 1 };
   })();
 
   test("is out of the default list, and the count agrees", async ({ page }) => {
-    await mock(page, { requests: withWithdrawn });
+    await mock(page, { requests: withCancelled });
     await page.goto("/");
 
     await expect(page.locator(".tbl-row")).toHaveCount(dashboard.rows.length);
@@ -1758,12 +1756,12 @@ test.describe("a withdrawn request is kept, not listed", () => {
   });
 
   test("is reachable by name, with its own badge", async ({ page }) => {
-    await mock(page, { requests: withWithdrawn });
+    await mock(page, { requests: withCancelled });
     await page.goto("/");
 
     const option = page
       .locator(".facet-option")
-      .filter({ hasText: "Withdrawn" })
+      .filter({ hasText: "Cancelled" })
       .first();
     await expect(option).toBeVisible();
     await expect(option).toContainText("1");
@@ -1771,7 +1769,7 @@ test.describe("a withdrawn request is kept, not listed", () => {
     await option.click();
     const row = page.locator(".tbl-row").filter({ hasText: "#9" });
     await expect(row).toBeVisible();
-    await expect(row).toContainText("Withdrawn");
+    await expect(row).toContainText("Cancelled");
   });
 
   test("and a book with none does not offer the filter at all", async ({
@@ -1780,14 +1778,14 @@ test.describe("a withdrawn request is kept, not listed", () => {
     await mock(page, { requests: dashboard });
     await page.goto("/");
     await expect(
-      page.locator(".facet-option").filter({ hasText: "Withdrawn" }),
+      page.locator(".facet-option").filter({ hasText: "Cancelled" }),
     ).toHaveCount(0);
   });
 });
 
 test.describe("a finished request can be archived", () => {
   // A failed row had one verb, retry, and no way to stop looking at it.
-  // Withdraw writes `state` and would rewrite the outcome; archive writes a
+  // Cancel writes `state` and would rewrite the outcome; archive writes a
   // date, so the row keeps its badge and leaves the list.
   const failed = {
     ...draftDetail,
@@ -1871,7 +1869,7 @@ test.describe("a finished request can be archived", () => {
     expect(posted).toEqual({ archived: false });
   });
 
-  test("is not offered on a draft, which is withdrawn instead", async ({
+  test("is not offered on a draft, which is cancelled instead", async ({
     page,
   }) => {
     await mock(page, { detail: draftDetail });

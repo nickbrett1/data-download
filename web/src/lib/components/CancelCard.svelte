@@ -7,13 +7,13 @@
    * any more" — the choices were approving a request nobody wanted (a spend) or
    * editing the database by hand (a lie about the record).
    *
-   * So this is not a delete. `POST /v1/requests/<id>/withdraw` moves a `draft`
-   * to `withdrawn`: the row, its quote, its `why` and its events stay, and the
+   * So this is not a delete. `POST /v1/requests/<id>/cancel` moves a `draft`
+   * to `cancelled`: the row, its quote, its `why` and its events stay, and the
    * badge changes. A missing row would read as a request that was never filed.
    *
    * Two clicks before either one counts, and the second button is the one that
    * says the word. Nothing is spent either way — the point is not danger, it is
-   * that withdrawing is a statement about a filing, so it should take a second
+   * that cancelling is a statement about a filing, so it should take a second
    * look rather than a stray tap on a phone.
    */
   import { getView, postJson } from "$lib/api";
@@ -43,12 +43,12 @@
     return () => controller.abort();
   });
 
-  async function withdraw() {
+  async function cancel() {
     stage = "busy";
     failure = "";
     try {
       done = await postJson(
-        `/v1/requests/${encodeURIComponent(requestId)}/withdraw`,
+        `/v1/requests/${encodeURIComponent(requestId)}/cancel`,
         {},
       );
     } catch (error) {
@@ -60,11 +60,11 @@
   }
 </script>
 
-<section class="block withdraw">
-  <p class="micro">withdraw</p>
+<section class="block cancel">
+  <p class="micro">cancel</p>
   {#if done}
     <p class="quiet">
-      Withdrawn. Nothing was downloaded and nothing was spent, and the row stays
+      Cancelled. Nothing was downloaded and nothing was spent, and the row stays
       here with its events — filing it again is a new request, not an undo.
     </p>
   {:else if whoFailure}
@@ -75,7 +75,7 @@
     <p class="ask">
       Takes this request out of the queue for good: it will not be approved, it
       will not run, and nothing is spent. The row stays on this page — with its
-      quote, its <em>why</em> and its events — marked <em>withdrawn</em>.
+      quote, its <em>why</em> and its events — marked <em>cancelled</em>.
     </p>
     {#if who.approver}
       <div class="row">
@@ -84,9 +84,9 @@
             class="btn danger"
             type="button"
             disabled={stage === "busy"}
-            onclick={withdraw}
+            onclick={cancel}
           >
-            Yes, withdraw it
+            Yes, cancel it
           </button>
           <button
             class="btn"
@@ -98,13 +98,13 @@
           </button>
         {:else}
           <button class="btn" type="button" onclick={() => (confirming = true)}>
-            Withdraw this request
+            Cancel this request
           </button>
         {/if}
       </div>
     {:else}
       <p class="quiet">
-        Withdrawing as <strong>{who.login}</strong> is refused: that login may
+        Cancelling as <strong>{who.login}</strong> is refused: that login may
         read but not file, because it is not named in
         <code>DATA_DOWNLOAD_APPROVERS</code>.
       </p>

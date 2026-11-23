@@ -93,7 +93,7 @@ matter:
 | `POST /v1/quotes` | `read` — a question, not a purchase: it prices a request's Job and writes nothing |
 | `POST /v1/requests/{id}/approve` | a tailnet login, asserted by `tailscale serve` and named in `DATA_DOWNLOAD_APPROVERS` |
 | `POST /v1/requests/{id}/retry` | either a `submit` token or that same tailnet login — it files a `draft`, which spends nothing until somebody approves it |
-| `POST /v1/requests/{id}/withdraw` | the same pair — it cancels a `draft` nobody has approved, which spends nothing and deletes nothing |
+| `POST /v1/requests/{id}/cancel` | the same pair — it cancels a `draft` nobody has approved, which spends nothing and deletes nothing |
 | `POST /v1/requests/{id}/archive` | the same pair — it hides a *finished* row from the book, and `{"archived": false}` brings it back |
 | `python -m data_download.approve` | a shell on the host: no route, no credential, no identity |
 
@@ -251,69 +251,69 @@ refuse, and shows the server's own refusal text when a stale page tries anyway.
 The check is `409 not_retryable`, with `reason: not_settled` for a row still in
 flight and `reason: same_bytes` for the immutable-verdict cases.
 
-## Withdrawing a draft nobody wants
+## Cancelling a draft nobody wants
 
 Filing twice is easy — the retry card will do it for you — and until there was a
 verb for it, the only ways to get rid of the spare were approving a request
 nobody wanted (a spend) or editing the store by hand (a lie about the record).
-`POST /v1/requests/{id}/withdraw` is a third way: `draft` (and only `draft`)
-becomes `withdrawn`, and the row, its quote, its `why` and its events all stay.
+`POST /v1/requests/{id}/cancel` is a third way: `draft` (and only `draft`)
+becomes `cancelled`, and the row, its quote, its `why` and its events all stay.
 
 It is not a DELETE, and that is the design rather than an omission. A missing
-row reads as a request that was never filed; `withdrawn` reads as a request
+row reads as a request that was never filed; `cancelled` reads as a request
 somebody looked at and dropped, which is the truth and is also the thing worth
 keeping. The badge is deliberately colourless: nothing failed and nothing
 landed.
 
 It is kept, and it is not **listed**. The book's job is "what needs me", and a
-cancelled draft needs nothing, so `withdrawn` has its own facet that the
+cancelled draft needs nothing, so `cancelled` has its own facet that the
 dashboard leaves out of `rows` — and out of `total`, because a count that
 disagrees with what is drawn is its own bug. The filter bar offers it by name
-("Withdrawn, 1") whenever there is one, so nothing is unreachable; the page and
+("Cancelled, 1") whenever there is one, so nothing is unreachable; the page and
 its events are one click away.
 
 Only `draft` is accepted. `approved` is refused because an approval authorises
 one attempt, and once the runner may hold the lease, stopping the work is the
-runner's business — writing `withdrawn` under a running claim would be this
+runner's business — writing `cancelled` under a running claim would be this
 process claiming a cancellation it cannot enforce. Everything past that is
-history and answers to `retry`, not to `withdraw`. `blocked` is refused for a
+history and answers to `retry`, not to `cancel`. `blocked` is refused for a
 duller reason: two CHECKs encode "a blocked row has no Job and no estimate", so
-a withdrawn row that never had one would need both relaxed, and that is a
+a cancelled row that never had one would need both relaxed, and that is a
 decision about what a never-bound row *is*.
 
 A widening of the `state` CHECK is a table rebuild in SQLite, so `db.py` grows
 one (`_widen_state_check`, idempotent by inspecting `sqlite_master.sql` for the
 word). It is not only about the CHECK: `v_done` is `CREATE VIEW IF NOT EXISTS`,
 so a deployed store would otherwise keep a definition that cannot show a
-withdrawn row. One rebuild fixes both, and it copies columns by intersection
+cancelled row. One rebuild fixes both, and it copies columns by intersection
 with the live table, so a store a phase behind is rebuilt into what it has.
 
 ## Archiving a finished request
 
-Withdraw and archive are the two ways a row leaves the book, and they are not
+Cancel and archive are the two ways a row leaves the book, and they are not
 interchangeable — which is the whole reason there are two.
 
-**Withdraw** writes `state`. It is for a `draft` nobody has approved: a decision
+**Cancel** writes `state`. It is for a `draft` nobody has approved: a decision
 that has not been made yet, taken back. **Archive** writes a date
 (`archived_at`), and it is for a row that is finished. A `failed` row is the case
 that forced it: the state is the outcome of something that really happened — the
 vendor was asked, the driver refused, the errors are on the row — so writing
-`withdrawn` over it would make the record claim the request was cancelled before
+`cancelled` over it would make the record claim the request was cancelled before
 it ran. Archiving leaves `state = 'failed'` exactly where it was, keeps the badge,
 the `errors_json` and the events, and takes the row out of the book's default
 list. That list is "what needs me"; a finished row nobody is looking at is noise
 next to one that does.
 
-`withdrawn` and `archived` are both hidden buckets with their own filter chips,
+`cancelled` and `archived` are both hidden buckets with their own filter chips,
 so nothing becomes unreachable. `{"archived": false}` on the same route restores
 a row — hiding is never a one-way door — and both directions are idempotent with
 no second event. Only settled states are accepted (`succeeded`,
-`landed_with_errors`, `failed`, `withdrawn`): a draft is withdrawn, and an
+`landed_with_errors`, `failed`, `cancelled`): a draft is cancelled, and an
 approved or running row is still happening, where hiding something that may
 still spend is the one thing a list of "what is happening" must not do.
 
 `archived_at` is a nullable column added in place by `ADDED_COLUMNS`, so this
-needed no rebuild — the opposite of `withdrawn`, which is a value in a CHECK and
+needed no rebuild — the opposite of `cancelled`, which is a value in a CHECK and
 cost one.
 
 ## When the registry moves

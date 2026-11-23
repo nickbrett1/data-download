@@ -33,9 +33,9 @@ from . import job as job_mod
 from .config import Settings, load_settings
 from .db import (
     ApproveRefused,
+    CancelRefused,
     EscalateRefused,
     Store,
-    WithdrawRefused,
     canonical_json,
     payload_hash,
     utcnow,
@@ -118,7 +118,7 @@ FACET_LABELS = {
     "other": "Other",
     # Settled and needing nothing, so it is not in FACET_ORDER either; the
     # route puts it in the filter bar whenever the count is non-zero.
-    "withdrawn": "Withdrawn",
+    "cancelled": "Cancelled",
     "archived": "Archived",
 }
 TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
@@ -169,14 +169,14 @@ def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
         facet = "todo"
     elif row.get("state") == "running":
         facet = "working"
-    elif row.get("state") == "withdrawn":
+    elif row.get("state") == "cancelled":
         # Its own bucket, and the only one the book does not list by default: a
         # cancelled draft needs nothing and landed nothing, so it is noise in a
         # list whose whole job is "what needs me". It is kept -- a row that
         # vanished would read as a request that was never filed -- and it is
         # reachable by name from the filter bar, which is where "did we cancel
         # that?" gets answered.
-        facet = "withdrawn"
+        facet = "cancelled"
     elif row.get("state") in TERMINAL_STATES:
         facet = "done"
     else:  # a state added later must still render, not vanish
@@ -975,17 +975,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
-    @app.post("/v1/requests/{request_id}/withdraw")
-    async def withdraw_request(request: Request, request_id: str) -> JSONResponse:
-        """Withdraw a filed draft before anyone approves or runs it.
+    @app.post("/v1/requests/{request_id}/cancel")
+    async def cancel_request(request: Request, request_id: str) -> JSONResponse:
+        """Cancel a filed draft before anyone approves or runs it.
 
         The door is retry's: a `submit` token or an attested approver. Filing,
-        withdrawing and re-filing are three halves of one decision and none of
+        cancelling and re-filing are three halves of one decision and none of
         them spends money -- the approval is still the spend, and it is still a
         person's.
 
         There is no DELETE. The row, its quote and its events stay and its badge
-        changes to `withdrawn`, which is the difference between "I changed my
+        changes to `cancelled`, which is the difference between "I changed my
         mind" and "this never happened". `note` is accepted because *why* a
         request was dropped is the sort of thing nobody remembers in a month;
         `actor` in the body is refused for the reason the approve route refuses
@@ -1015,21 +1015,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise errors.invalid_body("note must be a string")
 
         try:
-            row, changed = await store.withdraw(
+            row, changed = await store.cancel(
                 request_id, actor, note, context={"via": "serve"}
             )
-        except WithdrawRefused as exc:
+        except CancelRefused as exc:
             if exc.reason == "not_found":
                 raise errors.not_found(f"no request with id {request_id!r}") from None
-            raise errors.withdraw_refused(exc.reason, exc.state) from None
+            raise errors.cancel_refused(exc.reason, exc.state) from None
 
         return JSONResponse(
             status_code=200,
             content={
                 "request_id": row["id"],
                 "state": row["state"],
-                # False for a second withdrawal: idempotent, no second event.
-                "withdrawn": changed,
+                # False for a second cancelal: idempotent, no second event.
+                "cancelled": changed,
             },
         )
 
@@ -1037,7 +1037,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def archive_request(request: Request, request_id: str) -> JSONResponse:
         """Archive a finished request, or restore it: `{"archived": false}`.
 
-        The verb a `failed` row was missing. It is not `withdraw`: withdrawing
+        The verb a `failed` row was missing. It is not `cancel`: cancelling
         writes `state`, and a failed attempt's state is the outcome of something
         that really happened. This writes a date instead, so the row keeps its
         badge and its errors and simply stops appearing in the book's default
@@ -1078,7 +1078,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             row, changed = await store.archive(
                 request_id, actor, note, archived=archived, context={"via": "serve"}
             )
-        except WithdrawRefused as exc:
+        except CancelRefused as exc:
             if exc.reason == "not_found":
                 raise errors.not_found(f"no request with id {request_id!r}") from None
             raise errors.archive_refused(exc.reason, exc.state) from None
@@ -1344,17 +1344,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rows = [
             _book_row(_with_facet(row), registry) for row in await store.overview()
         ]
-        keys = (*FACET_ORDER, "withdrawn", "archived", "other")
+        keys = (*FACET_ORDER, "cancelled", "archived", "other")
         # `total` is what the book is *showing*, and the list it shows is the one
         # minus the requests nobody needs to look at. Claiming 5 while listing 4
         # would be the old bug in a new place. The facet counts come off the full
-        # list, so "Withdrawn (1)" stays reachable from the filter bar.
-        hidden = {"withdrawn", "archived"}
+        # list, so "Cancelled (1)" stays reachable from the filter bar.
+        hidden = {"cancelled", "archived"}
         listed = [r for r in rows if r["facet"] not in hidden]
         return {
             "rows": listed,
             "total": len(listed),
-            "withdrawn": sum(1 for r in rows if r["facet"] == "withdrawn"),
+            "cancelled": sum(1 for r in rows if r["facet"] == "cancelled"),
             "archived": sum(1 for r in rows if r["facet"] == "archived"),
             "facets": {key: [r for r in rows if r["facet"] == key] for key in keys},
             "facet_order": list(FACET_ORDER),

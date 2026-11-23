@@ -1,10 +1,10 @@
 """Archive: take a finished row off the book without rewriting what happened.
 
 The gap this fills: a `failed` row had one verb, `retry`, and no way to stop
-looking at it. `withdraw` is not that verb -- it writes `state`, and a failed
+looking at it. `cancel` is not that verb -- it writes `state`, and a failed
 attempt's state is the outcome of something that really happened (the vendor was
 asked, the driver refused, the errors are on the row). Setting that to
-`withdrawn` would make the record claim the request was cancelled before it ran.
+`cancelled` would make the record claim the request was cancelled before it ran.
 
 So archive writes a *date*: the row keeps `state = 'failed'`, keeps its badge,
 its `errors_json` and its events, and stops appearing in the book's default list.
@@ -81,7 +81,7 @@ def test_a_failed_row_is_archived_and_still_says_it_failed(client, db_path):
     assert body["changed"] is True
 
     # The badge still says failed, and the reason is still there: this is the
-    # difference between archive and withdraw, and the point of the verb.
+    # difference between archive and cancel, and the point of the verb.
     detail = client.get(f"/ui/request/{request_id}.json").json()
     assert detail["state"] == "failed"
     assert detail["failure"]["code"] == "driver_not_ready"
@@ -149,7 +149,7 @@ def test_restoring_one_that_was_never_archived_changes_nothing(client, db_path):
     assert _events(db_path, request_id) == ["submitted"]
 
 
-def test_a_draft_is_withdrawn_rather_than_archived(client, db_path):
+def test_a_draft_is_cancelled_rather_than_archived(client, db_path):
     """A draft is a decision nobody has made yet; it is not finished."""
     request_id = _file(client)
 
@@ -159,7 +159,7 @@ def test_a_draft_is_withdrawn_rather_than_archived(client, db_path):
     assert error["code"] == "archive_refused"
     assert error["reason"] == "wrong_state"
     assert error["state"] == "draft"
-    assert "withdrawn" in error["message"]
+    assert "cancelled" in error["message"]
     assert _row(db_path, request_id)["archived_at"] is None
 
 
@@ -173,15 +173,15 @@ def test_an_approved_row_is_not_archived(client, db_path):
     assert res.json()["error"]["state"] == "approved"
 
 
-def test_a_withdrawn_row_can_be_archived_too(client, db_path):
+def test_a_cancelled_row_can_be_archived_too(client, db_path):
     request_id = _file(client)
-    client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
+    client.post(f"/v1/requests/{request_id}/cancel", headers=served())
 
     res = client.post(f"/v1/requests/{request_id}/archive", headers=served())
     assert res.status_code == 200, res.text
-    assert res.json()["state"] == "withdrawn"
+    assert res.json()["state"] == "cancelled"
     book = client.get("/ui/dashboard.json").json()
-    assert book["withdrawn"] == 0
+    assert book["cancelled"] == 0
     assert book["archived"] == 1
 
 

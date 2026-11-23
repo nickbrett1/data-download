@@ -3,10 +3,10 @@
    * Archive a finished request — or put it back.
    *
    * A `failed` row used to have one verb, retry, and no way to stop looking at
-   * it. Withdraw is not that verb: it writes `state`, and a failed attempt's
+   * it. Cancel is not that verb: it writes `state`, and a failed attempt's
    * state is the outcome of something that really happened — the vendor was
    * asked, the driver refused, the errors are on the row. Marking that
-   * `withdrawn` would make the record claim the request was cancelled before it
+   * `cancelled` would make the record claim the request was cancelled before it
    * ran.
    *
    * So this writes a date instead. The row keeps its badge, its errors and its
@@ -16,7 +16,7 @@
    * into the way back, because a page that can hide a row without being able to
    * bring it back is a page that loses things.
    *
-   * One click rather than two: unlike withdrawing, nothing about it is
+   * One click rather than two: unlike cancelling, nothing about it is
    * irreversible, and the button that undoes it is where the first one was.
    */
   import { getView, postJson } from "$lib/api";
@@ -27,7 +27,7 @@
   let failure = $state("");
   let result = $state(null);
 
-  // Same door as retry and withdraw: a `submit` token or an attested approver.
+  // Same door as retry and cancel: a `submit` token or an attested approver.
   // The page holds no token, so the login is what it can offer.
   let who = $state(null);
   let whoFailure = $state("");

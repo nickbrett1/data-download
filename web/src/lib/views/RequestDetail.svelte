@@ -18,7 +18,7 @@
   import ApproveCard from "$lib/components/ApproveCard.svelte";
   import ArchiveCard from "$lib/components/ArchiveCard.svelte";
   import RetryCard from "$lib/components/RetryCard.svelte";
-  import WithdrawCard from "$lib/components/WithdrawCard.svelte";
+  import CancelCard from "$lib/components/CancelCard.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DetailPanel from "$lib/components/nb/DetailPanel.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
@@ -315,7 +315,7 @@
         {/if}
       {/if}
 
-      <!-- The verb a finished row was missing: not withdraw (which would
+      <!-- The verb a finished row was missing: not cancel (which would
            rewrite the outcome) but archive, which keeps the badge and takes the
            row out of the list. On an archived row the same card is the way
            back, so hiding is never a one-way door. -->
@@ -379,7 +379,7 @@
              question, and because the card that spends should be the one read
              first. -->
         {#if data.state === "draft"}
-          <WithdrawCard requestId={data.id} />
+          <CancelCard requestId={data.id} />
         {/if}
       {/if}
 

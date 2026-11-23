@@ -201,8 +201,8 @@ def approve_refused(reason: str, state: object) -> ApiError:
     )
 
 
-def withdraw_refused(reason: str, state: object) -> ApiError:
-    """A refusal from `Store.withdraw`, over the same closed set of reasons.
+def cancel_refused(reason: str, state: object) -> ApiError:
+    """A refusal from `Store.cancel`, over the same closed set of reasons.
 
     `wrong_state` is the interesting one, and its sentence says why rather than
     naming the state: a row past `draft` either has a person's approval on it or
@@ -210,14 +210,14 @@ def withdraw_refused(reason: str, state: object) -> ApiError:
     """
     messages = {
         "wrong_state": (
-            "only a request waiting for approval can be withdrawn: this one "
+            "only a request waiting for approval can be cancelled: this one "
             "has been authorised, has run, or was never bound to a plan"
         ),
     }
     return ApiError(
         409,
-        "withdraw_refused",
-        messages.get(reason, "the request could not be withdrawn"),
+        "cancel_refused",
+        messages.get(reason, "the request could not be cancelled"),
         reason=reason,
         state=state,
     )
@@ -226,7 +226,7 @@ def withdraw_refused(reason: str, state: object) -> ApiError:
 def archive_refused(reason: str, state: object) -> ApiError:
     """A refusal from `Store.archive`.
 
-    `wrong_state` is the whole set of them: a `draft` is withdrawn rather than
+    `wrong_state` is the whole set of them: a `draft` is cancelled rather than
     archived (it is a decision nobody has made yet), and `approved`/`running` are
     in flight, where hiding a row that may still spend is the one thing a list of
     "what is happening" must not do.
@@ -235,7 +235,7 @@ def archive_refused(reason: str, state: object) -> ApiError:
         409,
         "archive_refused",
         (
-            "only a finished request can be archived: a draft is withdrawn, "
+            "only a finished request can be archived: a draft is cancelled, "
             "and an approved or running one is still happening"
         ),
         reason=reason,
@@ -262,13 +262,13 @@ def not_retryable(
             "re-filing deliberately is a submit, not a retry"
         ),
     }
-    if reason == "not_settled" and state == "withdrawn":
+    if reason == "not_settled" and state == "cancelled":
         # Not "still in flight": this row was cancelled on purpose and nothing
         # failed. The honest next move is a fresh submit, not a retry.
         return ApiError(
             409,
             NOT_RETRYABLE,
-            "this request was withdrawn before it ran, so there is no outcome "
+            "this request was cancelled before it ran, so there is no outcome "
             "to retry; submit it again if you want it",
             reason=reason,
             state=state,

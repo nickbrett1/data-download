@@ -295,7 +295,7 @@ def _rows_final_said_requests_ddl() -> str:
     The rebuild below needs the *current* definition of the table, including
     every CHECK. Writing it out a second time is how the two copies drift: the
     one in this file would keep the old `state` list and happily copy a row into
-    a table that cannot hold a `withdrawn` one. So the schema is the single
+    a table that cannot hold a `cancelled` one. So the schema is the single
     source, and this renames the table it creates.
     """
     text = SCHEMA_PATH.read_text(encoding="utf-8")
@@ -305,8 +305,14 @@ def _rows_final_said_requests_ddl() -> str:
     return text[start:end].replace(marker, "CREATE TABLE requests_widened (", 1)
 
 
-async def _widen_state_check(conn: aiosqlite.Connection) -> None:
-    """Give an existing store a `requests.state` that can hold `withdrawn`.
+async def _learn_cancelled_state(conn: aiosqlite.Connection) -> None:
+    """Teach an existing store the word `cancelled`, and forget `withdrawn`.
+
+    Two jobs in one rebuild, because SQLite cannot do either in place: the
+    `state` CHECK has to name the new value, and rows written under the old word
+    have to be copied across as the new one. Doing them apart would mean either
+    a table that refuses the value or a store where the same decision is spelled
+    two ways.
 
     SQLite has no `ALTER TABLE ... ALTER CONSTRAINT`, so a new value in a CHECK
     costs a rebuild. Idempotent by inspection: if the live table's own SQL
@@ -322,16 +328,16 @@ async def _widen_state_check(conn: aiosqlite.Connection) -> None:
     just dropped. They come back in `_apply_schema` -- and that is the second
     thing this migration buys: `v_done` is `CREATE VIEW IF NOT EXISTS`, so a
     deployed store would otherwise keep a definition that cannot show a
-    withdrawn row.
+    cancelled row.
     """
     async with conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'requests'"
     ) as cur:
         row = await cur.fetchone()
-    if row is None or not row["sql"] or "'withdrawn'" in row["sql"]:
+    if row is None or not row["sql"] or "'cancelled'" in row["sql"]:
         return
 
-    log.info("rebuilding requests: the state CHECK learns 'withdrawn'")
+    log.info("rebuilding requests: the state CHECK learns 'cancelled'")
     await _drop_views(conn)
     await conn.execute("PRAGMA foreign_keys=OFF")
     try:
@@ -341,8 +347,19 @@ async def _widen_state_check(conn: aiosqlite.Connection) -> None:
         async with conn.execute("PRAGMA table_info(requests)") as cur:
             columns = [r["name"] for r in await cur.fetchall()]
         names = ", ".join(columns)
+        # `state` is the one column this migration changes on the way across:
+        # the row that said `withdrawn` says `cancelled` now, or the insert would
+        # be refused by the very CHECK this rebuild exists to install. Events are
+        # left alone -- the trail is append-only, and one 2026-11-22 entry
+        # reading "withdrawn" is that row's history, not a typo.
+        copied = ", ".join(
+            "CASE WHEN state = 'withdrawn' THEN 'cancelled' ELSE state END"
+            if column == "state"
+            else column
+            for column in columns
+        )
         await conn.execute(
-            f"INSERT INTO requests_widened ({names}) SELECT {names} FROM requests"
+            f"INSERT INTO requests_widened ({names}) SELECT {copied} FROM requests"
         )
         await conn.execute("DROP TABLE requests")
         await conn.execute("ALTER TABLE requests_widened RENAME TO requests")
@@ -363,14 +380,14 @@ LEASE_SECONDS = 900
 # the three below are the only states `settle` may write.
 TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
 
-# What `archive` accepts: rows that are finished, in whatever way. `withdrawn` is
+# What `archive` accepts: rows that are finished, in whatever way. `cancelled` is
 # in it because a cancelled draft is finished too -- and because the two ways of
 # leaving the book should not need two different verbs to come back.
-ARCHIVABLE_STATES = TERMINAL_STATES | {"withdrawn"}
+ARCHIVABLE_STATES = TERMINAL_STATES | {"cancelled"}
 
 
-class WithdrawRefused(Exception):
-    """`withdraw` said no, with one of a closed set of reasons."""
+class CancelRefused(Exception):
+    """`cancel` said no, with one of a closed set of reasons."""
 
     REASONS = frozenset({"not_found", "wrong_state"})
 
@@ -380,7 +397,7 @@ class WithdrawRefused(Exception):
         self.state = state
 
     def as_text(self) -> str:
-        return f"withdraw_refused: {self.reason} (state={self.state})"
+        return f"cancel_refused: {self.reason} (state={self.state})"
 
 
 class ApproveRefused(Exception):
@@ -591,7 +608,7 @@ class Store:
                 await conn.execute(pragma)
             await _add_missing_columns(conn)
             await _migrate_requests(conn)
-            await _widen_state_check(conn)
+            await _learn_cancelled_state(conn)
             await _migrate_events(conn)
             await _heal_views(conn)
             await _apply_schema(conn)
@@ -892,7 +909,7 @@ class Store:
                 raise
         return (await self.get_request(request_id) or row), True
 
-    async def withdraw(
+    async def cancel(
         self,
         request_id: str,
         actor: str,
@@ -901,9 +918,9 @@ class Store:
         now: str | None = None,
         context: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        """`draft` (or `blocked`) -> `withdrawn`. Returns `(row, changed)`.
+        """`draft` (or `blocked`) -> `cancelled`. Returns `(row, changed)`.
 
-        Withdrawing is a decision about a row **nobody has run**: the draft that
+        Cancelling is a decision about a row **nobody has run**: the draft that
         was filed twice, the intent that is never going to get a plan. It is not
         a delete -- the row, its quote, its events and the `why` a person typed
         all stay, and the badge changes. A deleted row would leave a hole where
@@ -913,16 +930,16 @@ class Store:
         It is not the inverse of approval either. Only `draft` is accepted:
         `approved` is refused because an approval authorises one attempt, and
         once the runner may hold the lease, stopping the work is the runner's
-        business -- writing `withdrawn` under a running claim would be this
+        business -- writing `cancelled` under a running claim would be this
         process claiming a cancellation it cannot enforce. Everything past that
-        is history and answers to `retry`, not to `withdraw`.
+        is history and answers to `retry`, not to `cancel`.
 
         `blocked` is refused for a duller reason: two CHECKs encode "a blocked
-        row has no Job and no estimate", so a withdrawn row that never had one
+        row has no Job and no estimate", so a cancelled row that never had one
         would need both relaxed. That is a schema decision about what a
         never-bound row is, and taking it here would smuggle it in.
 
-        Withdrawing twice is a no-op with no second event, for the reason
+        Cancelling twice is a no-op with no second event, for the reason
         approval is: a retried call must not be able to inflate the record.
         """
         ts = now or utcnow()
@@ -931,15 +948,15 @@ class Store:
             try:
                 row = await self._select(request_id)
                 if row is None:
-                    raise WithdrawRefused("not_found")
+                    raise CancelRefused("not_found")
                 state = row["state"]
-                if state == "withdrawn":
+                if state == "cancelled":
                     await self.conn.execute("ROLLBACK")
                     return row, False
                 if state != "draft":
-                    raise WithdrawRefused("wrong_state", state)
+                    raise CancelRefused("wrong_state", state)
                 await self.conn.execute(
-                    "UPDATE requests SET state = 'withdrawn', updated_at = ? "
+                    "UPDATE requests SET state = 'cancelled', updated_at = ? "
                     "WHERE id = ? AND state = ?",
                     (ts, request_id, state),
                 )
@@ -947,11 +964,11 @@ class Store:
                     request_id,
                     ts,
                     "human",
-                    "withdrawn",
+                    "cancelled",
                     {
                         "actor": actor,
                         "note": note,
-                        # From which state it was withdrawn, because `blocked`
+                        # From which state it was cancelled, because `blocked`
                         # and `draft` mean different things about how far this
                         # request ever got.
                         "was": state,
@@ -959,7 +976,7 @@ class Store:
                     },
                 )
                 await self.conn.execute("COMMIT")
-            except WithdrawRefused:
+            except CancelRefused:
                 await self.conn.execute("ROLLBACK")
                 raise
             except Exception:
@@ -980,10 +997,10 @@ class Store:
         """Take a settled row off the book, or put it back. Returns `(row, changed)`.
 
         This is the verb a `failed` row needs, and it is deliberately *not*
-        `withdraw`. Withdrawing rewrites `state`, and a failed attempt's state is
+        `cancel`. Cancelling rewrites `state`, and a failed attempt's state is
         the outcome of something that really happened -- the vendor was asked,
         the driver refused, the errors are on the row. Setting that to
-        `withdrawn` would make the record claim the request was cancelled before
+        `cancelled` would make the record claim the request was cancelled before
         it ran, which is not true and is not repairable after the fact.
 
         So the row keeps its state and gains a date. The book leaves it out of
@@ -992,7 +1009,7 @@ class Store:
         `archived` facet. Restoring clears the date; both directions are
         idempotent, with no second event, for the reason approval is.
 
-        Only settled rows are accepted. A `draft` is withdrawn, not archived: it
+        Only settled rows are accepted. A `draft` is cancelled, not archived: it
         is still a decision that has not been made. `approved` and `running` are
         in flight, and hiding something that may still spend is the one thing a
         list of "what is happening" must not do.
@@ -1003,10 +1020,10 @@ class Store:
             try:
                 row = await self._select(request_id)
                 if row is None:
-                    raise WithdrawRefused("not_found")
+                    raise CancelRefused("not_found")
                 state = row["state"]
                 if state not in ARCHIVABLE_STATES:
-                    raise WithdrawRefused("wrong_state", state)
+                    raise CancelRefused("wrong_state", state)
                 already = row["archived_at"] is not None
                 if already == archived:
                     await self.conn.execute("ROLLBACK")
@@ -1023,7 +1040,7 @@ class Store:
                     {"actor": actor, "note": note, **(context or {})},
                 )
                 await self.conn.execute("COMMIT")
-            except WithdrawRefused:
+            except CancelRefused:
                 await self.conn.execute("ROLLBACK")
                 raise
             except Exception:
