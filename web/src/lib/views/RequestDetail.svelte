@@ -71,6 +71,13 @@
     return () => controller.abort();
   });
 
+  // Any verb at all, so a running row does not get an empty line where the
+  // buttons would have been.
+  const hasVerbs = $derived(
+    Boolean(data) &&
+      (data.state === "draft" || isRetryable(data) || isArchivable(data)),
+  );
+
   const meta = $derived.by(() => {
     if (!data) return [];
     const rows = [
@@ -293,14 +300,12 @@
       {meta}
       pill={{ label: stateLabel(data.state), tone: stateTone(data.state) }}
     >
-      <!-- The verbs come first. This is a page somebody opens to *do*
-           something about a request, and the verbs used to be scattered down it:
-           approve and cancel under the parameters and the `why`, retry and
-           archive inside the failure block. The order they are read in now is
-           the order they are wanted in, and everything below is the evidence
-           for the decision. Each card is a labelled button with one line beside
-           it, not a paragraph: the reasoning belongs in the code, where it can
-           be revised without asking the reader to scroll past it. -->
+      <!-- The verbs come first, and they explain themselves. This is a page
+           somebody opens to *do* something about a request; the verbs used to be
+           scattered down it, each behind a paragraph of prose, which made the
+           two things the page is for the two hardest things to find. The
+           reasoning that used to be printed here lives in the components, where
+           it can be revised without asking a reader to scroll past it. -->
       {#if data.state === "draft"}
         <ApproveCard
           requestId={data.id}
@@ -308,27 +313,20 @@
           estimateUsd={data.estimate_usd}
           onapproved={() => load()}
         />
-        <!-- The other door on the same decision: a draft can be filed and then
-             not wanted, and until this existed the only ways out were approving
-             it (a spend) or editing the store by hand (a lie about the record).
-             It sits under approve because it answers the same question. -->
-        <CancelCard requestId={data.id} />
       {/if}
 
-      <!-- A failed row's repair: file the same body again as a *new* request.
-           Offered only where a retry can change anything -- the server refuses a
-           row that has not settled and refuses a verifier's verdict, and
-           `isRetryable` mirrors that set. -->
-      {#if isRetryable(data)}
-        <RetryCard requestId={data.id} />
-      {/if}
-
-      <!-- The verb a finished row was missing: not cancel (which would rewrite
-           the outcome) but archive, which keeps the badge and takes the row out
-           of the list. On an archived row the same card is the way back, so
-           hiding is never a one-way door. -->
-      {#if isArchivable(data)}
-        <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
+      {#if hasVerbs}
+        <div class="verbs">
+          {#if data.state === "draft"}
+            <CancelCard requestId={data.id} />
+          {/if}
+          {#if isRetryable(data)}
+            <RetryCard requestId={data.id} />
+          {/if}
+          {#if isArchivable(data)}
+            <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
+          {/if}
+        </div>
       {/if}
 
       <!-- Under the verbs, because they are about this: a reader who opens a
@@ -517,6 +515,16 @@
 
 <style>
   .block {
+    margin: 0 0 20px;
+  }
+
+  /* One line of verbs: a button says what it does, so there is nothing to read
+     beside it. It wraps rather than shrinking when a message lands in one of
+     the cards -- "Filed as req_…" is a sentence, not a label. */
+  .verbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
     margin: 0 0 20px;
   }
 

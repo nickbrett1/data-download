@@ -64,40 +64,30 @@
 </script>
 
 <section class="block retry">
-  <p class="micro">retry</p>
   {#if filed}
     <p class="quiet">
       Filed as <a href={`/requests/${filed.request_id}`}
         ><code>{filed.request_id}</code></a
       >, quoting {filed.quote_usd === null || filed.quote_usd === undefined
         ? "nothing"
-        : `$${Number(filed.quote_usd).toFixed(4)}`} — waiting for approval. This row
-      is unchanged.
+        : `$${Number(filed.quote_usd).toFixed(4)}`} — waiting for approval.
     </p>
   {:else if whoFailure}
     <p class="failure">{whoFailure}</p>
-  {:else if !who}
-    <p class="quiet">Checking who you are…</p>
-  {:else if who.approver}
-    <div class="row">
-      <button
-        class="btn"
-        type="button"
-        disabled={stage === "busy"}
-        onclick={retry}
-      >
-        Retry as a new request
-      </button>
-      <span class="caption"
-        >Same body, fresh quote, its own row — waiting for approval.</span
-      >
-    </div>
-  {:else}
+  {:else if who && !who.approver}
     <p class="quiet">
-      Retrying as <strong>{who.login}</strong> is refused: that login may read
-      but not file, because it is not named in
+      Retrying as <strong>{who.login}</strong> is refused: not in
       <code>DATA_DOWNLOAD_APPROVERS</code>.
     </p>
+  {:else}
+    <button
+      class="btn"
+      type="button"
+      disabled={stage === "busy" || !who}
+      onclick={retry}
+    >
+      Retry as a new request
+    </button>
   {/if}
   {#if failure}
     <p class="failure">{failure}</p>
@@ -105,26 +95,7 @@
 </section>
 
 <style>
-  .block {
-    margin: 0 0 20px;
-  }
-
-  .caption {
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--ink-muted);
-  }
-
-  .row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-    margin-top: 10px;
-  }
-
   .failure {
-    margin: 10px 0 0;
     font-size: 12px;
     line-height: 1.5;
     color: var(--bad);

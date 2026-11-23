@@ -65,35 +65,22 @@
 </script>
 
 <section class="block archive">
-  <p class="micro">{archived ? "restore" : "archive"}</p>
   {#if whoFailure}
     <p class="failure">{whoFailure}</p>
-  {:else if !who}
-    <p class="quiet">Checking who you are…</p>
-  {:else if who.approver}
-    <div class="row">
-      <button
-        class="btn"
-        type="button"
-        disabled={stage === "busy"}
-        onclick={toggle}
-      >
-        {archived ? "Put it back in the book" : "Archive this request"}
-      </button>
-      <span class="caption">
-        {#if archived}
-          It keeps its state and its events; this only puts it back in the list.
-        {:else}
-          Out of the list — nothing is deleted, and nothing is spent.
-        {/if}
-      </span>
-    </div>
-  {:else}
+  {:else if who && !who.approver}
     <p class="quiet">
-      Archiving as <strong>{who.login}</strong> is refused: that login may read
-      but not file, because it is not named in
+      Archiving as <strong>{who.login}</strong> is refused: not in
       <code>DATA_DOWNLOAD_APPROVERS</code>.
     </p>
+  {:else}
+    <button
+      class="btn"
+      type="button"
+      disabled={stage === "busy" || !who}
+      onclick={toggle}
+    >
+      {archived ? "Put it back in the book" : "Archive this request"}
+    </button>
   {/if}
   {#if failure}
     <p class="failure">{failure}</p>
@@ -101,26 +88,8 @@
 </section>
 
 <style>
-  .block {
-    margin: 0 0 20px;
-  }
-
-  .caption {
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--ink-muted);
-  }
-
-  .row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-    margin-top: 10px;
-  }
-
   .failure {
-    margin: 10px 0 0;
+    margin: 0;
     font-size: 12px;
     line-height: 1.5;
     color: var(--bad);

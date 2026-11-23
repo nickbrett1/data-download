@@ -61,50 +61,41 @@
 </script>
 
 <section class="block cancel">
-  <p class="micro">cancel</p>
   {#if done}
-    <p class="quiet">
-      Cancelled. Nothing is spent, and the row stays here with its events.
-    </p>
+    <p class="quiet">Cancelled.</p>
   {:else if whoFailure}
     <p class="failure">{whoFailure}</p>
-  {:else if !who}
-    <p class="quiet">Checking who you are…</p>
-  {:else if who.approver}
-    <div class="row">
-      {#if confirming}
-        <button
-          class="btn danger"
-          type="button"
-          disabled={stage === "busy"}
-          onclick={cancel}
-        >
-          Yes, cancel it
-        </button>
-        <button
-          class="btn"
-          type="button"
-          disabled={stage === "busy"}
-          onclick={() => (confirming = false)}
-        >
-          Keep it
-        </button>
-      {:else}
-        <button class="btn" type="button" onclick={() => (confirming = true)}>
-          Cancel this request
-        </button>
-        <span class="caption"
-          >Stops it before approval. Nothing is spent, and the row stays —
-          marked <em>cancelled</em>.</span
-        >
-      {/if}
-    </div>
-  {:else}
+  {:else if who && !who.approver}
     <p class="quiet">
-      Cancelling as <strong>{who.login}</strong> is refused: that login may read
-      but not file, because it is not named in
+      Cancelling as <strong>{who.login}</strong> is refused: not in
       <code>DATA_DOWNLOAD_APPROVERS</code>.
     </p>
+  {:else if confirming}
+    <button
+      class="btn danger"
+      type="button"
+      disabled={stage === "busy"}
+      onclick={cancel}
+    >
+      Yes, cancel it
+    </button>
+    <button
+      class="btn"
+      type="button"
+      disabled={stage === "busy"}
+      onclick={() => (confirming = false)}
+    >
+      Keep it
+    </button>
+  {:else}
+    <button
+      class="btn"
+      type="button"
+      disabled={!who}
+      onclick={() => (confirming = true)}
+    >
+      Cancel this request
+    </button>
   {/if}
   {#if failure}
     <p class="failure">{failure}</p>
@@ -112,31 +103,13 @@
 </section>
 
 <style>
-  .block {
-    margin: 0 0 20px;
-  }
-
-  .caption {
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--ink-muted);
-  }
-
-  .row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-    margin-top: 10px;
-  }
-
   .danger {
     border-color: var(--bad);
     color: var(--bad);
   }
 
   .failure {
-    margin: 10px 0 0;
+    margin: 0;
     font-size: 12px;
     line-height: 1.5;
     color: var(--bad);

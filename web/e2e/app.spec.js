@@ -819,9 +819,17 @@ test.describe("naming a request, and opening it", () => {
           block.querySelector(".micro")?.textContent.trim(),
         ),
       );
-    expect(order.slice(0, 4)).toEqual([
+    // The verbs carry no label now -- a button says what it does -- so the
+    // sections are identified by their class, and the labels start at the
+    // evidence.
+    const blocks = await page
+      .locator(".detail-card .block")
+      .evaluateAll((all) => all.map((block) => block.className));
+    expect(blocks[0]).toContain("approve");
+    expect(blocks[1]).toContain("cancel");
+    // And the evidence follows the verbs, in the order it is read.
+    expect(order.filter(Boolean).slice(0, 3)).toEqual([
       "spend",
-      "cancel",
       "what was asked for",
       "why",
     ]);
@@ -1482,10 +1490,18 @@ test.describe("a failure says why", () => {
           block.querySelector(".micro")?.textContent.trim(),
         ),
       );
-    expect(order.slice(0, 2)).toEqual(["retry", "archive"]);
-    expect(order.indexOf("why it failed")).toBeLessThan(
-      order.indexOf("what was asked for"),
-    );
+    const blocks = await page
+      .locator(".detail-card .block")
+      .evaluateAll((all) => all.map((block) => block.className));
+    expect(blocks[0]).toContain("retry");
+    expect(blocks[1]).toContain("archive");
+    // The reason sits directly under the verbs and above the request: the fix,
+    // then why the last attempt did not work, then what was asked for.
+    expect(order.filter(Boolean).slice(0, 3)).toEqual([
+      "why it failed",
+      "what was asked for",
+      "why",
+    ]);
   });
 
   test("a row that did not fail grows no empty heading", async ({ page }) => {
@@ -1535,13 +1551,18 @@ test.describe("a retry files the same request again", () => {
 
     const card = page.locator(".block.retry");
     await expect(card).toBeVisible();
-    // What it will do is stated before the click, including the part that
-    // matters: nothing is spent until the new one is approved.
-    await expect(card).toContainText("waiting for approval");
+    // The card is a button and nothing else: retry is self-explanatory, and a
+    // paragraph above it was text the reader had to get past to reach the verb.
+    await expect(
+      card.getByRole("button", { name: "Retry as a new request" }),
+    ).toBeVisible();
+    await expect(card.locator("p")).toHaveCount(0);
     await page.getByRole("button", { name: "Retry as a new request" }).click();
 
+    // The answer is the one thing it does say: what was filed, for how much.
     await expect(card).toContainText("req_9f2c41ab");
     await expect(card).toContainText("$1.4665");
+    await expect(card).toContainText("waiting for approval");
     expect(posted).toContain("/v1/requests/req_draft01/retry");
     // The reason block is still there: the old row is unchanged, and the page
     // is still its page.
@@ -1632,10 +1653,11 @@ test.describe("a drafted request can be cancelled", () => {
 
     const card = page.locator(".block.cancel");
     await expect(card).toBeVisible();
-    // What it does is stated before the first click, including the part that
-    // matters: nothing is spent, and the row is not deleted.
-    await expect(card).toContainText("Nothing is spent");
-    await expect(card).toContainText("marked");
+    // No paragraph: the two-click confirm is the explanation.
+    await expect(card.locator("p")).toHaveCount(0);
+    await expect(
+      card.getByRole("button", { name: "Cancel this request" }),
+    ).toBeVisible();
 
     // The first click only asks. Nothing has been posted.
     await page.getByRole("button", { name: "Cancel this request" }).click();
@@ -1832,7 +1854,10 @@ test.describe("a finished request can be archived", () => {
 
     const card = page.locator(".block.archive");
     await expect(card).toBeVisible();
-    await expect(card).toContainText("nothing is spent");
+    await expect(card.locator("p")).toHaveCount(0);
+    await expect(
+      card.getByRole("button", { name: "Archive this request" }),
+    ).toBeVisible();
     // The badge is untouched by the verb that hides it.
     await expect(page.locator(".block.failed")).toContainText(
       "driver_not_ready",
@@ -1873,9 +1898,11 @@ test.describe("a finished request can be archived", () => {
     });
     await page.goto("/requests/req_draft01");
 
-    await expect(page.locator(".block.archive")).toContainText(
-      "keeps its state and its events",
-    );
+    await expect(
+      page.locator(".block.archive").getByRole("button", {
+        name: "Put it back in the book",
+      }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Put it back in the book" }).click();
     expect(posted).toEqual({ archived: false });
   });
