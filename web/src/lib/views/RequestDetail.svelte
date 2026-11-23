@@ -14,11 +14,8 @@
    * The id is shown in full and in mono, because this is the page where you copy
    * it into a curl. Everywhere else it is a tooltip, because a key is not a name.
    */
+  import Actions from "$lib/components/Actions.svelte";
   import AppMark from "$lib/components/AppMark.svelte";
-  import ApproveCard from "$lib/components/ApproveCard.svelte";
-  import ArchiveCard from "$lib/components/ArchiveCard.svelte";
-  import RetryCard from "$lib/components/RetryCard.svelte";
-  import CancelCard from "$lib/components/CancelCard.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DetailPanel from "$lib/components/nb/DetailPanel.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
@@ -354,32 +351,9 @@
            Approve above the parameters and the sentence saying why the request
            exists, so the decision was asked for before the question was read.
            A request page is a decision record: what was asked, why, and then
-           the buttons. The verbs still sit above the commentary, and the
-           reasoning that used to be printed beside them still lives in the
-           components. -->
-      {#if data.state === "draft"}
-        <ApproveCard
-          requestId={data.id}
-          maxUsd={data.max_usd}
-          estimateUsd={data.estimate_usd}
-          onapproved={() => load()}
-        />
-      {/if}
-
+           one cluster of buttons. -->
       {#if hasVerbs}
-        <div class="verbs">
-          <!-- Alphabetical, and fixed: a row whose verbs move around depending
-               on which ones it has is a row you have to read every time. -->
-          {#if isArchivable(data)}
-            <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
-          {/if}
-          {#if data.state === "draft"}
-            <CancelCard requestId={data.id} />
-          {/if}
-          {#if isRetryable(data)}
-            <RetryCard requestId={data.id} />
-          {/if}
-        </div>
+        <Actions request={data} onchanged={() => load()} />
       {/if}
 
       {#if BLOCKED.has(data.facet)}
@@ -520,16 +494,6 @@
 
 <style>
   .block {
-    margin: 0 0 20px;
-  }
-
-  /* One line of verbs: a button says what it does, so there is nothing to read
-     beside it. It wraps rather than shrinking when a message lands in one of
-     the cards -- "Filed as req_…" is a sentence, not a label. */
-  .verbs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
     margin: 0 0 20px;
   }
 

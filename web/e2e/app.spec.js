@@ -828,18 +828,24 @@ test.describe("naming a request, and opening it", () => {
           block.querySelector(".micro")?.textContent.trim(),
         ),
       );
+    // One cluster now, not a card and then a row of loose buttons: the heading
+    // is "actions" whatever the row offers, and every verb lives under it.
     expect(order.filter(Boolean).slice(0, 3)).toEqual([
       "what was asked for",
       "why",
-      "spend",
+      "actions",
     ]);
 
     // Position, not just order in a list: the buttons are *below* the request
     // on the page, so a reader who scrolls to them has already passed the
     // question they are answering.
     const requestBox = await page.locator(".block.request").boundingBox();
-    const approveBox = await page.locator(".block.approve").boundingBox();
-    const cancelBox = await page.locator(".block.cancel").boundingBox();
+    const approveBox = await page
+      .locator('.verbs [data-verb="approve"]')
+      .boundingBox();
+    const cancelBox = await page
+      .locator('.verbs [data-verb="cancel"]')
+      .boundingBox();
     expect(approveBox.y).toBeGreaterThan(requestBox.y);
     expect(cancelBox.y).toBeGreaterThan(requestBox.y);
 
@@ -943,7 +949,7 @@ test.describe("approving a request", () => {
   // asks the server who the tailnet hop says you are, so the card can neither
   // leak a secret nor be handed one.
   const noteField = (page) => page.locator('.approve input[type="text"]');
-  const approveButton = (page) => page.locator(".approve .btn.primary");
+  const approveButton = (page) => page.locator('.verbs [data-verb="approve"]');
 
   async function interceptApprove(page, status = 200, body = null) {
     const seen = [];
@@ -1064,7 +1070,7 @@ test.describe("approving a request", () => {
 
     await approveButton(page).click();
 
-    await expect(page.locator(".approve .failure")).toContainText(
+    await expect(page.locator('.failure[data-verb="approve"]')).toContainText(
       "not named in DATA_DOWNLOAD_APPROVERS",
     );
   });
@@ -1079,7 +1085,7 @@ test.describe("approving a request", () => {
     await page.goto("/requests/req_draft01");
 
     await expect(page.locator(".approve .who")).toContainText(
-      "Approving as someone-else@example.com is refused",
+      "Changing a request as someone-else@example.com is refused",
     );
     await expect(page.locator(".approve .who")).toContainText(
       "DATA_DOWNLOAD_APPROVERS",
@@ -1096,7 +1102,7 @@ test.describe("approving a request", () => {
     // Not a disabled button: nothing here could be fixed by clicking, so the
     // only honest thing to render is why.
     await expect(approveButton(page)).toHaveCount(0);
-    await expect(page.locator(".approve .failure")).toContainText(
+    await expect(page.locator(".block.actions .failure")).toContainText(
       "no Tailscale-User-Login header",
     );
   });
@@ -1502,7 +1508,9 @@ test.describe("a failure says why", () => {
       "why",
     ]);
     const requestBox = await page.locator(".block.request").boundingBox();
-    const retryBox = await page.locator(".block.retry").boundingBox();
+    const retryBox = await page
+      .locator('.verbs [data-verb="retry"]')
+      .boundingBox();
     expect(retryBox.y).toBeGreaterThan(requestBox.y);
   });
 
@@ -1551,18 +1559,17 @@ test.describe("a retry files the same request again", () => {
     await mock(page, { detail: failed(DRIVERLESS) });
     await page.goto("/requests/req_draft01");
 
-    const card = page.locator(".block.retry");
-    await expect(card).toBeVisible();
-    // The card is a button and nothing else: retry is self-explanatory, and a
+    const actions = page.locator(".block.actions");
+    // The verb is a button and nothing else: retry is self-explanatory, and a
     // paragraph above it was text the reader had to get past to reach the verb.
-    await expect(card.getByRole("button", { name: "Retry" })).toBeVisible();
-    await expect(card.locator("p")).toHaveCount(0);
+    await expect(page.locator('.verbs [data-verb="retry"]')).toBeVisible();
+    await expect(page.locator(".verbs p")).toHaveCount(0);
     await page.getByRole("button", { name: "Retry" }).click();
 
     // The answer is the one thing it does say: what was filed, for how much.
-    await expect(card).toContainText("req_9f2c41ab");
-    await expect(card).toContainText("$1.47");
-    await expect(card).toContainText("waiting for approval");
+    await expect(actions).toContainText("req_9f2c41ab");
+    await expect(actions).toContainText("$1.47");
+    await expect(actions).toContainText("waiting for approval");
     expect(posted).toContain("/v1/requests/req_draft01/retry");
     // The reason block is still there: the old row is unchanged, and the page
     // is still its page.
@@ -1581,13 +1588,13 @@ test.describe("a retry files the same request again", () => {
     });
     await page.goto("/requests/req_draft01");
     await expect(page.locator(".block.failed")).toBeVisible();
-    await expect(page.locator(".block.retry")).toHaveCount(0);
+    await expect(page.locator('.verbs [data-verb="retry"]')).toHaveCount(0);
   });
 
   test("is not offered on a row that has not settled", async ({ page }) => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
-    await expect(page.locator(".block.retry")).toHaveCount(0);
+    await expect(page.locator('.verbs [data-verb="retry"]')).toHaveCount(0);
   });
 
   test("a login that may read but not file is told so, and gets no button", async ({
@@ -1598,9 +1605,9 @@ test.describe("a retry files the same request again", () => {
       who: { login: "guest@example.com", approver: false },
     });
     await page.goto("/requests/req_draft01");
-    const card = page.locator(".block.retry");
-    await expect(card).toContainText("DATA_DOWNLOAD_APPROVERS");
-    await expect(card.getByRole("button")).toHaveCount(0);
+    const actions = page.locator(".block.actions");
+    await expect(actions).toContainText("DATA_DOWNLOAD_APPROVERS");
+    await expect(actions.getByRole("button")).toHaveCount(0);
   });
 
   test("the server's own refusal is what the page shows", async ({ page }) => {
@@ -1621,7 +1628,7 @@ test.describe("a retry files the same request again", () => {
     await mock(page, { detail: failed(DRIVERLESS) });
     await page.goto("/requests/req_draft01");
     await page.getByRole("button", { name: "Retry" }).click();
-    await expect(page.locator(".block.retry .failure")).toContainText(
+    await expect(page.locator('.failure[data-verb="retry"]')).toContainText(
       "immutable",
     );
   });
@@ -1651,19 +1658,18 @@ test.describe("a drafted request can be cancelled", () => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    const card = page.locator(".block.cancel");
-    await expect(card).toBeVisible();
-    // No paragraph: the two-click confirm is the explanation.
-    await expect(card.locator("p")).toHaveCount(0);
-    await expect(card.getByRole("button", { name: "Cancel" })).toBeVisible();
+    const actions = page.locator(".block.actions");
+    // No paragraph beside the verb: the two-click confirm is the explanation.
+    await expect(page.locator(".verbs p")).toHaveCount(0);
+    await expect(page.locator('.verbs [data-verb="cancel"]')).toBeVisible();
 
     // The first click only asks. Nothing has been posted.
     await page.getByRole("button", { name: "Cancel" }).click();
     expect(posted).toBeNull();
-    await expect(card).toContainText("Yes, cancel");
+    await expect(actions).toContainText("Yes, cancel");
 
     await page.getByRole("button", { name: "Yes, cancel" }).click();
-    await expect(card).toContainText("Cancelled.");
+    await expect(actions).toContainText("Cancelled.");
     expect(posted).toContain("/v1/requests/req_draft01/cancel");
   });
 
@@ -1696,7 +1702,7 @@ test.describe("a drafted request can be cancelled", () => {
       detail: { ...draftDetail, state: "approved", facet: "todo" },
     });
     await page.goto("/requests/req_draft01");
-    await expect(page.locator(".block.cancel")).toHaveCount(0);
+    await expect(page.locator('.verbs [data-verb="cancel"]')).toHaveCount(0);
   });
 
   test("is not offered on a row that has already run", async ({ page }) => {
@@ -1709,7 +1715,7 @@ test.describe("a drafted request can be cancelled", () => {
       },
     });
     await page.goto("/requests/req_draft01");
-    await expect(page.locator(".block.cancel")).toHaveCount(0);
+    await expect(page.locator('.verbs [data-verb="cancel"]')).toHaveCount(0);
   });
 
   test("a login that may read but not file is told so, and gets no button", async ({
@@ -1720,9 +1726,9 @@ test.describe("a drafted request can be cancelled", () => {
       who: { login: "someone-else@example.com", approver: false },
     });
     await page.goto("/requests/req_draft01");
-    const card = page.locator(".block.cancel");
-    await expect(card).toContainText("DATA_DOWNLOAD_APPROVERS");
-    await expect(card.getByRole("button")).toHaveCount(0);
+    const actions = page.locator(".block.actions");
+    await expect(actions).toContainText("DATA_DOWNLOAD_APPROVERS");
+    await expect(actions.getByRole("button")).toHaveCount(0);
   });
 
   test("the server's own refusal is what the page shows", async ({ page }) => {
@@ -1744,7 +1750,7 @@ test.describe("a drafted request can be cancelled", () => {
     await page.goto("/requests/req_draft01");
     await page.getByRole("button", { name: "Cancel" }).click();
     await page.getByRole("button", { name: "Yes, cancel" }).click();
-    await expect(page.locator(".block.cancel .failure")).toContainText(
+    await expect(page.locator('.failure[data-verb="cancel"]')).toContainText(
       "has been authorised",
     );
   });
@@ -1848,10 +1854,8 @@ test.describe("a finished request can be archived", () => {
     await mock(page, { detail: failed });
     await page.goto("/requests/req_draft01");
 
-    const card = page.locator(".block.archive");
-    await expect(card).toBeVisible();
-    await expect(card.locator("p")).toHaveCount(0);
-    await expect(card.getByRole("button", { name: "Archive" })).toBeVisible();
+    await expect(page.locator('.verbs [data-verb="archive"]')).toBeVisible();
+    await expect(page.locator(".verbs p")).toHaveCount(0);
     // The row is alphabetical and fixed: Archive before Retry, whatever else
     // the row offers. Two words, no explanation -- the glyph and the fill are
     // what make them findable.
@@ -1897,11 +1901,9 @@ test.describe("a finished request can be archived", () => {
     });
     await page.goto("/requests/req_draft01");
 
-    await expect(
-      page.locator(".block.archive").getByRole("button", {
-        name: "Restore",
-      }),
-    ).toBeVisible();
+    await expect(page.locator('.verbs [data-verb="archive"]')).toHaveText(
+      "Restore",
+    );
     await page.getByRole("button", { name: "Restore" }).click();
     expect(posted).toEqual({ archived: false });
   });
@@ -1911,7 +1913,7 @@ test.describe("a finished request can be archived", () => {
   }) => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
-    await expect(page.locator(".block.archive")).toHaveCount(0);
+    await expect(page.locator('.verbs [data-verb="archive"]')).toHaveCount(0);
   });
 
   test("a login that may read but not file is told so, and gets no button", async ({
@@ -1922,9 +1924,9 @@ test.describe("a finished request can be archived", () => {
       who: { login: "someone-else@example.com", approver: false },
     });
     await page.goto("/requests/req_draft01");
-    const card = page.locator(".block.archive");
-    await expect(card).toContainText("DATA_DOWNLOAD_APPROVERS");
-    await expect(card.getByRole("button")).toHaveCount(0);
+    const actions = page.locator(".block.actions");
+    await expect(actions).toContainText("DATA_DOWNLOAD_APPROVERS");
+    await expect(actions.getByRole("button")).toHaveCount(0);
   });
 });
 
