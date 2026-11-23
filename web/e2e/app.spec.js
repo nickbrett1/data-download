@@ -812,14 +812,15 @@ test.describe("naming a request, and opening it", () => {
     await expect(page.locator("details.raw pre")).toContainText("OPRA.PILLAR");
   });
 
-  test("the verbs lead, and the evidence follows them", async ({ page }) => {
+  test("the evidence leads, and the verbs follow it", async ({ page }) => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    // The order is the argument: the verbs first, because that is what the
-    // page is opened to do, then what was asked for and why, as the evidence.
-    // The verbs used to be scattered down the page -- cancel under the params
-    // and the `why` -- which is what made them hard to find.
+    // The order is the argument, and it reversed. Approve used to lead the
+    // page on the argument that a reader opens it to *do* something -- which
+    // asked for the decision above the parameters and the sentence saying why
+    // the request exists. A request page is a decision record: what was asked
+    // for, why, and then the buttons.
     const order = await page
       .locator(".detail-card .block")
       .evaluateAll((blocks) =>
@@ -827,20 +828,20 @@ test.describe("naming a request, and opening it", () => {
           block.querySelector(".micro")?.textContent.trim(),
         ),
       );
-    // The verbs carry no label now -- a button says what it does -- so the
-    // sections are identified by their class, and the labels start at the
-    // evidence.
-    const blocks = await page
-      .locator(".detail-card .block")
-      .evaluateAll((all) => all.map((block) => block.className));
-    expect(blocks[0]).toContain("approve");
-    expect(blocks[1]).toContain("cancel");
-    // And the evidence follows the verbs, in the order it is read.
     expect(order.filter(Boolean).slice(0, 3)).toEqual([
-      "spend",
       "what was asked for",
       "why",
+      "spend",
     ]);
+
+    // Position, not just order in a list: the buttons are *below* the request
+    // on the page, so a reader who scrolls to them has already passed the
+    // question they are answering.
+    const requestBox = await page.locator(".block.request").boundingBox();
+    const approveBox = await page.locator(".block.approve").boundingBox();
+    const cancelBox = await page.locator(".block.cancel").boundingBox();
+    expect(approveBox.y).toBeGreaterThan(requestBox.y);
+    expect(cancelBox.y).toBeGreaterThan(requestBox.y);
 
     const request = page.locator(".block.request");
     // A request as a person says it: the list is a list and the window is a
@@ -1481,9 +1482,9 @@ test.describe("a failure says why", () => {
       "no driver is installed for vendor 'Databento' (installed: stub v1 (Stub))",
     );
 
-    // And it sits directly under the verbs, above the request itself: the
-    // reader gets the fix, then why the last attempt did not work, then what
-    // was asked for.
+    // And it leads the page: a reader who opens a failed row is asking why
+    // before anything else, and the fix (Retry) now sits below the evidence
+    // like every other verb.
     const order = await page
       .locator(".detail-card .block")
       .evaluateAll((blocks) =>
@@ -1494,15 +1495,15 @@ test.describe("a failure says why", () => {
     const blocks = await page
       .locator(".detail-card .block")
       .evaluateAll((all) => all.map((block) => block.className));
-    expect(blocks[0]).toContain("archive");
-    expect(blocks[1]).toContain("retry");
-    // The reason sits directly under the verbs and above the request: the fix,
-    // then why the last attempt did not work, then what was asked for.
+    expect(blocks[0]).toContain("failed");
     expect(order.filter(Boolean).slice(0, 3)).toEqual([
       "why it failed",
       "what was asked for",
       "why",
     ]);
+    const requestBox = await page.locator(".block.request").boundingBox();
+    const retryBox = await page.locator(".block.retry").boundingBox();
+    expect(retryBox.y).toBeGreaterThan(requestBox.y);
   });
 
   test("a row that did not fail grows no empty heading", async ({ page }) => {

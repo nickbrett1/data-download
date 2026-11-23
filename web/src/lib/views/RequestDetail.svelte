@@ -300,41 +300,10 @@
       {meta}
       pill={{ label: stateLabel(data.state), tone: stateTone(data.state) }}
     >
-      <!-- The verbs come first, and they explain themselves. This is a page
-           somebody opens to *do* something about a request; the verbs used to be
-           scattered down it, each behind a paragraph of prose, which made the
-           two things the page is for the two hardest things to find. The
-           reasoning that used to be printed here lives in the components, where
-           it can be revised without asking a reader to scroll past it. -->
-      {#if data.state === "draft"}
-        <ApproveCard
-          requestId={data.id}
-          maxUsd={data.max_usd}
-          estimateUsd={data.estimate_usd}
-          onapproved={() => load()}
-        />
-      {/if}
-
-      {#if hasVerbs}
-        <div class="verbs">
-          <!-- Alphabetical, and fixed: a row whose verbs move around depending
-               on which ones it has is a row you have to read every time. -->
-          {#if isArchivable(data)}
-            <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
-          {/if}
-          {#if data.state === "draft"}
-            <CancelCard requestId={data.id} />
-          {/if}
-          {#if isRetryable(data)}
-            <RetryCard requestId={data.id} />
-          {/if}
-        </div>
-      {/if}
-
-      <!-- Under the verbs, because they are about this: a reader who opens a
-           failed row is asking "why", and the code is the phrase the code owns.
-           The sentence under it is the runner's, verbatim, because paraphrasing
-           a driver's refusal is how a reason becomes a guess. -->
+      <!-- Above the request, because a reader who opens a failed row is asking
+           "why" before anything else. The code is the phrase the code owns, and
+           the sentence under it is the runner's, verbatim: paraphrasing a
+           driver's refusal is how a reason becomes a guess. -->
       {#if data.failure}
         <section class="block failed">
           <p class="micro">why it failed</p>
@@ -345,7 +314,8 @@
         </section>
       {/if}
 
-      <!-- The thing being decided about, under the verbs that decide it. -->
+      <!-- The thing being decided about, before the verbs that decide it: a
+           person reads what was asked for and why, then chooses. -->
       <section class="block request">
         <p class="micro">what was asked for</p>
         {#if asked.length || money.length}
@@ -378,6 +348,39 @@
           <p class="quiet">No reason was recorded.</p>
         {/if}
       </section>
+
+      <!-- The verbs follow the evidence. They used to lead the page, on the
+           argument that a reader opens it to *do* something -- and that put
+           Approve above the parameters and the sentence saying why the request
+           exists, so the decision was asked for before the question was read.
+           A request page is a decision record: what was asked, why, and then
+           the buttons. The verbs still sit above the commentary, and the
+           reasoning that used to be printed beside them still lives in the
+           components. -->
+      {#if data.state === "draft"}
+        <ApproveCard
+          requestId={data.id}
+          maxUsd={data.max_usd}
+          estimateUsd={data.estimate_usd}
+          onapproved={() => load()}
+        />
+      {/if}
+
+      {#if hasVerbs}
+        <div class="verbs">
+          <!-- Alphabetical, and fixed: a row whose verbs move around depending
+               on which ones it has is a row you have to read every time. -->
+          {#if isArchivable(data)}
+            <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
+          {/if}
+          {#if data.state === "draft"}
+            <CancelCard requestId={data.id} />
+          {/if}
+          {#if isRetryable(data)}
+            <RetryCard requestId={data.id} />
+          {/if}
+        </div>
+      {/if}
 
       {#if BLOCKED.has(data.facet)}
         <section class="block">
