@@ -223,6 +223,26 @@ def withdraw_refused(reason: str, state: object) -> ApiError:
     )
 
 
+def archive_refused(reason: str, state: object) -> ApiError:
+    """A refusal from `Store.archive`.
+
+    `wrong_state` is the whole set of them: a `draft` is withdrawn rather than
+    archived (it is a decision nobody has made yet), and `approved`/`running` are
+    in flight, where hiding a row that may still spend is the one thing a list of
+    "what is happening" must not do.
+    """
+    return ApiError(
+        409,
+        "archive_refused",
+        (
+            "only a finished request can be archived: a draft is withdrawn, "
+            "and an approved or running one is still happening"
+        ),
+        reason=reason,
+        state=state,
+    )
+
+
 def not_retryable(
     reason: str, state: object, request_id: str, **extra: Any
 ) -> ApiError:

@@ -78,6 +78,9 @@ ADDED_COLUMNS = (
     ("requests", "match_verdict", "TEXT"),
     ("requests", "match_report_json", "TEXT"),
     ("requests", "escalated_at", "TEXT"),
+    # Archiving a settled row. Nullable and added in place: a column, not a
+    # state, so the CHECK does not widen and no table rebuild is needed.
+    ("requests", "archived_at", "TEXT"),
 )
 
 
@@ -359,6 +362,11 @@ LEASE_SECONDS = 900
 # Where a run can end (§3.1). `running` is the claimant's, not the runner's, and
 # the three below are the only states `settle` may write.
 TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
+
+# What `archive` accepts: rows that are finished, in whatever way. `withdrawn` is
+# in it because a cancelled draft is finished too -- and because the two ways of
+# leaving the book should not need two different verbs to come back.
+ARCHIVABLE_STATES = TERMINAL_STATES | {"withdrawn"}
 
 
 class WithdrawRefused(Exception):
@@ -949,6 +957,70 @@ class Store:
                         "was": state,
                         **(context or {}),
                     },
+                )
+                await self.conn.execute("COMMIT")
+            except WithdrawRefused:
+                await self.conn.execute("ROLLBACK")
+                raise
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        return (await self.get_request(request_id) or row), True
+
+    async def archive(
+        self,
+        request_id: str,
+        actor: str,
+        note: str | None = None,
+        *,
+        archived: bool = True,
+        now: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Take a settled row off the book, or put it back. Returns `(row, changed)`.
+
+        This is the verb a `failed` row needs, and it is deliberately *not*
+        `withdraw`. Withdrawing rewrites `state`, and a failed attempt's state is
+        the outcome of something that really happened -- the vendor was asked,
+        the driver refused, the errors are on the row. Setting that to
+        `withdrawn` would make the record claim the request was cancelled before
+        it ran, which is not true and is not repairable after the fact.
+
+        So the row keeps its state and gains a date. The book leaves it out of
+        the default list (a finished row nobody is looking at is noise next to
+        one that needs a person), and it stays reachable by name in the
+        `archived` facet. Restoring clears the date; both directions are
+        idempotent, with no second event, for the reason approval is.
+
+        Only settled rows are accepted. A `draft` is withdrawn, not archived: it
+        is still a decision that has not been made. `approved` and `running` are
+        in flight, and hiding something that may still spend is the one thing a
+        list of "what is happening" must not do.
+        """
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = await self._select(request_id)
+                if row is None:
+                    raise WithdrawRefused("not_found")
+                state = row["state"]
+                if state not in ARCHIVABLE_STATES:
+                    raise WithdrawRefused("wrong_state", state)
+                already = row["archived_at"] is not None
+                if already == archived:
+                    await self.conn.execute("ROLLBACK")
+                    return row, False
+                await self.conn.execute(
+                    "UPDATE requests SET archived_at = ?, updated_at = ? WHERE id = ?",
+                    (ts if archived else None, ts, request_id),
+                )
+                await self._event(
+                    request_id,
+                    ts,
+                    "human",
+                    "archived" if archived else "restored",
+                    {"actor": actor, "note": note, **(context or {})},
                 )
                 await self.conn.execute("COMMIT")
             except WithdrawRefused:

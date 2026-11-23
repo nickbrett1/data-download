@@ -1784,3 +1784,153 @@ test.describe("a withdrawn request is kept, not listed", () => {
     ).toHaveCount(0);
   });
 });
+
+test.describe("a finished request can be archived", () => {
+  // A failed row had one verb, retry, and no way to stop looking at it.
+  // Withdraw writes `state` and would rewrite the outcome; archive writes a
+  // date, so the row keeps its badge and leaves the list.
+  const failed = {
+    ...draftDetail,
+    state: "failed",
+    facet: "done",
+    facet_label: "Finished",
+    failure: {
+      code: "driver_not_ready",
+      detail: "no driver is installed for vendor 'Databento'",
+    },
+    archived_at: null,
+  };
+
+  test("offers the verb on a failed row, and says nothing is deleted", async ({
+    page,
+  }) => {
+    let posted = null;
+    await page.route("**/v1/requests/*/archive", async (route) => {
+      posted = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          request_id: "req_draft01",
+          state: "failed",
+          archived_at: "2026-11-23T01:30:00Z",
+          changed: true,
+        }),
+      });
+    });
+    await mock(page, { detail: failed });
+    await page.goto("/requests/req_draft01");
+
+    const card = page.locator(".block.archive");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText("nothing is spent");
+    // The badge is untouched by the verb that hides it.
+    await expect(page.locator(".block.failed")).toContainText(
+      "driver_not_ready",
+    );
+
+    await page.getByRole("button", { name: "Archive this request" }).click();
+    expect(posted).toEqual({ archived: true });
+    // The same card is the way back.
+    await expect(
+      page.getByRole("button", { name: "Put it back in the book" }),
+    ).toBeVisible();
+  });
+
+  test("an archived row offers the way back, not the way out", async ({
+    page,
+  }) => {
+    let posted = null;
+    await page.route("**/v1/requests/*/archive", async (route) => {
+      posted = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          request_id: "req_draft01",
+          state: "failed",
+          archived_at: null,
+          changed: true,
+        }),
+      });
+    });
+    await mock(page, {
+      detail: {
+        ...failed,
+        facet: "archived",
+        facet_label: "Archived",
+        archived_at: "2026-11-23T01:00:00Z",
+      },
+    });
+    await page.goto("/requests/req_draft01");
+
+    await expect(page.locator(".block.archive")).toContainText(
+      "keeps its state and its events",
+    );
+    await page.getByRole("button", { name: "Put it back in the book" }).click();
+    expect(posted).toEqual({ archived: false });
+  });
+
+  test("is not offered on a draft, which is withdrawn instead", async ({
+    page,
+  }) => {
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+    await expect(page.locator(".block.archive")).toHaveCount(0);
+  });
+
+  test("a login that may read but not file is told so, and gets no button", async ({
+    page,
+  }) => {
+    await mock(page, {
+      detail: failed,
+      who: { login: "someone-else@example.com", approver: false },
+    });
+    await page.goto("/requests/req_draft01");
+    const card = page.locator(".block.archive");
+    await expect(card).toContainText("DATA_DOWNLOAD_APPROVERS");
+    await expect(card.getByRole("button")).toHaveCount(0);
+  });
+});
+
+test.describe("an archived request is off the book", () => {
+  const withArchived = (() => {
+    const row = {
+      // A row that really is finished with a reason: landed_with_errors, whose
+      // badge says what went wrong and must keep saying it once archived.
+      ...dashboard.rows.find((r) => r.state === "landed_with_errors"),
+      seq: 8,
+      id: "req_file0001",
+      facet: "archived",
+      facet_label: "Archived",
+    };
+    return {
+      ...dashboard,
+      facets: { ...dashboard.facets, archived: [row] },
+      archived: 1,
+    };
+  })();
+
+  test("the list leaves it out and offers the filter by name", async ({
+    page,
+  }) => {
+    await mock(page, { requests: withArchived });
+    await page.goto("/");
+
+    await expect(page.locator(".tbl-row")).toHaveCount(dashboard.rows.length);
+    await expect(page.locator("body")).not.toContainText("#8");
+
+    const option = page
+      .locator(".facet-option")
+      .filter({ hasText: "Archived" })
+      .first();
+    await expect(option).toContainText("1");
+    await option.click();
+
+    const row = page.locator(".tbl-row").filter({ hasText: "#8" });
+    await expect(row).toBeVisible();
+    // Still says what it actually is -- the verifier's verdict -- and not
+    // "archived": the filter is the list, the badge is the record.
+    await expect(row).toContainText("verify shortfall");
+  });
+});

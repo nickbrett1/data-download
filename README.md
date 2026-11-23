@@ -94,6 +94,7 @@ matter:
 | `POST /v1/requests/{id}/approve` | a tailnet login, asserted by `tailscale serve` and named in `DATA_DOWNLOAD_APPROVERS` |
 | `POST /v1/requests/{id}/retry` | either a `submit` token or that same tailnet login — it files a `draft`, which spends nothing until somebody approves it |
 | `POST /v1/requests/{id}/withdraw` | the same pair — it cancels a `draft` nobody has approved, which spends nothing and deletes nothing |
+| `POST /v1/requests/{id}/archive` | the same pair — it hides a *finished* row from the book, and `{"archived": false}` brings it back |
 | `python -m data_download.approve` | a shell on the host: no route, no credential, no identity |
 
 Approval started as a shell command with no route at all, on the argument that a
@@ -286,6 +287,34 @@ word). It is not only about the CHECK: `v_done` is `CREATE VIEW IF NOT EXISTS`,
 so a deployed store would otherwise keep a definition that cannot show a
 withdrawn row. One rebuild fixes both, and it copies columns by intersection
 with the live table, so a store a phase behind is rebuilt into what it has.
+
+## Archiving a finished request
+
+Withdraw and archive are the two ways a row leaves the book, and they are not
+interchangeable — which is the whole reason there are two.
+
+**Withdraw** writes `state`. It is for a `draft` nobody has approved: a decision
+that has not been made yet, taken back. **Archive** writes a date
+(`archived_at`), and it is for a row that is finished. A `failed` row is the case
+that forced it: the state is the outcome of something that really happened — the
+vendor was asked, the driver refused, the errors are on the row — so writing
+`withdrawn` over it would make the record claim the request was cancelled before
+it ran. Archiving leaves `state = 'failed'` exactly where it was, keeps the badge,
+the `errors_json` and the events, and takes the row out of the book's default
+list. That list is "what needs me"; a finished row nobody is looking at is noise
+next to one that does.
+
+`withdrawn` and `archived` are both hidden buckets with their own filter chips,
+so nothing becomes unreachable. `{"archived": false}` on the same route restores
+a row — hiding is never a one-way door — and both directions are idempotent with
+no second event. Only settled states are accepted (`succeeded`,
+`landed_with_errors`, `failed`, `withdrawn`): a draft is withdrawn, and an
+approved or running row is still happening, where hiding something that may
+still spend is the one thing a list of "what is happening" must not do.
+
+`archived_at` is a nullable column added in place by `ADDED_COLUMNS`, so this
+needed no rebuild — the opposite of `withdrawn`, which is a value in a CHECK and
+cost one.
 
 ## When the registry moves
 

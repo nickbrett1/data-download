@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS requests (
   match_verdict    TEXT,                   -- phase 2.5: matched|needs_params|cannot_express|not_claimed
   match_report_json TEXT,                  -- the whole MatchReport, with a registry digest
   escalated_at     TEXT,                   -- phase 2.5: when a caller asked for a new plan
+  -- When somebody said "I am done looking at this one". A settled row keeps its
+  -- state -- `failed` stays `failed`, because the attempt really happened -- and
+  -- gains a date that takes it off the book's default list. Archiving is a
+  -- column rather than a state for exactly that reason: a state would overwrite
+  -- the outcome, and the outcome is the thing worth keeping.
+  archived_at      TEXT,
   why              TEXT,                   -- the human reason, verbatim (§7.2)
   max_usd          REAL,                   -- the ceiling that travelled with the body
   created_at       TEXT NOT NULL,
@@ -279,6 +285,10 @@ SELECT r.id,
        -- list carries only the code it needs for the half-line under the badge
        -- (`_book_row` reduces it); the page carries the sentence too.
        r.errors_json AS errors_json,
+       -- Whether somebody has finished with this row. Not a state: see the
+       -- column's own note above. `v_requests` is dropped and recreated on
+       -- every start, so this needs no rebuild.
+       r.archived_at,
        s.condition AS stuck_condition,
        s.detail AS stuck_detail
   FROM requests r

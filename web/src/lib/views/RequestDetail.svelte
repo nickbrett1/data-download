@@ -16,6 +16,7 @@
    */
   import AppMark from "$lib/components/AppMark.svelte";
   import ApproveCard from "$lib/components/ApproveCard.svelte";
+  import ArchiveCard from "$lib/components/ArchiveCard.svelte";
   import RetryCard from "$lib/components/RetryCard.svelte";
   import WithdrawCard from "$lib/components/WithdrawCard.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
@@ -26,6 +27,7 @@
     age,
     bound,
     filed,
+    isArchivable,
     isRetryable,
     stateLabel,
     stateTone,
@@ -311,6 +313,14 @@
         {#if isRetryable(data)}
           <RetryCard requestId={data.id} />
         {/if}
+      {/if}
+
+      <!-- The verb a finished row was missing: not withdraw (which would
+           rewrite the outcome) but archive, which keeps the badge and takes the
+           row out of the list. On an archived row the same card is the way
+           back, so hiding is never a one-way door. -->
+      {#if isArchivable(data)}
+        <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
       {/if}
 
       <!-- First, because it is the question somebody opened this page to ask.

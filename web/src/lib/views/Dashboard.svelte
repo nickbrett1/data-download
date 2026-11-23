@@ -79,6 +79,7 @@
     // needs nothing and is deliberately not in the book's default list. Both
     // are offered by name whenever there is one, so neither is unreachable.
     if ((data.facets.withdrawn ?? []).length) order.push("withdrawn");
+    if ((data.facets.archived ?? []).length) order.push("archived");
     if ((data.facets.other ?? []).length) order.push("other");
     return [
       {

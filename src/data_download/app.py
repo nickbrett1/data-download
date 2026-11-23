@@ -119,6 +119,7 @@ FACET_LABELS = {
     # Settled and needing nothing, so it is not in FACET_ORDER either; the
     # route puts it in the filter bar whenever the count is non-zero.
     "withdrawn": "Withdrawn",
+    "archived": "Archived",
 }
 TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
 
@@ -144,7 +145,13 @@ def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
     and `no_plan` is the honest reading of that: it has no plan, and nobody has
     asked for one. Inventing a verdict at read time would date it to the read.
     """
-    if row.get("stuck_condition"):
+    if row.get("archived_at"):
+        # Archived is a place in the book, not an outcome: the row keeps its
+        # state and its badge, and the list stops listing it. Checked before the
+        # state branches because a broken condition on a row somebody has
+        # finished with is not an alarm either.
+        facet = "archived"
+    elif row.get("stuck_condition"):
         facet = "broken"
     elif row.get("state") == "blocked":
         # `needs_params` outranks `requested`, and the reconciliation pass is
@@ -1026,6 +1033,67 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.post("/v1/requests/{request_id}/archive")
+    async def archive_request(request: Request, request_id: str) -> JSONResponse:
+        """Archive a finished request, or restore it: `{"archived": false}`.
+
+        The verb a `failed` row was missing. It is not `withdraw`: withdrawing
+        writes `state`, and a failed attempt's state is the outcome of something
+        that really happened. This writes a date instead, so the row keeps its
+        badge and its errors and simply stops appearing in the book's default
+        list.
+
+        Restoring is the same route in reverse rather than a separate one: the
+        two are one decision with a toggle, and a page that can hide a row
+        without being able to bring it back is a page that loses things.
+        """
+        actor = auth.require_submit_or_approver(request)
+        store = await _store(request)
+
+        raw = await request.body()
+        archived = True
+        note = None
+        if raw.strip():
+            try:
+                body = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise errors.invalid_body("body is not valid JSON") from None
+            if not isinstance(body, dict):
+                raise errors.invalid_body("body must be a JSON object")
+            if body.get("actor") is not None:
+                raise errors.invalid_body(
+                    "actor is not accepted: the actor is the token's name or "
+                    "the tailnet login `tailscale serve` asserts, so it cannot "
+                    "be declared in the body"
+                )
+            if "archived" in body:
+                if not isinstance(body["archived"], bool):
+                    raise errors.invalid_body("archived must be true or false")
+                archived = body["archived"]
+            note = body.get("note")
+            if note is not None and not isinstance(note, str):
+                raise errors.invalid_body("note must be a string")
+
+        try:
+            row, changed = await store.archive(
+                request_id, actor, note, archived=archived, context={"via": "serve"}
+            )
+        except WithdrawRefused as exc:
+            if exc.reason == "not_found":
+                raise errors.not_found(f"no request with id {request_id!r}") from None
+            raise errors.archive_refused(exc.reason, exc.state) from None
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "request_id": row["id"],
+                "state": row["state"],
+                "archived_at": row["archived_at"],
+                # False for a second archive of the same row: no second event.
+                "changed": changed,
+            },
+        )
+
     @app.post("/v1/requests/{request_id}/escalate", status_code=202)
     async def escalate_request(request: Request, request_id: str) -> JSONResponse:
         """Ask for a new plan. Records demand; writes no plan.
@@ -1276,16 +1344,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rows = [
             _book_row(_with_facet(row), registry) for row in await store.overview()
         ]
-        keys = (*FACET_ORDER, "withdrawn", "other")
+        keys = (*FACET_ORDER, "withdrawn", "archived", "other")
         # `total` is what the book is *showing*, and the list it shows is the one
         # minus the requests nobody needs to look at. Claiming 5 while listing 4
         # would be the old bug in a new place. The facet counts come off the full
         # list, so "Withdrawn (1)" stays reachable from the filter bar.
-        listed = [r for r in rows if r["facet"] != "withdrawn"]
+        hidden = {"withdrawn", "archived"}
+        listed = [r for r in rows if r["facet"] not in hidden]
         return {
             "rows": listed,
             "total": len(listed),
-            "withdrawn": len(rows) - len(listed),
+            "withdrawn": sum(1 for r in rows if r["facet"] == "withdrawn"),
+            "archived": sum(1 for r in rows if r["facet"] == "archived"),
             "facets": {key: [r for r in rows if r["facet"] == key] for key in keys},
             "facet_order": list(FACET_ORDER),
             "facet_labels": FACET_LABELS,

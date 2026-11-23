@@ -224,6 +224,20 @@ const UNRETRYABLE_FAILURES = new Set([
   "verify_contradiction",
 ]);
 
+/** Finished, in whatever way: the states `archive` accepts. A draft is
+ * withdrawn and an approved/running row is still happening, so neither is
+ * offered -- the server refuses both, and the page must not promise otherwise. */
+const ARCHIVABLE_STATES = new Set([
+  "succeeded",
+  "landed_with_errors",
+  "failed",
+  "withdrawn",
+]);
+
+export function isArchivable(row) {
+  return ARCHIVABLE_STATES.has(row?.state);
+}
+
 /** Only a settled row with a reason a retry could change is offered the verb. */
 export function isRetryable(row) {
   if (!row?.failure?.code) return false;
