@@ -1028,9 +1028,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if note is not None and not isinstance(note, str):
                 raise errors.invalid_body("note must be a string")
 
+        # An approved row is refused by the store, because an approval
+        # authorises one attempt and only the runner may stop work it holds.
+        # The one exception is a row no runner can ever hold: its plan type is
+        # no longer in git, so there is no binder to bind it and nothing to
+        # claim. That is the only case this door can decide, because the
+        # registry is here and the store has none.
+        existing = await store.get_request(request_id)
+        unbindable = (
+            existing is not None
+            and existing["state"] == "approved"
+            and profiles.resolve(registry, existing.get("plan_type")) is None
+        )
+
         try:
             row, changed = await store.cancel(
-                request_id, actor, note, context={"via": "serve"}
+                request_id,
+                actor,
+                note,
+                unbindable=unbindable,
+                context={"via": "serve"},
             )
         except CancelRefused as exc:
             if exc.reason == "not_found":

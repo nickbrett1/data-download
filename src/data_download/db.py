@@ -915,6 +915,7 @@ class Store:
         actor: str,
         note: str | None = None,
         *,
+        unbindable: bool = False,
         now: str | None = None,
         context: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
@@ -941,6 +942,16 @@ class Store:
 
         Cancelling twice is a no-op with no second event, for the reason
         approval is: a retried call must not be able to inflate the record.
+
+        `unbindable=True` is the one widening, and the caller has to establish
+        it: it says the plan type this row names is no longer in git, so no
+        binder exists, so no runner can ever hold the lease on it. An approval
+        that authorises an attempt nobody can make is not "work in flight" --
+        the reason `approved` is refused -- it is an authorisation for nothing,
+        and leaving it in the queue forever makes the queue lie about what it
+        holds. The store cannot check this itself (it has no registry), so it
+        refuses nothing and trusts the caller's assertion; the route is where
+        the registry lives.
         """
         ts = now or utcnow()
         async with self._write_lock:
@@ -953,7 +964,7 @@ class Store:
                 if state == "cancelled":
                     await self.conn.execute("ROLLBACK")
                     return row, False
-                if state != "draft":
+                if state != "draft" and not (unbindable and state == "approved"):
                     raise CancelRefused("wrong_state", state)
                 await self.conn.execute(
                     "UPDATE requests SET state = 'cancelled', updated_at = ? "
@@ -972,6 +983,10 @@ class Store:
                         # and `draft` mean different things about how far this
                         # request ever got.
                         "was": state,
+                        # Present only when an approval was withdrawn because
+                        # nothing could ever run it: the record should say so,
+                        # or the event reads as a person stopping live work.
+                        **({"unbindable": True} if state == "approved" else {}),
                         **(context or {}),
                     },
                 )
