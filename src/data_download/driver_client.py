@@ -54,7 +54,10 @@ PROTOCOL_VERSION = 1
 #: Per-verb deadlines, in seconds. Mirrors `wire.DEADLINES`.
 DEADLINES: dict[str, float] = {
     "resolve": 30,
-    "cost": 30,
+    # Pricing scans the window server-side: Databento measured 0.1-28 s for one
+    # day of ES trades (2026-11-23), and a price is free and idempotent, so the
+    # patience to let a slow quote finish costs nothing. Both tables carry this.
+    "cost": 120,
     "submit": 60,
     "poll": 30,
     "list_files": 120,
