@@ -221,6 +221,33 @@ code {
   border-color: var(--accent-line);
   color: var(--accent);
 }
+/* A verb: one of the small number of things a page exists to do. The plain
+   `.btn` is a control that sits beside the sentence explaining it -- quiet on
+   purpose, because the sentence is doing the talking. A verb has no sentence:
+   it has to be found without reading, so it gets a filled ground, body-size
+   ink and a hit area a thumb can land on. */
+.btn.verb {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: var(--tap);
+  padding: 6px 15px;
+  background: var(--bg-hover);
+  border-color: var(--line-strong);
+  color: var(--ink-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+.btn.verb:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent-line-strong);
+  color: var(--accent);
+}
+.btn.verb .glyph {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
 input[type="search"],
 input[type="text"] {
   background: var(--bg-sunken);

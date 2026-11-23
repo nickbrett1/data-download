@@ -81,12 +81,36 @@
     </p>
   {:else}
     <button
-      class="btn"
+      class="btn verb"
       type="button"
       disabled={stage === "busy" || !who}
       onclick={retry}
     >
-      Retry as a new request
+      <!-- A circular arrow: the verb files the same body again. Decorative --
+           the word beside it is the label. -->
+      <svg
+        class="glyph"
+        viewBox="0 0 16 16"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path
+          d="M12.8 8a4.8 4.8 0 1 1-1.5-3.5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+        />
+        <path
+          d="M13 2.4v3.2H9.8"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      Retry
     </button>
   {/if}
   {#if failure}

@@ -72,15 +72,15 @@
     </p>
   {:else if confirming}
     <button
-      class="btn danger"
+      class="btn verb danger"
       type="button"
       disabled={stage === "busy"}
       onclick={cancel}
     >
-      Yes, cancel it
+      Yes, cancel
     </button>
     <button
-      class="btn"
+      class="btn verb"
       type="button"
       disabled={stage === "busy"}
       onclick={() => (confirming = false)}
@@ -89,12 +89,28 @@
     </button>
   {:else}
     <button
-      class="btn"
+      class="btn verb"
       type="button"
       disabled={!who}
       onclick={() => (confirming = true)}
     >
-      Cancel this request
+      <!-- A cross: cancelling takes the request off the queue. Decorative --
+           the word beside it is the label. -->
+      <svg
+        class="glyph"
+        viewBox="0 0 16 16"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path
+          d="M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          stroke-linecap="round"
+        />
+      </svg>
+      Cancel
     </button>
   {/if}
   {#if failure}

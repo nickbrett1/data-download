@@ -74,12 +74,48 @@
     </p>
   {:else}
     <button
-      class="btn"
+      class="btn verb"
       type="button"
       disabled={stage === "busy" || !who}
       onclick={toggle}
     >
-      {archived ? "Put it back in the book" : "Archive this request"}
+      <!-- A box, with the arrow pointing the way this click moves the row:
+           into it to archive, out of it to restore. Decorative -- the word
+           beside it is the label. -->
+      <svg
+        class="glyph"
+        viewBox="0 0 16 16"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path
+          d="M2.6 5.6h10.8v7.8H2.6zM1.9 2.6h12.2v3H1.9z"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linejoin="round"
+        />
+        {#if archived}
+          <path
+            d="M8 11.2V8.2M6.6 9.6L8 8.2l1.4 1.4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        {:else}
+          <path
+            d="M8 7.8v3M6.6 9.4L8 10.8l1.4-1.4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        {/if}
+      </svg>
+      {archived ? "Restore" : "Archive"}
     </button>
   {/if}
   {#if failure}

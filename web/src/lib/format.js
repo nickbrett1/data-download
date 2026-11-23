@@ -89,17 +89,6 @@ export function filed(iso) {
   return `${day} ${month} ${hh}:${mm}`;
 }
 
-export function age(seconds) {
-  const total = Number(seconds);
-  if (!Number.isFinite(total)) return "—";
-  if (total < 60) return `${Math.floor(total)}s`;
-  if (total < 3600) return `${Math.floor(total / 60)}m`;
-  if (total < 86400) {
-    return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
-  }
-  return `${Math.floor(total / 86400)}d ${Math.floor((total % 86400) / 3600)}h`;
-}
-
 /** A blocked row says whose move it is.
  *
  * `needs_params` is something the caller can act on this minute ("add symbols,

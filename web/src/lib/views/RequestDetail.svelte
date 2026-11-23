@@ -24,7 +24,6 @@
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import { getView } from "$lib/api";
   import {
-    age,
     bound,
     filed,
     isArchivable,
@@ -123,10 +122,11 @@
     // The ceiling and the estimate are not here: they are about the request
     // itself, not about the row's bookkeeping, so they sit with the request at
     // the top of the page where somebody deciding has them in view.
-    rows.push(
-      { label: "filed", value: filed(data.created_at) },
-      { label: "age", value: age(data.age_seconds) },
-    );
+    //
+    // Nor is the age. A clock a reader has to subtract from is the `filed` date
+    // said twice, and the book already answers this: it prints the date and
+    // calls the age what it is -- a question nobody asked.
+    rows.push({ label: "filed", value: filed(data.created_at) });
     return rows;
   });
 
@@ -317,14 +317,16 @@
 
       {#if hasVerbs}
         <div class="verbs">
+          <!-- Alphabetical, and fixed: a row whose verbs move around depending
+               on which ones it has is a row you have to read every time. -->
+          {#if isArchivable(data)}
+            <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
+          {/if}
           {#if data.state === "draft"}
             <CancelCard requestId={data.id} />
           {/if}
           {#if isRetryable(data)}
             <RetryCard requestId={data.id} />
-          {/if}
-          {#if isArchivable(data)}
-            <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
           {/if}
         </div>
       {/if}

@@ -799,6 +799,14 @@ test.describe("naming a request, and opening it", () => {
     await expect(page.locator(".events li")).toHaveCount(1);
     await expect(page.locator(".events li")).toContainText("submitted");
 
+    // The `filed` date, and no age beside it: an age is a clock the reader has
+    // to subtract from, which is the same fact said twice.
+    const labels = await page
+      .locator(".detail-card .meta-cell dt")
+      .allTextContents();
+    expect(labels).toContain("filed");
+    expect(labels).not.toContain("age");
+
     // The body the caller sent, verbatim, behind a disclosure.
     await page.locator("details.raw summary").click();
     await expect(page.locator("details.raw pre")).toContainText("OPRA.PILLAR");
@@ -1493,8 +1501,8 @@ test.describe("a failure says why", () => {
     const blocks = await page
       .locator(".detail-card .block")
       .evaluateAll((all) => all.map((block) => block.className));
-    expect(blocks[0]).toContain("retry");
-    expect(blocks[1]).toContain("archive");
+    expect(blocks[0]).toContain("archive");
+    expect(blocks[1]).toContain("retry");
     // The reason sits directly under the verbs and above the request: the fix,
     // then why the last attempt did not work, then what was asked for.
     expect(order.filter(Boolean).slice(0, 3)).toEqual([
@@ -1553,11 +1561,9 @@ test.describe("a retry files the same request again", () => {
     await expect(card).toBeVisible();
     // The card is a button and nothing else: retry is self-explanatory, and a
     // paragraph above it was text the reader had to get past to reach the verb.
-    await expect(
-      card.getByRole("button", { name: "Retry as a new request" }),
-    ).toBeVisible();
+    await expect(card.getByRole("button", { name: "Retry" })).toBeVisible();
     await expect(card.locator("p")).toHaveCount(0);
-    await page.getByRole("button", { name: "Retry as a new request" }).click();
+    await page.getByRole("button", { name: "Retry" }).click();
 
     // The answer is the one thing it does say: what was filed, for how much.
     await expect(card).toContainText("req_9f2c41ab");
@@ -1620,7 +1626,7 @@ test.describe("a retry files the same request again", () => {
     );
     await mock(page, { detail: failed(DRIVERLESS) });
     await page.goto("/requests/req_draft01");
-    await page.getByRole("button", { name: "Retry as a new request" }).click();
+    await page.getByRole("button", { name: "Retry" }).click();
     await expect(page.locator(".block.retry .failure")).toContainText(
       "immutable",
     );
@@ -1655,16 +1661,14 @@ test.describe("a drafted request can be cancelled", () => {
     await expect(card).toBeVisible();
     // No paragraph: the two-click confirm is the explanation.
     await expect(card.locator("p")).toHaveCount(0);
-    await expect(
-      card.getByRole("button", { name: "Cancel this request" }),
-    ).toBeVisible();
+    await expect(card.getByRole("button", { name: "Cancel" })).toBeVisible();
 
     // The first click only asks. Nothing has been posted.
-    await page.getByRole("button", { name: "Cancel this request" }).click();
+    await page.getByRole("button", { name: "Cancel" }).click();
     expect(posted).toBeNull();
-    await expect(card).toContainText("Yes, cancel it");
+    await expect(card).toContainText("Yes, cancel");
 
-    await page.getByRole("button", { name: "Yes, cancel it" }).click();
+    await page.getByRole("button", { name: "Yes, cancel" }).click();
     await expect(card).toContainText("Cancelled.");
     expect(posted).toContain("/v1/requests/req_draft01/cancel");
   });
@@ -1682,12 +1686,10 @@ test.describe("a drafted request can be cancelled", () => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    await page.getByRole("button", { name: "Cancel this request" }).click();
+    await page.getByRole("button", { name: "Cancel" }).click();
     await page.getByRole("button", { name: "Keep it" }).click();
 
-    await expect(
-      page.getByRole("button", { name: "Cancel this request" }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
     expect(posted).toBeNull();
   });
 
@@ -1746,8 +1748,8 @@ test.describe("a drafted request can be cancelled", () => {
     );
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
-    await page.getByRole("button", { name: "Cancel this request" }).click();
-    await page.getByRole("button", { name: "Yes, cancel it" }).click();
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await page.getByRole("button", { name: "Yes, cancel" }).click();
     await expect(page.locator(".block.cancel .failure")).toContainText(
       "has been authorised",
     );
@@ -1855,20 +1857,23 @@ test.describe("a finished request can be archived", () => {
     const card = page.locator(".block.archive");
     await expect(card).toBeVisible();
     await expect(card.locator("p")).toHaveCount(0);
-    await expect(
-      card.getByRole("button", { name: "Archive this request" }),
-    ).toBeVisible();
+    await expect(card.getByRole("button", { name: "Archive" })).toBeVisible();
+    // The row is alphabetical and fixed: Archive before Retry, whatever else
+    // the row offers. Two words, no explanation -- the glyph and the fill are
+    // what make them findable.
+    await expect(page.locator(".verbs").getByRole("button")).toHaveText([
+      "Archive",
+      "Retry",
+    ]);
     // The badge is untouched by the verb that hides it.
     await expect(page.locator(".block.failed")).toContainText(
       "driver_not_ready",
     );
 
-    await page.getByRole("button", { name: "Archive this request" }).click();
+    await page.getByRole("button", { name: "Archive" }).click();
     expect(posted).toEqual({ archived: true });
     // The same card is the way back.
-    await expect(
-      page.getByRole("button", { name: "Put it back in the book" }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
   });
 
   test("an archived row offers the way back, not the way out", async ({
@@ -1900,10 +1905,10 @@ test.describe("a finished request can be archived", () => {
 
     await expect(
       page.locator(".block.archive").getByRole("button", {
-        name: "Put it back in the book",
+        name: "Restore",
       }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Put it back in the book" }).click();
+    await page.getByRole("button", { name: "Restore" }).click();
     expect(posted).toEqual({ archived: false });
   });
 
