@@ -35,6 +35,13 @@ The deadline table duplicates `wire.DEADLINES` in `data-download-drivers` on
 purpose: the client's patience must not be dictated by the thing it is waiting
 for. The conformance suite (phase D) asserts the two tables agree, so the copy
 cannot drift silently.
+
+Agreeing is not the same as being equal, and `CLIENT_GRACE_S` is the difference.
+The runtime enforces its deadline and answers `timeout`; the client waits
+*longer* so that answer can arrive. With both at the same number the client
+wins the race half the time and records `TimeoutError: timed out` -- a local
+socket error that says nothing about which verb was too slow, instead of the
+runtime's named refusal. Seen live, 2026-11-23.
 """
 
 from __future__ import annotations
@@ -65,6 +72,17 @@ DEADLINES: dict[str, float] = {
     "convert": 300,
     "verify": 120,
 }
+
+#: How much longer than the runtime's own deadline this client waits. The
+#: runtime is the one that decides a verb is too slow; this only has to outlast
+#: that decision, so that its answer -- `timeout: poll exceeded 60s` -- is what
+#: reaches the operator rather than a bare socket timeout.
+CLIENT_GRACE_S = 15.0
+
+def budget(verb: str) -> float:
+    """How long this client waits for `verb`: the runtime's deadline, plus grace."""
+    return DEADLINES.get(verb, DEFAULT_TIMEOUT) + CLIENT_GRACE_S
+
 
 DEFAULT_PORT = 8831
 DEFAULT_URL = f"http://data-download-drivers:{DEFAULT_PORT}"
@@ -273,7 +291,12 @@ class RemoteDriver:
         for the runtime's refusals is how two vocabularies start.
         """
         self.calls.append(verb)
-        limit = timeout if timeout is not None else (self._timeout or DEADLINES.get(verb, DEFAULT_TIMEOUT))
+        if timeout is not None:
+            limit = timeout
+        elif self._timeout:
+            limit = self._timeout
+        else:
+            limit = budget(verb)
         try:
             status, payload = runtime_http.request(
                 self._host,

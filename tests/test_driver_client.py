@@ -24,10 +24,14 @@ import pytest
 from conftest import PLAN_BODY
 from data_download import interpreter
 from data_download.driver_client import (
+    CLIENT_GRACE_S,
+    DEADLINES,
+    DEFAULT_TIMEOUT,
     PROTOCOL_VERSION,
     Artifact,
     DriverUnavailable,
     RemoteDriver,
+    budget,
     driver_for,
     installed,
 )
@@ -306,3 +310,18 @@ def test_a_wrong_token_is_the_runtime_s_refusal_not_a_local_guess(tmp_path):
     with FakeRuntime(tmp_path) as runtime:
         with pytest.raises(DriverUnavailable, match="401"):
             installed(url=runtime.url, token="not-the-minted-token")
+
+
+def test_the_client_outlasts_the_runtime_it_is_waiting_for():
+    """Equal deadlines are a race, and the client loses half of them.
+
+    The runtime enforces its own deadline and answers `timeout`; this client has
+    to still be listening when that answer arrives. When both were 30 s, `poll`
+    recorded `TimeoutError: timed out` -- a local socket error with no verb in it
+    -- instead of the runtime's named refusal (seen live, 2026-11-23).
+    """
+    assert CLIENT_GRACE_S >= 10
+    for verb, deadline in DEADLINES.items():
+        assert budget(verb) > deadline, verb
+    # A verb the table has never heard of still gets the default, plus grace.
+    assert budget("teleport") == DEFAULT_TIMEOUT + CLIENT_GRACE_S
