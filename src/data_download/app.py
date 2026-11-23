@@ -116,6 +116,9 @@ FACET_LABELS = {
     # because this map is handed over as "the names of the facets": a row in
     # `other` with no name in it would render as the word `other`.
     "other": "Other",
+    # Settled and needing nothing, so it is not in FACET_ORDER either; the
+    # route puts it in the filter bar whenever the count is non-zero.
+    "withdrawn": "Withdrawn",
 }
 TERMINAL_STATES = frozenset({"succeeded", "landed_with_errors", "failed"})
 
@@ -159,10 +162,15 @@ def _with_facet(row: dict[str, Any]) -> dict[str, Any]:
         facet = "todo"
     elif row.get("state") == "running":
         facet = "working"
-    elif row.get("state") in TERMINAL_STATES or row.get("state") == "withdrawn":
-        # `withdrawn` is settled too: nothing is expected of it, and it landed
-        # nothing. It goes in the book with the finished rows rather than in
-        # `other`, because `other` is for states this code has never heard of.
+    elif row.get("state") == "withdrawn":
+        # Its own bucket, and the only one the book does not list by default: a
+        # cancelled draft needs nothing and landed nothing, so it is noise in a
+        # list whose whole job is "what needs me". It is kept -- a row that
+        # vanished would read as a request that was never filed -- and it is
+        # reachable by name from the filter bar, which is where "did we cancel
+        # that?" gets answered.
+        facet = "withdrawn"
+    elif row.get("state") in TERMINAL_STATES:
         facet = "done"
     else:  # a state added later must still render, not vanish
         facet = "other"
@@ -1268,10 +1276,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rows = [
             _book_row(_with_facet(row), registry) for row in await store.overview()
         ]
-        keys = (*FACET_ORDER, "other")
+        keys = (*FACET_ORDER, "withdrawn", "other")
+        # `total` is what the book is *showing*, and the list it shows is the one
+        # minus the requests nobody needs to look at. Claiming 5 while listing 4
+        # would be the old bug in a new place. The facet counts come off the full
+        # list, so "Withdrawn (1)" stays reachable from the filter bar.
+        listed = [r for r in rows if r["facet"] != "withdrawn"]
         return {
-            "rows": rows,
-            "total": len(rows),
+            "rows": listed,
+            "total": len(listed),
+            "withdrawn": len(rows) - len(listed),
             "facets": {key: [r for r in rows if r["facet"] == key] for key in keys},
             "facet_order": list(FACET_ORDER),
             "facet_labels": FACET_LABELS,

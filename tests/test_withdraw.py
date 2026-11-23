@@ -235,16 +235,32 @@ def test_a_withdrawn_row_is_not_pending_and_is_not_retryable(client):
     assert "still in flight" not in error["message"]
 
 
-def test_a_withdrawn_row_is_in_the_book_with_a_badge_of_its_own(client):
-    """It landed nothing, but it must not vanish from the list."""
+def test_a_withdrawn_row_is_kept_but_not_listed(client):
+    """Settled, needing nothing: it is kept, and it is not clutter.
+
+    The list is "what needs me". A cancelled draft needs nothing, so it comes
+    out of `rows` -- and out of `total`, so the count matches what is drawn. It
+    is not gone: it is in the `withdrawn` facet, which the filter bar offers by
+    name, and `withdrawn` counts it for the badge that says so.
+    """
     request_id = _file(client)
     client.post(f"/v1/requests/{request_id}/withdraw", headers=served())
 
     book = client.get("/ui/dashboard.json").json()
-    row = next(r for r in book["rows"] if r["id"] == request_id)
+    assert request_id not in [r["id"] for r in book["rows"]]
+    assert book["total"] == len(book["rows"]) == 0
+    assert book["withdrawn"] == 1
+    assert "withdrawn" in book["facet_order"] or "withdrawn" in book["facet_labels"]
+
+    row = next(r for r in book["facets"]["withdrawn"] if r["id"] == request_id)
     assert row["state"] == "withdrawn"
-    assert row["facet"] == "done"
+    assert row["facet"] == "withdrawn"
+    assert row["facet_label"] == "Withdrawn"
     assert row["failure"] is None
+    # Everything the row knows is still there: it is filtered, not missing.
+    detail = client.get(f"/ui/request/{request_id}.json").json()
+    assert detail["state"] == "withdrawn"
+    assert detail["why"] == PLAN_BODY["why"]
 
 
 @pytest.mark.parametrize("note", [123, ["a", "list"]])

@@ -74,6 +74,11 @@
   const facets = $derived.by(() => {
     if (!data) return [];
     const order = [...data.facet_order];
+    // Two buckets that are not in `facet_order` -- one because a state this
+    // code has never heard of renders last, the other because a withdrawn row
+    // needs nothing and is deliberately not in the book's default list. Both
+    // are offered by name whenever there is one, so neither is unreachable.
+    if ((data.facets.withdrawn ?? []).length) order.push("withdrawn");
     if ((data.facets.other ?? []).length) order.push("other");
     return [
       {
@@ -98,8 +103,12 @@
 
   const rows = $derived.by(() => {
     if (!data) return [];
+    // `rows` is the book's default list, which the server already narrows (a
+    // withdrawn request is settled and needs nothing, so it is not in it). A
+    // selected facet therefore reads from `facets`, or the one bucket the
+    // server filters out could never be shown at all.
     if (show === "all") return data.rows;
-    return data.rows.filter((row) => row.facet === show);
+    return data.facets[show] ?? [];
   });
 
   // Four columns: what it is, where it is, what it costs, when it was asked

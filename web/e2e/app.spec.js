@@ -1722,3 +1722,65 @@ test.describe("a drafted request can be withdrawn", () => {
     );
   });
 });
+
+test.describe("a withdrawn request is kept, not listed", () => {
+  // The list answers "what needs me". A cancelled draft needs nothing, so the
+  // server takes it out of `rows` and out of `total` — a count that disagrees
+  // with what is drawn is the bug this is pinning. It is not gone: it is in the
+  // `withdrawn` facet, offered by name in the filter bar.
+  const withWithdrawn = (() => {
+    const row = {
+      ...dashboard.rows[0],
+      seq: 9,
+      id: "req_gone0001",
+      state: "withdrawn",
+      facet: "withdrawn",
+      facet_label: "Withdrawn",
+      failure: null,
+      stuck_condition: null,
+      stuck_detail: null,
+      approved_unclaimed: false,
+    };
+    // The server's own output, not the store: `rows` is already the list minus
+    // what needs nothing, and the withdrawn row lives in its facet alone.
+    const facets = { ...dashboard.facets, withdrawn: [row] };
+    return { ...dashboard, facets, withdrawn: 1 };
+  })();
+
+  test("is out of the default list, and the count agrees", async ({ page }) => {
+    await mock(page, { requests: withWithdrawn });
+    await page.goto("/");
+
+    await expect(page.locator(".tbl-row")).toHaveCount(dashboard.rows.length);
+    await expect(page.locator("body")).not.toContainText("#9");
+    // Five drawn, five claimed.
+    await expect(page.locator(".facet-option").first()).toContainText("5");
+  });
+
+  test("is reachable by name, with its own badge", async ({ page }) => {
+    await mock(page, { requests: withWithdrawn });
+    await page.goto("/");
+
+    const option = page
+      .locator(".facet-option")
+      .filter({ hasText: "Withdrawn" })
+      .first();
+    await expect(option).toBeVisible();
+    await expect(option).toContainText("1");
+
+    await option.click();
+    const row = page.locator(".tbl-row").filter({ hasText: "#9" });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("Withdrawn");
+  });
+
+  test("and a book with none does not offer the filter at all", async ({
+    page,
+  }) => {
+    await mock(page, { requests: dashboard });
+    await page.goto("/");
+    await expect(
+      page.locator(".facet-option").filter({ hasText: "Withdrawn" }),
+    ).toHaveCount(0);
+  });
+});

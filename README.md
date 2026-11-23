@@ -262,8 +262,14 @@ It is not a DELETE, and that is the design rather than an omission. A missing
 row reads as a request that was never filed; `withdrawn` reads as a request
 somebody looked at and dropped, which is the truth and is also the thing worth
 keeping. The badge is deliberately colourless: nothing failed and nothing
-landed. `withdrawn` rows sit in the book's finished bucket, because nothing is
-expected of them and they landed nothing.
+landed.
+
+It is kept, and it is not **listed**. The book's job is "what needs me", and a
+cancelled draft needs nothing, so `withdrawn` has its own facet that the
+dashboard leaves out of `rows` — and out of `total`, because a count that
+disagrees with what is drawn is its own bug. The filter bar offers it by name
+("Withdrawn, 1") whenever there is one, so nothing is unreachable; the page and
+its events are one click away.
 
 Only `draft` is accepted. `approved` is refused because an approval authorises
 one attempt, and once the runner may hold the lease, stopping the work is the
