@@ -412,7 +412,7 @@ test.describe("plan types", () => {
 
     await expect(page.locator(".type-card")).toHaveCount(2);
     await expect(page.locator(".toc a")).toHaveText([
-      "databento_batch_download",
+      "market_data_window",
       "http_fetch",
     ]);
 
@@ -725,7 +725,7 @@ test.describe("naming a request, and opening it", () => {
     // else in the row: it is a durable handle, and a handle is not a name.
     await expect(first.locator(".req-num")).toHaveText("#1");
     await expect(first.locator(".req-subject")).toHaveText(
-      "databento_batch_download",
+      "market_data_window",
     );
     await expect(first.locator(".req-id")).toHaveCount(0);
     await expect(first).not.toContainText("9f2a41c8");
@@ -1265,7 +1265,7 @@ test.describe("a request that is waiting, in three different ways", () => {
     // Every registered type answers, so an absent candidate is not a silence
     // a reviewer has to go looking behind.
     await expect(section.locator(".candidate").first()).toContainText(
-      "databento_batch_download",
+      "market_data_window",
     );
     await expect(section.locator(".candidate").first()).toContainText(
       "missing symbols, stype_in",

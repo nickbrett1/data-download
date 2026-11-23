@@ -43,7 +43,7 @@ from data_download import job as job_mod
 from data_download.db import ClaimRefused, Store, shift_seconds
 from data_download.driver_client import RemoteDriver
 from data_download.dryrun import OfflineDatabentoDriver
-from data_download.profiles.databento_batch_download import bind as bind_plan
+from data_download.profiles.market_data_window import bind as bind_plan
 from data_download.runner import (
     RUNNER_VERSION,
     RunRefused,
@@ -342,8 +342,20 @@ def test_a_row_with_no_vendor_in_the_registry_fails_instead_of_guessing(
     request_id = _approved(client, settings)
     conn = sqlite3.connect(settings.db_path)
     try:
+        # Both handles gone: the type is retired *and* the params no longer name
+        # a seller. One alone would still be enough to find the vendor now that a
+        # single plan type serves every vendor.
+        raw = conn.execute(
+            "SELECT params_json FROM requests WHERE id = ?", (request_id,)
+        ).fetchone()[0]
+        params = json.loads(raw)
+        params.pop("vendor", None)
+        # …and a dataset code no registered type claims, or the dataset map
+        # would still name a seller.
+        params["dataset"] = "ZZZZ.UNKNOWN"
         conn.execute(
-            "UPDATE requests SET plan_type = 'retired_plan' WHERE id = ?", (request_id,)
+            "UPDATE requests SET plan_type = 'retired_plan', params_json = ? WHERE id = ?",
+            (json.dumps(params), request_id),
         )
         conn.commit()
     finally:

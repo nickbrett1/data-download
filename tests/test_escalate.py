@@ -86,7 +86,7 @@ def test_escalating_a_near_miss_is_refused_with_the_shorter_path(client):
     assert error["reason"] == "a_plan_matches"
     # The point of the refusal: what to send instead.
     would_fit = error["would_fit"]
-    assert would_fit["plan_type"] == "databento_batch_download"
+    assert would_fit["plan_type"] == "market_data_window"
     assert would_fit["missing"] == ["stype_in", "symbols"] or sorted(
         would_fit["missing"]
     ) == ["stype_in", "symbols"]
@@ -100,7 +100,7 @@ def test_a_complete_intent_binds_instead_of_waiting(client):
     detail = client.get(
         f"/v1/requests/{body['request_id']}", headers=auth()
     ).json()
-    assert detail["plan_type"] == "databento_batch_download"
+    assert detail["plan_type"] == "market_data_window"
     assert detail["job_hash"]
     assert detail["job"]["steps"]
 
@@ -144,8 +144,9 @@ def test_escalating_something_that_is_not_waiting_is_refused(client):
         "/v1/requests",
         json={
             "kind": "plan",
-            "plan_type": "databento_batch_download",
+            "plan_type": "market_data_window",
             "params": {
+                "vendor": "Databento",
                 "dataset": "GLBX.MDP3",
                 "schema": "trades",
                 "symbols": ["ES.c.0"],

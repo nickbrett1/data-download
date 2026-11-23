@@ -31,7 +31,7 @@ from data_download.driver_client import (
     driver_for,
     installed,
 )
-from data_download.profiles import databento_batch_download as databento
+from data_download.profiles import market_data_window as databento
 from fake_runtime import FakeRuntime
 
 

@@ -38,13 +38,13 @@ def test_plan_submit_returns_202_then_reads_back(client):
     assert row["request_id"] == request_id
     assert row["state"] == "draft"
     assert row["body_kind"] == "plan"
-    assert row["plan_type"] == "databento_batch_download"
+    assert row["plan_type"] == "market_data_window"
     assert row["params"] == PLAN_BODY["params"]
     assert row["intent"] is None
     # Phase 4: priced at submit, and the number is the Job's quote step.
     assert row["estimate_usd"] == QUOTE_USD
     # The Job, not the params and not the body: the Plan's binder emitted it.
-    assert row["job"]["plan"] == "databento_batch_download"
+    assert row["job"]["plan"] == "market_data_window"
     kinds = [step["kind"] for step in row["job"]["steps"]]
     assert kinds == [
         "resolve", "quote", "submit", "poll", "download", "convert", "verify",
@@ -241,7 +241,7 @@ def test_exactly_one_submitted_event(client):
     assert events[0]["actor_kind"] == "submitter"
     detail = events[0]["detail"]
     assert detail["body_kind"] == "plan"
-    assert detail["plan_type"] == "databento_batch_download"
+    assert detail["plan_type"] == "market_data_window"
     # The Job's identity is in the audit trail: what was filed, at byte level.
     assert detail["job_hash"]
 
@@ -319,4 +319,4 @@ def test_a_plan_keeps_the_why_and_the_ceiling_it_was_filed_with(client):
     ).json()
     assert detail["payload"]["why"] == body["why"]
     assert detail["max_usd"] == 40
-    assert detail["label"] == "databento_batch_download"
+    assert detail["label"] == "market_data_window"

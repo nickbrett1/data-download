@@ -34,7 +34,7 @@ PARTIAL = {
 def test_a_complete_intent_matches_the_one_registered_plan():
     report = match.attempt(FULL, REGISTRY)
     assert report["verdict"] == match.MATCHED
-    assert report["plan_type"] == "databento_batch_download"
+    assert report["plan_type"] == "market_data_window"
     chosen = next(c for c in report["candidates"] if c["verdict"] == match.MATCHED)
     # The window became start/end, and nothing was invented.
     assert chosen["params"] == {
@@ -58,7 +58,7 @@ def test_a_missing_param_is_named_and_an_example_is_offered():
     assert example["start"] == "2026-09-01"
     assert example["symbols"] == ["<symbols>"]
     # `stype_in` is an enum: the example uses a legal value, not a placeholder.
-    assert example["stype_in"] in REGISTRY.get("databento_batch_download").params_schema[
+    assert example["stype_in"] in REGISTRY.get("market_data_window").params_schema[
         "properties"
     ]["stype_in"]["enum"]
 
@@ -91,7 +91,7 @@ def test_the_report_is_reproducible():
 def test_the_registry_digest_moves_with_a_version_bump():
     """An old verdict must not read as a claim about today's registry."""
     before = match.attempt(PARTIAL, REGISTRY)["registry"]
-    plan = REGISTRY.get("databento_batch_download")
+    plan = REGISTRY.get("market_data_window")
     bumped = Registry(
         {plan.name: dataclasses.replace(plan, version=plan.version + 1)},
         REGISTRY.directory,
@@ -102,7 +102,7 @@ def test_the_registry_digest_moves_with_a_version_bump():
 
 def test_a_plan_that_claims_nothing_is_not_consulted_for_any_dataset():
     """`datasets: []` means "no claim", not "claims everything"."""
-    plan = REGISTRY.get("databento_batch_download")
+    plan = REGISTRY.get("market_data_window")
     silent = Registry(
         {plan.name: dataclasses.replace(plan, datasets=())}, REGISTRY.directory
     )

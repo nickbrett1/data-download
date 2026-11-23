@@ -4,7 +4,8 @@ The store knows what was *asked for*; the datasets root knows what *exists*.
 Neither alone answers the question a phone asks — "show me what I have, and
 what is still coming" — so this module joins them, read-only:
 
-* the vendor and dataset come from the row (plan type declaration + the Job's
+* the vendor and dataset come from the row (its params, or the plan type's
+  declaration) and the Job's
   `resolve` step), which is the same vocabulary `runner.destination` files
   under, so the tree on disk and the tree in the browser cannot drift;
 * the files come from `landing.json` when a run settled, and from the
@@ -61,6 +62,18 @@ def resolve_under(root: Path | str | None, *parts: str) -> Path | None:
     if resolved != base and base not in resolved.parents:
         return None
     return resolved
+
+
+def _params_of(row: dict[str, Any]) -> dict[str, Any]:
+    """The row's params, or `{}`. Used to name the vendor, which they carry."""
+    text = row.get("params_json")
+    if not text:
+        return {}
+    try:
+        params = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return params if isinstance(params, dict) else {}
 
 
 def _job_of(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -139,7 +152,11 @@ def _request_entry(
     job = _job_of(row)
     facts = job_facts(job)
     dataset = facts.get("dataset")
-    vendor = registry.vendor_of(row.get("plan_type"))
+    # Same order as everywhere else: the request's params name the seller
+    # (the plan type is generic), the type may pin one, the dataset code may be
+    # claimed by a registered type. Without the first step every row of a
+    # generic plan would land under "(unknown vendor)".
+    vendor = registry.vendor_of_request(row.get("plan_type"), _params_of(row))
     if not dataset:
         # No Job, no dataset: nothing this page could ever show. (An approved
         # row always has one; this is the belt to the claim's braces.)

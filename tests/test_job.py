@@ -8,7 +8,7 @@ import pytest
 
 from conftest import PLAN_BODY
 from data_download import job as job_mod
-from data_download.profiles import databento_batch_download as databento
+from data_download.profiles import market_data_window as databento
 
 
 def _job(**overrides):
@@ -84,7 +84,7 @@ def test_unknown_kind_is_refused_naming_the_index_and_the_kind():
 
 def test_unknown_top_level_key_is_refused():
     job = _job()
-    job["entrypoint"] = "data_download.profiles.databento_batch_download:bind"
+    job["entrypoint"] = "data_download.profiles.market_data_window:bind"
     with pytest.raises(job_mod.JobInvalid, match="unknown top-level"):
         job_mod.validate(job)
 

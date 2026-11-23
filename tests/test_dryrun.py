@@ -180,7 +180,7 @@ def test_the_fake_driver_makes_the_calls_it_says_it_makes(tmp_path):
     driver = dryrun.OfflineDatabentoDriver("clean", tmp_path / "worker")
     (tmp_path / "worker").mkdir()
     job = {
-        "plan": "databento_batch_download",
+        "plan": "market_data_window",
         "steps": [
             {"kind": "resolve", "kwargs": {"dataset": "D", "symbols": ["S"], "stype_in": "raw_symbol"}},
             {"kind": "quote", "kwargs": {}},

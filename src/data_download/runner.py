@@ -356,8 +356,18 @@ async def run_one(
             )
 
         dataset = dataset_of(job)
-        vendor = (registry or load_registry(find_plan_types_dir())).vendor_of(
-            row.get("plan_type")
+        # The vendor is the request's fact, on the params: one plan type serves
+        # every seller, so the type cannot say who is being asked. Parsed here
+        # because the destination path and the driver are both chosen by it --
+        # guessing one would file bytes under a vendor that never sold them.
+        try:
+            params = json.loads(row.get("params_json") or "{}")
+        except (TypeError, ValueError):
+            params = {}
+        if not isinstance(params, dict):
+            params = {}
+        vendor = (registry or load_registry(find_plan_types_dir())).vendor_of_request(
+            row.get("plan_type"), params
         )
         if not vendor:
             # The datasets root is organised by seller, and the seller is the

@@ -5,7 +5,7 @@ show a binding and a rejection without explaining pytest flags. Not a second
 implementation: it resolves through the registry, binds through the Plan's
 committed binder, and seals through `job.bind_and_seal`.
 
-    python -m data_download.bind databento_batch_download '{"dataset": ...}' \
+    python -m data_download.bind market_data_window '{"dataset": ...}' \
         --on-failure quarantine
 
 Prints the canonical Job bytes to stdout and its sha256 to stderr, so
@@ -85,8 +85,15 @@ def bind_intent(registry: Registry, body: dict[str, Any]) -> Binding:
             f"verify.on_failure {on_failure!r} is not allowed for "
             f"plan_type {plan.name!r}"
         )
+    params = dict(chosen.get("params") or {})
+    if not str(params.get("vendor") or "").strip():
+        # An intent names a dataset code and no seller -- it has no plan yet, so
+        # the vendor comes from whichever registered type claims the code. The
+        # binder requires a vendor, so an unclaimed code cannot bind (which is
+        # the same answer `vendor_for_dataset` gives everywhere else: silence).
+        params["vendor"] = registry.vendor_for_dataset(str(params.get("dataset") or ""))
     try:
-        bound = plan.binder(dict(chosen.get("params") or {}), {"on_failure": on_failure})
+        bound = plan.binder(params, {"on_failure": on_failure})
         job_text, job_digest = job_mod.bind_and_seal(bound)
     except (job_mod.JobInvalid, ValueError, KeyError) as exc:
         # A binder that refuses params its own schema accepted is a plan defect,

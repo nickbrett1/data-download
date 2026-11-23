@@ -8,7 +8,7 @@ import pytest
 
 from conftest import PLAN_BODY
 from data_download import interpreter
-from data_download.profiles import databento_batch_download as databento
+from data_download.profiles import market_data_window as databento
 
 VERIFY = {"on_failure": "quarantine"}
 

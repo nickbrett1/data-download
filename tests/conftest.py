@@ -32,8 +32,10 @@ TOKENS = {
 
 PLAN_BODY = {
     "kind": "plan",
-    "plan_type": "databento_batch_download",
+    "plan_type": "market_data_window",
     "params": {
+        # The plan type serves every seller, so the request names its own vendor.
+        "vendor": "Databento",
         "dataset": "GLBX.MDP3",
         "schema": "trades",
         "symbols": ["ES.c.0"],
@@ -145,9 +147,14 @@ def seed(db_path: Path, rows: list[dict]) -> None:
     base = {
         "state": "draft",
         "body_kind": "plan",
-        "plan_type": "databento_batch_download",
+        "plan_type": "market_data_window",
         "job_json": json.dumps({"kind": "plan"}, sort_keys=True),
-        "params_json": "{}",
+        # A plan row's params name their own vendor now (the plan type is
+        # generic), so a seeded row that is displayed as priced-and-attributed
+        # carries one.
+        "params_json": json.dumps(
+            {"vendor": "Databento", "dataset": "GLBX.MDP3"}, sort_keys=True
+        ),
         "intent_json": None,
         "estimate_usd": 1.0,
         "blocked_reason": None,

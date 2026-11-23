@@ -58,8 +58,8 @@ def _phase1_store(path: Path) -> None:
         conn.execute(
             "INSERT INTO requests (id, state, body_kind, plan_type, plan_json, "
             "params_json, payload_hash, plan_hash, why, max_usd, created_at, updated_at) "
-            "VALUES ('req_old', 'draft', 'plan', 'databento_batch_download', "
-            "'{\"plan\": \"databento_batch_download\", \"steps\": []}', '{}', 'payload-1', "
+            "VALUES ('req_old', 'draft', 'plan', 'market_data_window', "
+            "'{\"plan\": \"market_data_window\", \"steps\": []}', '{}', 'payload-1', "
             "'hash-1', 'the reason', 40, ?, ?)",
             (TS, TS),
         )
@@ -113,7 +113,7 @@ def test_an_existing_row_survives_the_rebuild(tmp_path):
     row = _row(path)
     assert row["state"] == "draft"
     assert row["job_hash"] == "hash-1"  # renamed, not recomputed
-    assert row["job_json"].startswith('{"plan": "databento_batch_download"')
+    assert row["job_json"].startswith('{"plan": "market_data_window"')
     assert row["payload_hash"] == "payload-1"
     assert row["why"] == "the reason"
     assert row["max_usd"] == 40
@@ -130,7 +130,7 @@ def test_the_payload_hash_is_no_longer_unique(tmp_path):
         conn.execute(
             "INSERT INTO requests (id, state, body_kind, plan_type, job_json, "
             "params_json, payload_hash, job_hash, created_at, updated_at) VALUES "
-            "('req_second', 'draft', 'plan', 'databento_batch_download', '{}', '{}', "
+            "('req_second', 'draft', 'plan', 'market_data_window', '{}', '{}', "
             "'payload-1', 'hash-1', ?, ?)",
             (TS, TS),
         )

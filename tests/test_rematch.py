@@ -48,8 +48,14 @@ def registry_with(tmp_path: Path, **changes):
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(PLAN_TYPES_DIR, dest)
-    path = dest / "databento_batch_download.yaml"
+    path = dest / "market_data_window.yaml"
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if "vendors" in doc and "datasets" in changes:
+        # The generic shape carries patterns per seller; a test that adds a
+        # claimed dataset adds it to the only seller there is.
+        change = changes.pop("datasets")
+        (only,) = doc["vendors"]
+        doc["vendors"][only] = change(doc["vendors"][only])
     form = str(doc.get("form") or "").strip()
     if form:
         # The params schema lives in the shared form now. Editing it there is
@@ -129,7 +135,7 @@ def test_a_plan_that_lands_later_binds_a_request_that_was_stuck(client, db_path)
     after = fetch(db_path, request_id)
     assert after["state"] == "draft"
     assert after["blocked_reason"] is None
-    assert after["plan_type"] == "databento_batch_download"
+    assert after["plan_type"] == "market_data_window"
     # Provenance, not a paraphrase: this code bound this Job.
     assert after["plan_origin"] == "rematched"
     assert after["code_ref"] == "c0ffee"

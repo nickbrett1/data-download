@@ -7,7 +7,7 @@ from conftest import auth
 
 def test_registry_ships_exactly_one_type(client):
     listing = client.get("/v1/plan-types", headers=auth()).json()
-    assert [item["name"] for item in listing["items"]] == ["databento_batch_download"]
+    assert [item["name"] for item in listing["items"]] == ["market_data_window"]
     entry = listing["items"][0]
     assert entry["verify_required"] is True
     assert entry["description"]
@@ -15,8 +15,8 @@ def test_registry_ships_exactly_one_type(client):
 
 
 def test_plan_type_detail_publishes_the_schema(client):
-    detail = client.get("/v1/plan-types/databento_batch_download", headers=auth()).json()
-    assert detail["name"] == "databento_batch_download"
+    detail = client.get("/v1/plan-types/market_data_window", headers=auth()).json()
+    assert detail["name"] == "market_data_window"
     assert detail["version"] == 1
     assert detail["params_schema"]["required"] == [
         "dataset",
@@ -59,9 +59,9 @@ def test_the_shipped_type_gets_its_schema_from_the_shared_form(tmp_path):
     from data_download.registry import load_registry
 
     registry = load_registry(_copy_registry(tmp_path))
-    entry = registry.get("databento_batch_download")
+    entry = registry.get("market_data_window")
     assert entry.form == "instruments_window"
-    assert entry.binder == "databento_batch_download"
+    assert entry.binder == "market_data_window"
     assert entry.params_schema["required"] == [
         "dataset",
         "schema",
@@ -91,7 +91,7 @@ description: Refinitiv's version of the same question.
 vendor: Refinitiv
 datasets: ["RIC/*"]
 form: instruments_window
-binder: databento_batch_download
+binder: market_data_window
 verify:
   required: true
   on_failure: [quarantine]

@@ -42,14 +42,14 @@ def test_a_type_carries_its_schema_field_by_field(client):
     text = json.dumps(_view(client))
     body = _view(client)
 
-    assert "databento_batch_download" in text
+    assert "market_data_window" in text
     # every required param is visible, flagged as required
     fields = {f["name"]: f for f in body["types"][0]["schema"]["fields"]}
     for name in ("dataset", "schema", "symbols", "stype_in", "start", "end"):
         assert name in fields, f"{name} missing from the schema view"
     assert fields["dataset"]["required"] is True
     assert body["types"][0]["schema"]["required_count"] == 6
-    assert body["types"][0]["schema"]["optional_count"] == 3
+    assert body["types"][0]["schema"]["optional_count"] == 4  # + vendor, optional so an intent matches
 
     # an enum's legal values are spelled out, not just "enum"
     for value in ("raw_symbol", "continuous", "instrument_id", "dbn", "zstd"):
@@ -67,7 +67,7 @@ def test_a_type_carries_its_schema_field_by_field(client):
     for gone in ("commit_marked", "quarantine", "job_id is the anchor"):
         assert gone not in text, f"{gone} is back in the page's view-model"
     detail = client.get(
-        "/v1/plan-types/databento_batch_download", headers=auth()
+        "/v1/plan-types/market_data_window", headers=auth()
     ).json()
     assert set(detail["verify"]["on_failure"]) == {"commit_marked", "quarantine"}
     assert "job_id is the anchor" in detail["resume"]

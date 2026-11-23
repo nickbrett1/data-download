@@ -1,4 +1,4 @@
-"""The binder for `databento_batch_download`: params in, Job out (§5.2).
+"""The binder for `market_data_window`: params in, Job out (§5.2).
 
 Deterministic and pure. No clock, no random, no vendor client, no price
 arithmetic -- a `quote` step is *emitted*, not performed; performing it is the
@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-PLAN_NAME = "databento_batch_download"
+PLAN_NAME = "market_data_window"
 
 # One poll interval, in the Job rather than in the interpreter, because how
 # often to ask a vendor is a vendor fact (§3: the kind is the abstraction, the
@@ -48,6 +48,12 @@ def bind(
         # true; `models.validate_plan` has already refused most of these.
         raise ValueError("verify.on_failure is required before a Job can be bound")
 
+    # Who is being asked. Required, because one plan type serves every seller
+    # and the driver is bound by vendor -- a Job with no vendor has no driver to
+    # call, and `driver_not_ready` at run time would be a late, expensive answer.
+    # Checked here rather than emitted: the Job is the *steps*, and the vendor is
+    # the request's fact, not a step. The runner reads it from the row.
+    _required(params, "vendor")
     dataset = _required(params, "dataset")
     schema = _required(params, "schema")
     symbols = list(_required(params, "symbols"))

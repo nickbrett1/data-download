@@ -23,6 +23,15 @@ params_schema:
   additionalProperties: false
   required: [dataset, schema, symbols, stype_in, start, end]
   properties:
+    vendor:
+      type: string
+      minLength: 1
+      description: >-
+        Who is being asked, e.g. Databento. A plan type may pin this instead (the
+        single-seller shape); an intent never carries it, and gets its vendor
+        from whichever registered type claims the dataset code. Optional here on
+        purpose -- matching asks whether a type *can* express an intent, and an
+        intent that omits the seller should still match.
     dataset:
       type: string
       minLength: 1

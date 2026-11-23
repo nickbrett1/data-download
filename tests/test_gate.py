@@ -22,7 +22,7 @@ from conftest import PLAN_BODY, PLAN_TYPES_DIR
 from data_download import job as job_mod
 from data_download import profiles
 from data_download.models import validate_plan
-from data_download.profiles import databento_batch_download as databento
+from data_download.profiles import market_data_window as databento
 from data_download.registry import load_registry
 
 VERIFY = {"on_failure": "quarantine"}
@@ -37,7 +37,7 @@ def registry():
 
 
 def test_parse_the_params_are_a_valid_instance_of_the_plans_schema(registry):
-    plan = profiles.resolve(registry, "databento_batch_download")
+    plan = profiles.resolve(registry, "market_data_window")
     validated = validate_plan(PLAN_BODY, plan.type)
     assert validated["params"] == PLAN_BODY["params"]
 
@@ -45,7 +45,7 @@ def test_parse_the_params_are_a_valid_instance_of_the_plans_schema(registry):
 def test_parse_a_missing_required_field_fails_and_names_it(registry):
     from data_download import errors
 
-    plan = profiles.resolve(registry, "databento_batch_download")
+    plan = profiles.resolve(registry, "market_data_window")
     body = json.loads(json.dumps(PLAN_BODY))
     del body["params"]["symbols"]
     with pytest.raises(errors.ApiError) as caught:
@@ -60,7 +60,7 @@ def test_parse_a_missing_required_field_fails_and_names_it(registry):
 def test_parse_a_bad_value_fails_naming_the_field_path(registry):
     from data_download import errors
 
-    plan = profiles.resolve(registry, "databento_batch_download")
+    plan = profiles.resolve(registry, "market_data_window")
     body = json.loads(json.dumps(PLAN_BODY))
     body["params"]["stype_in"] = "guessed"
     with pytest.raises(errors.ApiError) as caught:
@@ -73,7 +73,7 @@ def test_parse_a_bad_value_fails_naming_the_field_path(registry):
 
 
 def test_bind_returns_a_job_that_validates_against_the_step_schema(registry):
-    plan = profiles.resolve(registry, "databento_batch_download")
+    plan = profiles.resolve(registry, "market_data_window")
     bound = plan.binder(PLAN_BODY["params"], VERIFY)
     assert job_mod.validate(bound) is bound
 
@@ -86,7 +86,7 @@ def test_every_registry_entry_has_a_committed_binder(registry):
 def test_a_registered_plan_without_a_binder_is_a_code_defect(registry, monkeypatch):
     monkeypatch.setattr(profiles, "BINDERS", {})
     with pytest.raises(RuntimeError, match="names binder"):
-        profiles.resolve(registry, "databento_batch_download")
+        profiles.resolve(registry, "market_data_window")
 
 
 def test_an_unregistered_plan_resolves_to_none_so_the_api_can_refuse_it(registry):
@@ -135,7 +135,7 @@ def test_a_job_missing_verify_fails_at_the_interpreter_not_the_vocabulary():
 def test_verify_on_failure_outside_the_plans_set_is_refused(registry):
     from data_download import errors
 
-    plan = profiles.resolve(registry, "databento_batch_download")
+    plan = profiles.resolve(registry, "market_data_window")
     body = json.loads(json.dumps(PLAN_BODY))
     body["verify"] = {"on_failure": "ignore"}
     with pytest.raises(errors.ApiError) as caught:
@@ -145,7 +145,7 @@ def test_verify_on_failure_outside_the_plans_set_is_refused(registry):
 
 def test_a_binder_returning_a_rejected_job_fails_rather_than_skips(registry, monkeypatch):
     """No `pytest.skip`: a broken binder must make the gate red."""
-    plan = profiles.resolve(registry, "databento_batch_download")
+    plan = profiles.resolve(registry, "market_data_window")
 
     def broken(params, verify):
         return {"plan": plan.name, "steps": [{"kind": "transfer", "kwargs": {}}]}
@@ -173,7 +173,7 @@ def _bind_in_a_fresh_process(params: dict) -> bytes:
     code = (
         "import sys;"
         "from data_download import job;"
-        "from data_download.profiles import databento_batch_download as d;"
+        "from data_download.profiles import market_data_window as d;"
         f"sys.stdout.write(job.canonical(d.bind({params!r}, "
         "{'on_failure': 'quarantine'})))"
     )

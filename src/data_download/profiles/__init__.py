@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..registry import PlanType, Registry
-from . import databento_batch_download
+from . import market_data_window
 
 # The signature every binder implements. `verify` is the normalised body field
 # (`{"on_failure": ...}`), passed in rather than read from params: the Request
@@ -36,7 +36,7 @@ from . import databento_batch_download
 Binder = Callable[[Mapping[str, Any], Mapping[str, Any] | None], dict[str, Any]]
 
 BINDERS: dict[str, Binder] = {
-    databento_batch_download.PLAN_NAME: databento_batch_download.bind,
+    market_data_window.PLAN_NAME: market_data_window.bind,
 }
 
 

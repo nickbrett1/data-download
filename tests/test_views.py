@@ -337,7 +337,7 @@ def test_the_view_carries_no_server_trivia(client, db_path):
 def test_a_plan_type_card_names_its_vendor(client):
     """The type's name carries the vendor as a prefix, which is not the same
     thing as saying who sells the data to a reader who does not decode
-    `databento_batch_download`."""
+    `market_data_window`."""
     types = client.get("/ui/plan-types.json").json()["types"]
     assert [t["vendor"] for t in types] == ["Databento"]
 
@@ -458,7 +458,7 @@ def test_a_row_leads_with_the_subject_and_keeps_the_key(client, db_path):
 def test_a_plan_row_is_labelled_by_its_type(client, db_path):
     seed(db_path, [{"id": "req_plan", "state": "draft"}])
     row = _book(client)["rows"][0]
-    assert row["label"] == "databento_batch_download"
+    assert row["label"] == "market_data_window"
 
 
 def test_a_row_names_the_vendor_the_dataset_belongs_to(client, db_path):
@@ -586,7 +586,7 @@ def test_a_request_that_is_only_short_of_params_says_which_ones(client):
 
     assert row["facet"] == "needs_params"
     assert row["facet_label"] == "Needs parameters"
-    assert row["gap"]["plan_type"] == "databento_batch_download"
+    assert row["gap"]["plan_type"] == "market_data_window"
     assert row["gap"]["missing"] == ["symbols", "stype_in"]
     # The report itself does not ride on every row of the book.
     assert "match_report_json" not in row
@@ -648,12 +648,12 @@ def test_the_detail_page_carries_the_report_and_the_example_that_would_fit(clien
     # Every registered type answers, including the ones that do not claim it:
     # an absent candidate is a fact a reviewer would have to go looking for.
     assert [c["plan_type"] for c in report["candidates"]] == [
-        "databento_batch_download"
+        "market_data_window"
     ]
     assert report["candidates"][0]["missing"] == ["symbols", "stype_in"]
 
     would = report["would_fit"]
-    assert would["plan_type"] == "databento_batch_download"
+    assert would["plan_type"] == "market_data_window"
     assert would["missing"] == ["symbols", "stype_in"]
     # The supplied params are kept, and only the gaps are placeholders.
     assert would["params"]["dataset"] == "OPRA.PILLAR"

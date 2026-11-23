@@ -14,11 +14,11 @@ export const dashboard = {
       id: "req_9f2a41c8",
       created_at: "2026-11-14T23:10:00Z",
       seq: 1,
-      label: "databento_batch_download",
+      label: "market_data_window",
       vendor: "Databento",
       why: "a trades tape for the Oct expiry",
       state: "succeeded",
-      plan_type: "databento_batch_download",
+      plan_type: "market_data_window",
       estimate_usd: 0.0412,
       age_seconds: 3840,
       facet: "done",
@@ -34,11 +34,11 @@ export const dashboard = {
       id: "req_4c81be07",
       created_at: "2026-11-14T23:53:00Z",
       seq: 2,
-      label: "databento_batch_download",
+      label: "market_data_window",
       vendor: "Databento",
       why: "the MBO window the resolver priced",
       state: "running",
-      plan_type: "databento_batch_download",
+      plan_type: "market_data_window",
       estimate_usd: 0.88,
       age_seconds: 125,
       // A stuck condition outranks the state it is stuck in: this row's state
@@ -56,11 +56,11 @@ export const dashboard = {
       id: "req_b31d5e0a",
       created_at: "2026-11-14T21:40:00Z",
       seq: 3,
-      label: "databento_batch_download",
+      label: "market_data_window",
       vendor: "Databento",
       why: "one day of quotes for ES",
       state: "approved",
-      plan_type: "databento_batch_download",
+      plan_type: "market_data_window",
       estimate_usd: 1.5,
       age_seconds: 7200,
       facet: "todo",
@@ -93,7 +93,7 @@ export const dashboard = {
       gap: {
         verdict: "needs_params",
         dataset: "OPRA.PILLAR",
-        plan_type: "databento_batch_download",
+        plan_type: "market_data_window",
         missing: ["symbols", "stype_in"],
         rejected: [],
       },
@@ -108,11 +108,11 @@ export const dashboard = {
       id: "req_e55f10b2",
       created_at: "2026-11-12T15:20:00Z",
       seq: 5,
-      label: "databento_batch_download",
+      label: "market_data_window",
       vendor: "Databento",
       why: "backfill for the lake",
       state: "landed_with_errors",
-      plan_type: "databento_batch_download",
+      plan_type: "market_data_window",
       estimate_usd: 0.5,
       age_seconds: 200000,
       facet: "done",
@@ -180,10 +180,10 @@ export const emptyBook = {
 export const planTypes = {
   types: [
     {
-      name: "databento_batch_download",
+      name: "market_data_window",
       version: 3,
       vendor: "Databento",
-      anchor: "databento_batch_download",
+      anchor: "market_data_window",
       description:
         "One batch download from Databento, priced before it is approved.",
       schema: {
@@ -276,7 +276,7 @@ export const requestDetail = {
     plan_type: null,
     candidates: [
       {
-        plan_type: "databento_batch_download",
+        plan_type: "market_data_window",
         version: 1,
         vendor: "Databento",
         verdict: "needs_params",
@@ -292,7 +292,7 @@ export const requestDetail = {
       },
     ],
     would_fit: {
-      plan_type: "databento_batch_download",
+      plan_type: "market_data_window",
       missing: ["symbols", "stype_in"],
       params: {
         dataset: "OPRA.PILLAR",
@@ -338,7 +338,7 @@ export const draftDetail = {
   ...requestDetail,
   id: "req_draft01",
   seq: 6,
-  label: "databento_batch_download",
+  label: "market_data_window",
   state: "draft",
   facet: "todo",
   facet_label: "Approval",
@@ -350,7 +350,7 @@ export const draftDetail = {
   why: "test row: futures trades, ES continuous, two days",
   payload: {
     body_kind: "plan",
-    plan_type: "databento_batch_download",
+    plan_type: "market_data_window",
     params: {
       dataset: "GLBX.MDP3",
       schema: "trades",
@@ -379,7 +379,7 @@ export const draftDetail = {
       ts: "2026-11-15T23:42:33Z",
       actor_kind: "submitter",
       event: "submitted",
-      detail: { body_kind: "plan", plan_type: "databento_batch_download" },
+      detail: { body_kind: "plan", plan_type: "market_data_window" },
     },
   ],
 };
@@ -457,7 +457,7 @@ export const datasets = {
             {
               request_id: "req_landed01",
               state: "succeeded",
-              plan_type: "databento_batch_download",
+              plan_type: "market_data_window",
               vendor: "Databento",
               vendor_slug: "databento",
               dataset: "GLBX.MDP3",
@@ -499,7 +499,7 @@ export const datasets = {
             {
               request_id: "req_running01",
               state: "running",
-              plan_type: "databento_batch_download",
+              plan_type: "market_data_window",
               vendor: "Databento",
               vendor_slug: "databento",
               dataset: "GLBX.MDP3",

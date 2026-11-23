@@ -1,0 +1,53 @@
+# The one plan type this service ships, and deliberately the generic one: a
+# symbol-scoped window of records from any vendor. It exists because the *shape*
+# of that question is shared -- which instruments, which records, what window,
+# delivered how -- and because nothing in it is any one vendor's.
+#
+# The question lives in `plan_types/forms/instruments_window.yaml`. What stays
+# here is attribution: who sells which dataset codes, so an intent (which names a
+# dataset but no plan) can still be given a vendor. Adding a vendor is a line
+# under `vendors:` and a driver artefact in `data-download-drivers` -- no module,
+# no binder, no code change in this repo.
+#
+# It deliberately has no `steps` section: steps are emitted by committed code
+# (the binder), not declared here. The rejected design made every parameter
+# change a step change.
+name: market_data_window
+version: 1
+description: >-
+  A vendor job for a symbol-scoped window of records, split per day,
+  downloaded with its manifest, metadata and condition receipts.
+
+form: instruments_window
+
+# Which committed binder turns those params into a Job. A name rather than a
+# module path, so it is resolved through `profiles/BINDERS` and a Job never
+# carries a pointer to code.
+binder: market_data_window
+
+# Who sells what. Vendor vocabulary is a dataset code (`XNAS.ITCH`, `GLBX.MDP3`),
+# which means nothing without its seller, so the mapping is declared once here.
+# `datasets:` (the union of these patterns) is what matching uses; the mapping is
+# what `vendor_for_dataset` uses to name the vendor on a row that has no plan.
+vendors:
+  Databento:
+    - "*.ITCH"
+    - "*.PILLAR"
+    - "*.MDP3"
+    - "*.IMPACT"
+    - "EQUS.*"
+    - "DBEQ.*"
+
+verify:
+  required: true
+  on_failure: [commit_marked, quarantine]
+  meaning: >-
+    Compare the artifact against the vendor's own manifest: per-file sha256 and
+    row counts. A shortfall (the manifest agrees the data was never published)
+    may commit as landed_with_errors; a contradiction (the manifest claims what
+    the file lacks) or a broken verifier quarantines instead.
+
+resume: >-
+  job_id is the anchor. Record it before downloading: a completed batch job can
+  be refetched by id without paying again, whereas a streamed get_range has no
+  such handle.

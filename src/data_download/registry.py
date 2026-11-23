@@ -39,6 +39,9 @@ class PlanType:
     # row -- which has no plan type, and so no other handle on its vendor.
     vendor: str = ""
     datasets: tuple[str, ...] = ()
+    #: Dataset pattern -> seller, for a type that serves more than one vendor.
+    #: `datasets` above is always the union, so matching keeps one question.
+    vendors: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Which shared form this type's params schema came from, if any, and which
     # committed binder turns its params into a Job. `binder` is a *name*, so two
     # vendors whose question has the same shape can share one binder module --
@@ -64,6 +67,7 @@ class PlanType:
             "params_schema": self.params_schema,
             "vendor": self.vendor,
             "datasets": list(self.datasets),
+            "vendors": {name: list(patterns) for name, patterns in self.vendors.items()},
             "verify": {
                 "required": self.verify_required,
                 "on_failure": sorted(self.on_failure_allowed),
@@ -106,9 +110,37 @@ class Registry:
         if not dataset:
             return ""
         for entry in self.all():
-            if any(fnmatch(dataset, pattern) for pattern in entry.datasets):
+            for name, patterns in entry.vendors.items():
+                if any(fnmatch(dataset, pattern) for pattern in patterns):
+                    return name
+            if entry.vendor and any(
+                fnmatch(dataset, pattern) for pattern in entry.datasets
+            ):
                 return entry.vendor
         return ""
+
+    def vendor_of_request(
+        self, plan_type: str | None, params: dict[str, Any] | None
+    ) -> str:
+        """Who this request asks, in the order the answer becomes specific.
+
+        `params.vendor` first: the generic plan type serves any seller, so the
+        request itself says who is being asked. Then the type's pinned vendor,
+        for the single-seller shape. Then the dataset code, which is the last
+        handle an intent has before a plan exists.
+
+        One function because three callers need the same answer -- the row
+        (`_vendor_of`), the pricer, and the runner's destination -- and three
+        copies would eventually disagree about which driver to call.
+        """
+        fields = params or {}
+        declared = str(fields.get("vendor") or "").strip()
+        if declared:
+            return declared
+        pinned = self.vendor_of(plan_type)
+        if pinned:
+            return pinned
+        return self.vendor_for_dataset(str(fields.get("dataset") or ""))
 
 
 def _load_form(path: Path) -> tuple[str, dict[str, Any]]:
@@ -193,17 +225,55 @@ def _load_one(path: Path, forms: dict[str, dict[str, Any]]) -> PlanType:
     if bad:
         raise ValueError(f"{path}: verify.on_failure has unknown value(s) {sorted(bad)}")
 
-    datasets = doc.get("datasets") or []
-    if not isinstance(datasets, list) or not all(isinstance(d, str) for d in datasets):
-        raise ValueError(f"{path}: datasets must be a list of strings")
+    # Attribution, two accepted shapes:
+    #
+    #   vendor: Databento          one seller for every pattern below
+    #   datasets: ["*.ITCH"]
+    #
+    # or the generic one, where a single plan type serves several sellers:
+    #
+    #   vendors:
+    #     Databento: ["*.ITCH", "*.MDP3"]
+    #     Refinitiv: ["RIC/*"]
+    #
+    # `datasets` is always the union -- matching asks "does some registered type
+    # claim this code", which does not care who claims it. The mapping is what
+    # names the vendor on a row that has no plan type yet.
+    vendors_doc = doc.get("vendors")
+    vendors: dict[str, tuple[str, ...]] = {}
+    if vendors_doc is not None:
+        if not isinstance(vendors_doc, dict) or not vendors_doc:
+            raise ValueError(f"{path}: vendors must be a non-empty mapping")
+        if "datasets" in doc or "vendor" in doc:
+            raise ValueError(
+                f"{path}: declare `vendors:` or `vendor:`+`datasets:`, not both"
+            )
+        for name, patterns in vendors_doc.items():
+            if not isinstance(patterns, list) or not all(
+                isinstance(pattern, str) for pattern in patterns
+            ):
+                raise ValueError(
+                    f"{path}: vendors.{name} must be a list of dataset patterns"
+                )
+            vendors[str(name).strip()] = tuple(patterns)
+        datasets = [pattern for patterns in vendors.values() for pattern in patterns]
+    else:
+        datasets = doc.get("datasets") or []
+        if not isinstance(datasets, list) or not all(
+            isinstance(d, str) for d in datasets
+        ):
+            raise ValueError(f"{path}: datasets must be a list of strings")
 
     return PlanType(
         name=str(doc["name"]),
         version=int(doc.get("version", 1)),
         description=str(doc["description"]).strip(),
         source=path.name,
+        # A pinned vendor (the single-seller shape) if declared, else "" -- the
+        # vendor then comes from the request's params or from the dataset map.
         vendor=str(doc.get("vendor") or "").strip(),
         datasets=tuple(datasets),
+        vendors=vendors,
         verify_required=bool(verify.get("required", True)),
         on_failure_allowed=frozenset(allowed),
         params_schema=params_schema,

@@ -267,10 +267,15 @@ def _plan_type_view(entry: Any) -> dict[str, Any]:
     shape; the moment it is the registry's shape it has to be kept in step
     with a page that does not read half of it.
     """
+    # `vendor` is the pinned single-seller shape; `vendors` is the generic one.
+    # The page draws one name, so a mapped type is named by its sellers with the
+    # mapping kept alongside for a caller that wants the codes.
+    sellers = list(entry.vendors) or ([entry.vendor] if entry.vendor else [])
     return {
         "name": entry.name,
         "version": entry.version,
-        "vendor": entry.vendor,
+        "vendor": ", ".join(sellers),
+        "vendors": {name: list(p) for name, p in entry.vendors.items()},
         "description": entry.description,
         "anchor": entry.name,
         "schema": _schema_view(entry.params_schema or {}),
@@ -420,18 +425,16 @@ def _label(row: dict[str, Any]) -> str:
 
 
 def _vendor_of(row: dict[str, Any], registry: Registry) -> str:
-    """Who is being asked for the data.
+    """Who is being asked for the data: the params, the type, or the dataset code.
 
-    A plan row is filed against a plan type, and the type declares its vendor.
-    An intent names a dataset in vendor vocabulary and has no type yet, so the
-    vendor comes from whichever registered type claims that dataset code. An
-    unclaimed code gets "" -- the row says nothing rather than guessing, and
-    the detail page still prints the dataset verbatim.
+    Since the plan type is generic, the request itself names its vendor, so that
+    is the first answer. A type that pins a vendor (the single-seller shape) is
+    the second. An intent that names only a dataset code gets the vendor from
+    whichever registered type claims the code, and an unclaimed code gets "" --
+    the row says nothing rather than guessing, and the detail page still prints
+    the dataset verbatim.
     """
-    plan_type = row.get("plan_type")
-    if plan_type:
-        return registry.vendor_of(str(plan_type))
-    return registry.vendor_for_dataset(str(_params_of(row).get("dataset") or ""))
+    return registry.vendor_of_request(row.get("plan_type"), _params_of(row))
 
 
 def _gap_of(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -786,7 +789,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # and no row if either fails -- an unpriced draft is a request
             # nobody can authorise honestly, because approving it means
             # approving a number that does not exist.
-            estimate = await _price(request, job_text, plan.type.vendor)
+            estimate = await _price(
+                request, job_text, registry.vendor_of_request(plan.name, validated["params"])
+            )
             submit_quote = estimate
             ceiling = body.get("max_usd")
             if isinstance(ceiling, (int, float)) and estimate > ceiling:
@@ -852,7 +857,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ceiling_reason = None
             refused_quote = None
             if job_text:
-                estimate = await _price(request, job_text, registry.vendor_of(plan_type))
+                estimate = await _price(
+                    request, job_text, registry.vendor_of_request(plan_type, params)
+                )
                 ceiling = body.get("max_usd")
                 if isinstance(ceiling, (int, float)) and estimate > ceiling:
                     ceiling_reason = "ceiling_exceeded"
