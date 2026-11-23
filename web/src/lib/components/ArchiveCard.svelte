@@ -69,39 +69,31 @@
   {#if whoFailure}
     <p class="failure">{whoFailure}</p>
   {:else if !who}
-    <p class="quiet">Asking the server who this door thinks you are…</p>
+    <p class="quiet">Checking who you are…</p>
+  {:else if who.approver}
+    <div class="row">
+      <button
+        class="btn"
+        type="button"
+        disabled={stage === "busy"}
+        onclick={toggle}
+      >
+        {archived ? "Put it back in the book" : "Archive this request"}
+      </button>
+      <span class="caption">
+        {#if archived}
+          It keeps its state and its events; this only puts it back in the list.
+        {:else}
+          Out of the list — nothing is deleted, and nothing is spent.
+        {/if}
+      </span>
+    </div>
   {:else}
-    {#if archived}
-      <p class="ask">
-        This request is archived: it keeps its state and its events, and the
-        book's list leaves it out. Putting it back changes nothing else.
-      </p>
-    {:else}
-      <p class="ask">
-        Finished with this one? Archiving takes it out of the book's list. The
-        row stays exactly as it is — same state, same errors, same events — and
-        the book's <em>Archived</em> filter finds it again. Nothing is deleted and
-        nothing is spent.
-      </p>
-    {/if}
-    {#if who.approver}
-      <div class="row">
-        <button
-          class="btn"
-          type="button"
-          disabled={stage === "busy"}
-          onclick={toggle}
-        >
-          {archived ? "Put it back in the book" : "Archive this request"}
-        </button>
-      </div>
-    {:else}
-      <p class="quiet">
-        Archiving as <strong>{who.login}</strong> is refused: that login may
-        read but not file, because it is not named in
-        <code>DATA_DOWNLOAD_APPROVERS</code>.
-      </p>
-    {/if}
+    <p class="quiet">
+      Archiving as <strong>{who.login}</strong> is refused: that login may read
+      but not file, because it is not named in
+      <code>DATA_DOWNLOAD_APPROVERS</code>.
+    </p>
   {/if}
   {#if failure}
     <p class="failure">{failure}</p>
@@ -113,11 +105,10 @@
     margin: 0 0 20px;
   }
 
-  .ask {
-    margin: 8px 0 0;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--ink);
+  .caption {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--ink-muted);
   }
 
   .row {

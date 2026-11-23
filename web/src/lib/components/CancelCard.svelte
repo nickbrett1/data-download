@@ -64,51 +64,47 @@
   <p class="micro">cancel</p>
   {#if done}
     <p class="quiet">
-      Cancelled. Nothing was downloaded and nothing was spent, and the row stays
-      here with its events — filing it again is a new request, not an undo.
+      Cancelled. Nothing is spent, and the row stays here with its events.
     </p>
   {:else if whoFailure}
     <p class="failure">{whoFailure}</p>
   {:else if !who}
-    <p class="quiet">Asking the server who this door thinks you are…</p>
+    <p class="quiet">Checking who you are…</p>
+  {:else if who.approver}
+    <div class="row">
+      {#if confirming}
+        <button
+          class="btn danger"
+          type="button"
+          disabled={stage === "busy"}
+          onclick={cancel}
+        >
+          Yes, cancel it
+        </button>
+        <button
+          class="btn"
+          type="button"
+          disabled={stage === "busy"}
+          onclick={() => (confirming = false)}
+        >
+          Keep it
+        </button>
+      {:else}
+        <button class="btn" type="button" onclick={() => (confirming = true)}>
+          Cancel this request
+        </button>
+        <span class="caption"
+          >Stops it before approval. Nothing is spent, and the row stays —
+          marked <em>cancelled</em>.</span
+        >
+      {/if}
+    </div>
   {:else}
-    <p class="ask">
-      Takes this request out of the queue for good: it will not be approved, it
-      will not run, and nothing is spent. The row stays on this page — with its
-      quote, its <em>why</em> and its events — marked <em>cancelled</em>.
+    <p class="quiet">
+      Cancelling as <strong>{who.login}</strong> is refused: that login may read
+      but not file, because it is not named in
+      <code>DATA_DOWNLOAD_APPROVERS</code>.
     </p>
-    {#if who.approver}
-      <div class="row">
-        {#if confirming}
-          <button
-            class="btn danger"
-            type="button"
-            disabled={stage === "busy"}
-            onclick={cancel}
-          >
-            Yes, cancel it
-          </button>
-          <button
-            class="btn"
-            type="button"
-            disabled={stage === "busy"}
-            onclick={() => (confirming = false)}
-          >
-            Keep it
-          </button>
-        {:else}
-          <button class="btn" type="button" onclick={() => (confirming = true)}>
-            Cancel this request
-          </button>
-        {/if}
-      </div>
-    {:else}
-      <p class="quiet">
-        Cancelling as <strong>{who.login}</strong> is refused: that login may
-        read but not file, because it is not named in
-        <code>DATA_DOWNLOAD_APPROVERS</code>.
-      </p>
-    {/if}
   {/if}
   {#if failure}
     <p class="failure">{failure}</p>
@@ -120,11 +116,10 @@
     margin: 0 0 20px;
   }
 
-  .ask {
-    margin: 8px 0 0;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--ink);
+  .caption {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--ink-muted);
   }
 
   .row {

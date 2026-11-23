@@ -804,13 +804,14 @@ test.describe("naming a request, and opening it", () => {
     await expect(page.locator("details.raw pre")).toContainText("OPRA.PILLAR");
   });
 
-  test("the request is read before the decision about it", async ({ page }) => {
+  test("the verbs lead, and the evidence follows them", async ({ page }) => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    // The order is the argument: what was asked for, then why, then the verb.
-    // "what was asked for" used to sit third, under the approve card -- the
-    // reader got the decision before the thing being decided about.
+    // The order is the argument: the verbs first, because that is what the
+    // page is opened to do, then what was asked for and why, as the evidence.
+    // The verbs used to be scattered down the page -- cancel under the params
+    // and the `why` -- which is what made them hard to find.
     const order = await page
       .locator(".detail-card .block")
       .evaluateAll((blocks) =>
@@ -818,7 +819,12 @@ test.describe("naming a request, and opening it", () => {
           block.querySelector(".micro")?.textContent.trim(),
         ),
       );
-    expect(order.slice(0, 3)).toEqual(["what was asked for", "why", "spend"]);
+    expect(order.slice(0, 4)).toEqual([
+      "spend",
+      "cancel",
+      "what was asked for",
+      "why",
+    ]);
 
     const request = page.locator(".block.request");
     // A request as a person says it: the list is a list and the window is a
@@ -1466,7 +1472,9 @@ test.describe("a failure says why", () => {
       "no driver is installed for vendor 'Databento' (installed: stub v1 (Stub))",
     );
 
-    // And it leads: a reader opening a failed row is asking this first.
+    // And it sits directly under the verbs, above the request itself: the
+    // reader gets the fix, then why the last attempt did not work, then what
+    // was asked for.
     const order = await page
       .locator(".detail-card .block")
       .evaluateAll((blocks) =>
@@ -1474,7 +1482,10 @@ test.describe("a failure says why", () => {
           block.querySelector(".micro")?.textContent.trim(),
         ),
       );
-    expect(order[0]).toBe("why it failed");
+    expect(order.slice(0, 2)).toEqual(["retry", "archive"]);
+    expect(order.indexOf("why it failed")).toBeLessThan(
+      order.indexOf("what was asked for"),
+    );
   });
 
   test("a row that did not fail grows no empty heading", async ({ page }) => {
@@ -1623,7 +1634,7 @@ test.describe("a drafted request can be cancelled", () => {
     await expect(card).toBeVisible();
     // What it does is stated before the first click, including the part that
     // matters: nothing is spent, and the row is not deleted.
-    await expect(card).toContainText("nothing is spent");
+    await expect(card).toContainText("Nothing is spent");
     await expect(card).toContainText("marked");
 
     // The first click only asks. Nothing has been posted.

@@ -293,11 +293,48 @@
       {meta}
       pill={{ label: stateLabel(data.state), tone: stateTone(data.state) }}
     >
-      <!-- Before the request itself, when there is one: a reader who opens a
-           failed row is asking "why", and making them scroll past the params to
-           reach it is answering the question second. The code is the phrase the
-           code owns; the sentence under it is the runner's, verbatim, because
-           paraphrasing a driver's refusal is how a reason becomes a guess. -->
+      <!-- The verbs come first. This is a page somebody opens to *do*
+           something about a request, and the verbs used to be scattered down it:
+           approve and cancel under the parameters and the `why`, retry and
+           archive inside the failure block. The order they are read in now is
+           the order they are wanted in, and everything below is the evidence
+           for the decision. Each card is a labelled button with one line beside
+           it, not a paragraph: the reasoning belongs in the code, where it can
+           be revised without asking the reader to scroll past it. -->
+      {#if data.state === "draft"}
+        <ApproveCard
+          requestId={data.id}
+          maxUsd={data.max_usd}
+          estimateUsd={data.estimate_usd}
+          onapproved={() => load()}
+        />
+        <!-- The other door on the same decision: a draft can be filed and then
+             not wanted, and until this existed the only ways out were approving
+             it (a spend) or editing the store by hand (a lie about the record).
+             It sits under approve because it answers the same question. -->
+        <CancelCard requestId={data.id} />
+      {/if}
+
+      <!-- A failed row's repair: file the same body again as a *new* request.
+           Offered only where a retry can change anything -- the server refuses a
+           row that has not settled and refuses a verifier's verdict, and
+           `isRetryable` mirrors that set. -->
+      {#if isRetryable(data)}
+        <RetryCard requestId={data.id} />
+      {/if}
+
+      <!-- The verb a finished row was missing: not cancel (which would rewrite
+           the outcome) but archive, which keeps the badge and takes the row out
+           of the list. On an archived row the same card is the way back, so
+           hiding is never a one-way door. -->
+      {#if isArchivable(data)}
+        <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
+      {/if}
+
+      <!-- Under the verbs, because they are about this: a reader who opens a
+           failed row is asking "why", and the code is the phrase the code owns.
+           The sentence under it is the runner's, verbatim, because paraphrasing
+           a driver's refusal is how a reason becomes a guess. -->
       {#if data.failure}
         <section class="block failed">
           <p class="micro">why it failed</p>
@@ -306,27 +343,9 @@
             <p class="failed-detail">{data.failure.detail}</p>
           {/if}
         </section>
-        <!-- Beside the reason, because that is where the reader's next question
-             is. Offered only where a retry can change anything: the server
-             refuses a row that has not settled, and refuses a verifier's
-             verdict, and `isRetryable` mirrors that set. -->
-        {#if isRetryable(data)}
-          <RetryCard requestId={data.id} />
-        {/if}
       {/if}
 
-      <!-- The verb a finished row was missing: not cancel (which would
-           rewrite the outcome) but archive, which keeps the badge and takes the
-           row out of the list. On an archived row the same card is the way
-           back, so hiding is never a one-way door. -->
-      {#if isArchivable(data)}
-        <ArchiveCard requestId={data.id} archivedAt={data.archived_at} />
-      {/if}
-
-      <!-- First, because it is the question somebody opened this page to ask.
-           It used to sit third, under the verb and the reason: the reader got
-           the decision before the thing being decided about. Everything below
-           is commentary on this block. -->
+      <!-- The thing being decided about, under the verbs that decide it. -->
       <section class="block request">
         <p class="micro">what was asked for</p>
         {#if asked.length || money.length}
@@ -359,29 +378,6 @@
           <p class="quiet">No reason was recorded.</p>
         {/if}
       </section>
-
-      {#if data.state === "draft"}
-        <!-- The one verb on this page, and it comes after what it decides
-             about rather than before. Rendered only where it can be used: a
-             row that is already approved gets no control, because a second
-             approval is a no-op and a disabled button would be a promise the
-             page cannot keep. -->
-        <ApproveCard
-          requestId={data.id}
-          maxUsd={data.max_usd}
-          estimateUsd={data.estimate_usd}
-          onapproved={() => load()}
-        />
-        <!-- The other door on the same decision: a draft can be filed and then
-             not wanted, and until this existed the only ways out were approving
-             it (a spend) or editing the store by hand (a lie about the record).
-             It goes under approve because it is the answer to the same
-             question, and because the card that spends should be the one read
-             first. -->
-        {#if data.state === "draft"}
-          <CancelCard requestId={data.id} />
-        {/if}
-      {/if}
 
       {#if BLOCKED.has(data.facet)}
         <section class="block">

@@ -67,42 +67,37 @@
   <p class="micro">retry</p>
   {#if filed}
     <p class="quiet">
-      Filed again as <a href={`/requests/${filed.request_id}`}
+      Filed as <a href={`/requests/${filed.request_id}`}
         ><code>{filed.request_id}</code></a
       >, quoting {filed.quote_usd === null || filed.quote_usd === undefined
         ? "nothing"
-        : `$${Number(filed.quote_usd).toFixed(4)}`}. It is waiting for approval:
-      this row is unchanged.
+        : `$${Number(filed.quote_usd).toFixed(4)}`} — waiting for approval. This row
+      is unchanged.
     </p>
   {:else if whoFailure}
     <p class="failure">{whoFailure}</p>
   {:else if !who}
-    <p class="quiet">Asking the server who this door thinks you are…</p>
+    <p class="quiet">Checking who you are…</p>
+  {:else if who.approver}
+    <div class="row">
+      <button
+        class="btn"
+        type="button"
+        disabled={stage === "busy"}
+        onclick={retry}
+      >
+        Retry as a new request
+      </button>
+      <span class="caption"
+        >Same body, fresh quote, its own row — waiting for approval.</span
+      >
+    </div>
   {:else}
-    <p class="ask">
-      Files the same request again as a <strong>new</strong> request — new id, its
-      own directory, a fresh quote — and leaves it waiting for approval. This row
-      stays exactly as it is. Nothing is downloaded and nothing is spent until somebody
-      approves the new one.
+    <p class="quiet">
+      Retrying as <strong>{who.login}</strong> is refused: that login may read
+      but not file, because it is not named in
+      <code>DATA_DOWNLOAD_APPROVERS</code>.
     </p>
-    {#if who.approver}
-      <div class="row">
-        <button
-          class="btn"
-          type="button"
-          disabled={stage === "busy"}
-          onclick={retry}
-        >
-          Retry as a new request
-        </button>
-      </div>
-    {:else}
-      <p class="quiet">
-        Retrying as <strong>{who.login}</strong> is refused: that login may read
-        but not file, because it is not named in
-        <code>DATA_DOWNLOAD_APPROVERS</code>.
-      </p>
-    {/if}
   {/if}
   {#if failure}
     <p class="failure">{failure}</p>
@@ -114,11 +109,10 @@
     margin: 0 0 20px;
   }
 
-  .ask {
-    margin: 8px 0 0;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--ink);
+  .caption {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--ink-muted);
   }
 
   .row {
