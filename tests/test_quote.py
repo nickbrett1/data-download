@@ -245,6 +245,10 @@ def test_a_blocked_request_has_no_job_to_price(client, settings):
 
 def test_a_key_builds_a_pricer_and_no_key_builds_none():
     with_key = load_settings({"DATA_DOWNLOAD_DATABENTO_KEY": "db-test"})
-    assert callable(with_key.quote)
+    # Pricing resolves by vendor now, so the setting is a resolver rather than a
+    # bare callable; a keyed deployment answers for every vendor through the
+    # local bridge until a driver for a vendor is installed.
+    assert isinstance(with_key.quote, vendor.Pricing)
+    assert callable(with_key.quote.for_vendor("Databento"))
     without = load_settings({})
     assert without.quote is None

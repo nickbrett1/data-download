@@ -1,0 +1,76 @@
+# A shared **form**: the question, with no vendor in it.
+#
+# One of these exists per *shape of question*, not per vendor. A plan type points
+# at it with `form: instruments_window` and keeps what really is vendor-specific
+# -- the vendor name, its dataset codes, and its verify policy -- on itself. Two
+# vendors asking an identical question therefore share this file, and the second
+# one is a YAML file plus a driver artefact, with no change to any code here.
+#
+# What a form is not: it cannot say *how* the answer becomes a Job. That is the
+# binder (a plan type names it with `binder:`), because a mapping from fields to
+# vendor calls is behaviour, and behaviour in a config file is how a schema grows
+# conditionals.
+#
+# A vendor whose vocabulary genuinely differs (different symbology values, no
+# symbol list at all) ships its own `params_schema:` instead of pointing here.
+# That is the honest boundary: reuse the question, don't pretend two different
+# questions are one.
+name: instruments_window
+
+params_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required: [dataset, schema, symbols, stype_in, start, end]
+  properties:
+    dataset:
+      type: string
+      minLength: 1
+      pattern: "^[A-Z0-9][A-Z0-9._-]*$"
+      description: Vendor dataset code, e.g. GLBX.MDP3, EQUS.MINI, XNAS.ITCH.
+    schema:
+      type: string
+      minLength: 1
+      pattern: "^[a-z0-9][a-z0-9-]*$"
+      description: >-
+        Which records, in the vendor's own vocabulary: mbo, mbp-1, mbp-10, tbbo,
+        trades, ohlcv-1s. Deliberately not enumerated: the legal set is the
+        vendor's, and a wrong code is a pricing question, not a schema one.
+    symbols:
+      type: array
+      minItems: 1
+      items:
+        type: string
+        minLength: 1
+      description: >-
+        Symbol list, interpreted by stype_in. ALL_SYMBOLS requires
+        stype_in=raw_symbol (§11.1).
+    stype_in:
+      type: string
+      enum: [raw_symbol, parent, continuous, instrument_id]
+      description: >-
+        How `symbols` is read. Futures series use continuous with ES.c.0; the
+        parent ES means every expiry and prices orders of magnitude more. The
+        four values are one question's parameter space, not four questions: they
+        differ only in what goes in `symbols` (phase 2, §5.3).
+    start:
+      type: string
+      pattern: "^\\d{4}-\\d{2}-\\d{2}([T ]\\d{2}:\\d{2}(:\\d{2})?(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?)?$"
+      description: Absolute window start (ISO-8601). No open-ended windows.
+    end:
+      type: string
+      pattern: "^\\d{4}-\\d{2}-\\d{2}([T ]\\d{2}:\\d{2}(:\\d{2})?(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?)?$"
+      description: Absolute window end, exclusive (ISO-8601).
+    split_duration:
+      type: string
+      enum: [day]
+      default: day
+      description: Per-day splits — the convention the store already holds.
+    encoding:
+      type: string
+      enum: [dbn, csv, json]
+      default: dbn
+    compression:
+      type: string
+      enum: [zstd, none]
+      default: zstd

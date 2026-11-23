@@ -52,6 +52,11 @@ class Plan:
 def resolve(registry: Registry, name: object) -> Plan | None:
     """Resolve a Plan by name. `None` means the registry has never heard of it.
 
+    The binder is looked up by the type's declared `binder:`, defaulting to its
+    own name. That indirection is what lets a second vendor whose question has
+    the same shape reuse an existing binder: its YAML names the binder instead
+    of requiring a module, so adding it is data plus a driver artefact.
+
     A Plan that exists in YAML but has no binder is a **code defect**, not an
     unknown plan: the registry would be advertising a capability nothing can
     bind. Raising is the fail-closed answer -- the alternative is a 500 later,
@@ -60,15 +65,21 @@ def resolve(registry: Registry, name: object) -> Plan | None:
     if not isinstance(name, str) or name not in registry:
         return None
     entry = registry.get(name)
-    binder = BINDERS.get(name)
+    binder_name = (entry.binder if entry else "") or name
+    binder = BINDERS.get(binder_name)
     if entry is None or binder is None:
         raise RuntimeError(
-            f"plan type {name!r} is declared in plan_types/ but has no binder in "
-            "data_download/profiles/; add one before shipping the type"
+            f"plan type {name!r} is declared in plan_types/ but names binder "
+            f"{binder_name!r}, which is not in data_download/profiles/; add it "
+            "before shipping the type"
         )
     return Plan(name=name, binder=binder, type=entry)
 
 
 def unbound_types(registry: Registry) -> list[str]:
-    """Registry entries with no committed binder -- a gate assertion, not a route."""
-    return [entry.name for entry in registry.all() if entry.name not in BINDERS]
+    """Registry entries naming no committed binder -- a gate assertion, not a route."""
+    return [
+        entry.name
+        for entry in registry.all()
+        if (entry.binder or entry.name) not in BINDERS
+    ]

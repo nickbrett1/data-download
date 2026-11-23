@@ -162,12 +162,18 @@ def test_the_offline_driver_is_unreachable_from_the_service():
     code = (
         "import sys, data_download.app;"
         "print('data_download.dryrun' in sys.modules, "
+        "'data_download.runner' in sys.modules, "
         "'data_download.interpreter' in sys.modules)"
     )
     finished = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     )
-    assert finished.stdout.strip() == "False False"
+    # `interpreter` is True on purpose since pricing moved to the driver's `cost`
+    # verb: `vendor` -> `driver_client` -> `interpreter.InterpreterError`, so the
+    # protocol module is in the graph. It is the vocabulary, not the flow --
+    # nothing in the app calls `interpreter.run` -- which is why `runner` stays
+    # out and is the assertion that still means something here.
+    assert finished.stdout.strip() == "False False True"
 
 
 def test_the_fake_driver_makes_the_calls_it_says_it_makes(tmp_path):

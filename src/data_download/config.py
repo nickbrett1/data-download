@@ -51,11 +51,13 @@ class Settings:
     # so a test can name it, and so the one resolution per process is visible in
     # the settings rather than hidden in a lifespan side effect.
     code_ref: str | None = None
-    # Phase 4: how a request is priced. `None` means this deployment cannot
-    # price anything (no `DATA_DOWNLOAD_DATABENTO_KEY`), and a submit that would
-    # need a number is refused rather than stored unpriced. A callable rather
-    # than a client so `pytest` injects a fake and never reaches a vendor, and so
-    # the one place a client exists stays in `vendor.py` (§5.3).
+    # Phase 4: how a request is priced -- resolved **by vendor**, because the
+    # driver installed for a vendor answers its `cost` verb. `None` means this
+    # deployment cannot price anything (no driver runtime and no local key), and
+    # a submit that would need a number is refused rather than stored unpriced.
+    # A resolver rather than a bare callable so `pytest` injects a fake and never
+    # reaches a vendor, and so the one place a client exists stays in
+    # `vendor.py` (§5.3).
     quote: object | None = None
     # Phase 5: where a runner puts bytes — `datasets/<dataset>/<request_id>/`.
     # `None` means this deployment has not said where its data lives, and the
@@ -236,18 +238,23 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         )
 
     from .coderef import resolve as resolve_code_ref
-    from .vendor import databento_pricer
+    from .vendor import Pricing, databento_pricer
 
     key = (env.get("DATA_DOWNLOAD_DATABENTO_KEY") or "").strip()
-    quote = databento_pricer(key) if key else None
-    if quote is None:
-        # Loud, like the other doors that fail closed: with no key nothing can be
-        # priced, and an unpriced request is not one anybody can approve
-        # honestly, so a plan body is refused rather than stored with a NULL
-        # estimate that would look like "we forgot".
+    # The bridge, not the design: a local SDK pricer for vendors that have no
+    # driver artefact installed yet. `DriverPricing` below prefers an installed
+    # driver, so this stops being reached the moment one exists.
+    legacy_quote = Pricing.one(databento_pricer(key)) if key else None
+    quote = legacy_quote
+    if legacy_quote is None:
+        # Loud, like the other doors that fail closed: with no key and no
+        # fallback, only a vendor with an installed driver can be priced, and a
+        # plan body that cannot be priced is refused rather than stored with a
+        # NULL estimate that would look like "we forgot".
         log.warning(
-            "DATA_DOWNLOAD_DATABENTO_KEY is unset - nothing can be priced, so a "
-            "submit that needs a number will be refused with quote_unavailable."
+            "DATA_DOWNLOAD_DATABENTO_KEY is unset - no local pricer exists, so "
+            "only a vendor with an installed driver can be priced; a submit for "
+            "any other vendor is refused with quote_unavailable."
         )
 
     datasets_raw = (env.get("DATA_DOWNLOAD_DATASETS_DIR") or "").strip()
@@ -272,6 +279,24 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
             "DRIVER_RUNTIME_TOKEN is unset - no approved request can be run: the "
             "runner refuses before claiming rather than sending an unauthenticated "
             "verb. It must match the token in the driver runtime's environment."
+        )
+
+    # Pricing, composed: the driver for that vendor if one is installed, else the
+    # local bridge (if any). Resolved per request rather than at boot so a newly
+    # installed artefact is priceable without a restart -- which is the whole
+    # point of binding by vendor (`driver_client.driver_for`).
+    if driver_runtime_token and datasets_dir:
+        from .vendor import DriverPricing
+
+        quote = DriverPricing(
+            datasets_dir=datasets_dir,
+            url=driver_runtime_url,
+            token=driver_runtime_token,
+            fallback=legacy_quote,
+        )
+        log.info(
+            "pricing: the driver runtime answers per vendor%s",
+            " (local fallback for vendors with no artefact)" if legacy_quote else "",
         )
 
     port_raw = (env.get("PORT") or "8820").strip()

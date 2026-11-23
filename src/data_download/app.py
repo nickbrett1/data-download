@@ -298,16 +298,23 @@ async def _store(request: Request) -> Store:
     return state.store
 
 
-def _price(request: Request, job_text: str) -> float:
-    """Price a bound Job, or refuse the submit (§5.2, phase 4).
+async def _price(request: Request, job_text: str, vendor_name: str | None) -> float:
+    """Price a bound Job for `vendor`, or refuse the submit (§5.2, phase 4).
 
     The pricer lives in the settings so a test can inject one and the vendor
     client stays inside `vendor.py`. A refusal here is a refusal of the *body*:
     nothing is stored, so there is no half-created row to reconcile with a
     number that may never arrive.
+
+    `vendor_name` is what selects the pricer: the driver installed for that vendor
+    answers `cost`, so pricing does not have to live in this repo. It is a
+    blocking call (a real HTTP verb, or an SDK read), so it runs in a thread --
+    the submit route is async and a 30 s quote must not freeze the page.
     """
     try:
-        return vendor.price(job_text, request.app.state.settings.quote)  # type: ignore[arg-type]
+        return await asyncio.to_thread(
+            vendor.price, job_text, request.app.state.settings.quote, vendor_name
+        )
     except vendor.QuoteUnavailable as exc:
         raise errors.quote_unavailable(str(exc)) from None
 
@@ -779,7 +786,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # and no row if either fails -- an unpriced draft is a request
             # nobody can authorise honestly, because approving it means
             # approving a number that does not exist.
-            estimate = _price(request, job_text)
+            estimate = await _price(request, job_text, plan.type.vendor)
             submit_quote = estimate
             ceiling = body.get("max_usd")
             if isinstance(ceiling, (int, float)) and estimate > ceiling:
@@ -845,7 +852,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ceiling_reason = None
             refused_quote = None
             if job_text:
-                estimate = _price(request, job_text)
+                estimate = await _price(request, job_text, registry.vendor_of(plan_type))
                 ceiling = body.get("max_usd")
                 if isinstance(ceiling, (int, float)) and estimate > ceiling:
                     ceiling_reason = "ceiling_exceeded"
@@ -964,7 +971,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 f"request {request_id!r} is {row['state']} with no Job, so there "
                 "is nothing to price yet"
             )
-        estimate = _price(request, job_text)
+        estimate = await _price(request, job_text, _vendor_of(row, registry))
         return JSONResponse(
             content={
                 "request_id": request_id,

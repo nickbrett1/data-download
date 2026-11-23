@@ -39,6 +39,13 @@ class PlanType:
     # row -- which has no plan type, and so no other handle on its vendor.
     vendor: str = ""
     datasets: tuple[str, ...] = ()
+    # Which shared form this type's params schema came from, if any, and which
+    # committed binder turns its params into a Job. `binder` is a *name*, so two
+    # vendors whose question has the same shape can share one binder module --
+    # adding the second vendor is then a YAML file and a driver artefact, and no
+    # change to this repo's code.
+    form: str = ""
+    binder: str = ""
 
     def index_entry(self) -> dict[str, Any]:
         """What `GET /v1/plan-types` returns: enough to decide, not the schema."""
@@ -104,17 +111,77 @@ class Registry:
         return ""
 
 
-def _load_one(path: Path) -> PlanType:
+def _load_form(path: Path) -> tuple[str, dict[str, Any]]:
+    """One shared form: a params schema a plan type may reference by name.
+
+    A form is the *question* -- which fields a person fills in and how they are
+    validated -- with no vendor in it. The vendor, its dataset codes and its
+    verify policy stay on the plan type, because those differ per vendor even
+    when the question does not.
+    """
+    with path.open("r", encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh)
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path}: top level must be a mapping")
+    name = str(doc.get("name") or path.stem)
+    if name != path.stem:
+        raise ValueError(f"{path}: name {name!r} must match the filename")
+    schema = doc.get("params_schema")
+    if not isinstance(schema, dict):
+        raise ValueError(f"{path}: params_schema must be a mapping")
+    return name, schema
+
+
+def _load_forms(directory: Path) -> dict[str, dict[str, Any]]:
+    forms: dict[str, dict[str, Any]] = {}
+    if not directory.is_dir():
+        return forms
+    for path in sorted(directory.glob("*.yaml")) + sorted(directory.glob("*.yml")):
+        name, schema = _load_form(path)
+        if name in forms:
+            raise ValueError(f"{path}: duplicate form {name!r}")
+        forms[name] = schema
+    return forms
+
+
+def _load_one(path: Path, forms: dict[str, dict[str, Any]]) -> PlanType:
     with path.open("r", encoding="utf-8") as fh:
         doc = yaml.safe_load(fh)
     if not isinstance(doc, dict):
         raise ValueError(f"{path}: top level must be a mapping")
 
-    for key in ("name", "description", "params_schema"):
+    for key in ("name", "description"):
         if key not in doc:
             raise ValueError(f"{path}: missing required key {key!r}")
     if doc["name"] != path.stem:
         raise ValueError(f"{path}: name {doc['name']!r} must match the filename")
+
+    form = str(doc.get("form") or "").strip()
+    if form and "params_schema" in doc:
+        # One or the other: a type that both references a shared form and ships
+        # its own schema has two answers to "what may I be asked", and which one
+        # validation used would depend on the loader.
+        raise ValueError(
+            f"{path}: declare `form:` or `params_schema:`, not both"
+        )
+    if form:
+        shared = forms.get(form)
+        if shared is None:
+            known = ", ".join(sorted(forms)) or "none"
+            raise ValueError(
+                f"{path}: form {form!r} is not declared in the forms directory "
+                f"(defined: {known})"
+            )
+        params_schema: Any = shared
+    elif "params_schema" in doc:
+        params_schema = doc["params_schema"]
+    else:
+        raise ValueError(
+            f"{path}: missing required key 'params_schema' (or `form:` naming a "
+            "shared form)"
+        )
+    if not isinstance(params_schema, dict):
+        raise ValueError(f"{path}: params_schema must be a mapping")
 
     verify = doc.get("verify") or {}
     if not isinstance(verify, dict):
@@ -139,7 +206,9 @@ def _load_one(path: Path) -> PlanType:
         datasets=tuple(datasets),
         verify_required=bool(verify.get("required", True)),
         on_failure_allowed=frozenset(allowed),
-        params_schema=doc["params_schema"],
+        params_schema=params_schema,
+        form=form,
+        binder=str(doc.get("binder") or "").strip(),
         verify_meaning=str(verify.get("meaning", "")).strip(),
         resume_meaning=str(doc.get("resume", "")).strip(),
     )
@@ -150,11 +219,17 @@ def load_registry(directory: Path | None) -> Registry:
         log.error("plan-types directory not found - the registry is empty")
         return Registry({}, directory)
 
+    forms = _load_forms(directory / "forms")
     types: dict[str, PlanType] = {}
     for path in sorted(directory.glob("*.yaml")) + sorted(directory.glob("*.yml")):
-        entry = _load_one(path)
+        entry = _load_one(path, forms)
         if entry.name in types:
             raise ValueError(f"{path}: duplicate plan type {entry.name!r}")
         types[entry.name] = entry
-    log.info("loaded %d plan type(s) from %s", len(types), directory)
+    log.info(
+        "loaded %d plan type(s) and %d shared form(s) from %s",
+        len(types),
+        len(forms),
+        directory,
+    )
     return Registry(types, directory)

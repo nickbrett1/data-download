@@ -85,7 +85,7 @@ def test_every_registry_entry_has_a_committed_binder(registry):
 
 def test_a_registered_plan_without_a_binder_is_a_code_defect(registry, monkeypatch):
     monkeypatch.setattr(profiles, "BINDERS", {})
-    with pytest.raises(RuntimeError, match="no binder"):
+    with pytest.raises(RuntimeError, match="names binder"):
         profiles.resolve(registry, "databento_batch_download")
 
 

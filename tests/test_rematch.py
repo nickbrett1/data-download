@@ -50,6 +50,17 @@ def registry_with(tmp_path: Path, **changes):
     shutil.copytree(PLAN_TYPES_DIR, dest)
     path = dest / "databento_batch_download.yaml"
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    form = str(doc.get("form") or "").strip()
+    if form:
+        # The params schema lives in the shared form now. Editing it there is
+        # what moves the digest, so a test that changes `params_schema` must
+        # change the file the registry actually reads.
+        form_path = dest / "forms" / f"{form}.yaml"
+        fdoc = yaml.safe_load(form_path.read_text(encoding="utf-8"))
+        if "params_schema" in changes:
+            change = changes.pop("params_schema")
+            fdoc["params_schema"] = change(fdoc["params_schema"])
+            form_path.write_text(yaml.safe_dump(fdoc, sort_keys=False), encoding="utf-8")
     for key, value in changes.items():
         doc[key] = value(doc[key]) if callable(value) else value
     path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
