@@ -59,7 +59,7 @@ from . import driver_client, interpreter
 from . import job as job_mod
 from .claim import default_owner
 from .config import find_plan_types_dir, load_settings
-from .db import ClaimRefused, Store, utcnow
+from .db import LEASE_SECONDS, ClaimRefused, Store, utcnow
 from .registry import Registry, load_registry
 
 # Bumped when this module's behaviour changes, and recorded in `landing.json` and
@@ -280,6 +280,44 @@ def state_for(disposition: str) -> str:
     return "failed"
 
 
+# -- the lease, kept while the work outlives it ---------------------------
+
+
+#: How often the heartbeat renews, as a fraction of the lease: three beats per
+#: lease, so two can be lost to a slow statement before the row is reclaimable.
+HEARTBEAT_FRACTION = 3
+
+
+async def keep_lease(
+    store: Store,
+    request_id: str,
+    owner: str,
+    *,
+    lease_seconds: int,
+    stop: asyncio.Event,
+    lost: asyncio.Event,
+) -> None:
+    """Say "still working" until `stop` is set, or until the row is not ours.
+
+    A task rather than a loop inside the run because the run is a blocking call:
+    `interpreter.run` sits in the driver's HTTP session for as long as the vendor
+    takes, so the heart has to beat on the event loop beside it (`to_thread`),
+    not inside it. Losing the lease sets `lost` rather than cancelling anything:
+    there is nothing safe to kill mid-vendor-call, and the caller checks the flag
+    before it settles -- `Store.settle`'s CAS is the real guard either way.
+    """
+    interval = max(1.0, lease_seconds / HEARTBEAT_FRACTION)
+    while True:
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+            return
+        except TimeoutError:
+            pass
+        if not await store.renew(request_id, owner, lease_seconds=lease_seconds):
+            lost.set()
+            return
+
+
 # -- one run --------------------------------------------------------------
 
 
@@ -437,8 +475,29 @@ async def run_one(
         # publishes nothing: `absent` is a file fact, not a missing directory.
         (root / relative).mkdir(parents=True, exist_ok=True)
 
+        # The flow is blocking: `interpreter.run` sits inside the driver's HTTP
+        # session for as long as the vendor takes -- 120 polls of 30 s is two
+        # hours of wall clock, none of it ours. In a thread, so the loop that
+        # serves the page (and can still take a cancel) keeps running; with a
+        # heartbeat beside it, so the lease is renewed while the work outlives
+        # it. Without the heartbeat a healthy run is reclaimed at 900 s and the
+        # vendor is asked twice (§5.2).
+        lease = LEASE_SECONDS if lease_seconds is None else lease_seconds
+        stop = asyncio.Event()
+        lost = asyncio.Event()
+        beat = asyncio.create_task(
+            keep_lease(
+                store,
+                request_id,
+                owner,
+                lease_seconds=lease,
+                stop=stop,
+                lost=lost,
+            ),
+            name=f"lease:{request_id}",
+        )
         try:
-            verdict = interpreter.run(job, driver)
+            verdict = await asyncio.to_thread(interpreter.run, job, driver)
         except interpreter.InterpreterError as exc:
             return await _settle_refusal(
                 store, request_id, owner, "failed",
@@ -446,13 +505,19 @@ async def run_one(
                 dest=root, dataset=dataset, mode=mode, now=now,
             )
         finally:
+            stop.set()
+            # Not cancelled: the heartbeat may be mid-statement, and a cancelled
+            # task would leave the write lock to be released by the unwinder.
+            await beat
             # A session is a process in the other container. Nothing else closes
             # it, and a leaked one holds a child until its deadline.
             close = getattr(driver, "close", None)
             if callable(close):
                 close()
 
-        files = landed_files(root, dest)
+        # Hashed off the loop too: this reads every landed byte, and a landing
+        # is the one thing here that is as large as the download.
+        files = await asyncio.to_thread(landed_files, root, dest)
         state = state_for(verdict.disposition)
         digest = bundle_digest(files) if state != "failed" else None
         errors = None if state == "succeeded" else dict(verdict.detail)
@@ -492,6 +557,11 @@ async def run_one(
                 "bytes": sum(int(f["bytes"]) for f in files),
                 "driver": driver_name(driver),
                 "driver_version": driver_version(driver),
+                # Only when it happened: the row was reclaimed while this
+                # attempt was still inside the vendor call, so this settle will
+                # lose its CAS and these bytes are an orphan the next claimant
+                # overwrites. Says so instead of leaving a mystery.
+                **({"lease_lost": True} if lost.is_set() else {}),
             },
             now=now,
         )
@@ -627,10 +697,10 @@ async def run(args: argparse.Namespace) -> int:
 
 
 async def _approved_ids(store: Store) -> list[str]:
-    rows, _ = await store.list_requests(state="approved", limit=100)
-    # Oldest first: a queue, not a stack. `list_requests` is newest-first for
-    # the UI.
-    return [row["id"] for row in sorted(rows, key=lambda r: str(r["created_at"]))]
+    # Oldest first: a queue, not a stack. The store answers in queue order
+    # rather than the page's newest-first, so `--next` and the worker take the
+    # same row when a backlog is larger than one page.
+    return await store.approved_ids(limit=100)
 
 
 def build_parser() -> argparse.ArgumentParser:

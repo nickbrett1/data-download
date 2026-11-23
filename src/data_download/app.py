@@ -42,6 +42,7 @@ from .db import (
 )
 from .models import validate_intent, validate_plan
 from .registry import Registry, load_registry
+from .worker import Worker
 
 log = logging.getLogger(__name__)
 
@@ -584,6 +585,47 @@ def _book_row(row: dict[str, Any], registry: Registry) -> dict[str, Any]:
     return out
 
 
+def _start_worker(
+    app: FastAPI, store: Store, registry: Registry, settings: Settings
+) -> Worker | None:
+    """Start the pick-up loop, or say why there is none.
+
+    Not started when the process cannot finish the job: no datasets directory
+    (nowhere to land) or no driver runtime token (nothing to drive). Starting it
+    anyway would mean a pass every interval that refuses the same sentence and
+    leaves the row `approved` -- the row would sit exactly where it sits now, but
+    the log would be full of a refusal that reads like a failure. `runner` being
+    off is an operator's decision; the other two are missing configuration, and
+    both are loud.
+    """
+    if not settings.runner:
+        log.info("worker: DATA_DOWNLOAD_RUNNER is off - approved requests will wait")
+        return None
+    if not settings.datasets_dir:
+        log.warning(
+            "worker: not started - DATA_DOWNLOAD_DATASETS_DIR is unset, so an "
+            "approved request has nowhere to land"
+        )
+        return None
+    if not settings.driver_ready:
+        log.warning(
+            "worker: not started - DRIVER_RUNTIME_TOKEN is unset, so no driver "
+            "can be reached"
+        )
+        return None
+
+    worker = Worker(
+        store,
+        datasets_dir=settings.datasets_dir,
+        registry=registry,
+        driver_url=settings.driver_runtime_url,
+        driver_token=settings.driver_runtime_token,
+        interval=settings.runner_interval,
+    )
+    worker.start()
+    return worker
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     _configure_logging(os.environ.get("LOG_LEVEL", "info"))
     settings = settings or load_settings()
@@ -599,6 +641,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # single-flight and the deadline makes it rate-limited.
         app.state.store_lock = asyncio.Lock()
         app.state.store_next_attempt = 0.0
+        # Phase 6: the thing that picks an approved row up. `None` means this
+        # deployment does not run, which is a state the page can report honestly
+        # ("no worker has picked it up") rather than a lie about a loop.
+        app.state.worker = None
         # Resolved once per process, not per request: a long-lived service must
         # not record two commits for one deployment (phase 3 order §5).
         app.state.code_ref = settings.code_ref
@@ -621,6 +667,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 rematch.log_summary(summary)
             except Exception as exc:  # noqa: BLE001 - never block a start on it
                 log.error("rematch pass failed at start: %s", exc)
+            # The worker starts last, after the store is open and the rematch
+            # pass has had its say: a row that binds during rematch should be
+            # visible to the first pass, not raced by it.
+            app.state.worker = _start_worker(app, store, registry, settings)
         except Exception as exc:  # noqa: BLE001 - the reason is reported, not raised
             # Up but broken is a real state: /healthz stays a liveness check that
             # does not touch the DB, so a store fault does not restart-loop the
@@ -630,6 +680,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            # Before the store closes: a pass inside a vendor call is cancelled
+            # and its lease left to expire, which is the recovery path a crash
+            # already takes. Stopping it afterwards would let it use a closed
+            # connection on the way out.
+            if app.state.worker is not None:
+                await app.state.worker.stop()
             if app.state.store is not None:
                 await app.state.store.close()
 
@@ -1258,6 +1314,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if exc.reason == "not_found":
                 raise errors.not_found(f"no request with id {request_id!r}") from None
             raise errors.approve_refused(exc.reason, exc.state) from None
+
+        if changed:
+            # The worker's latency, not its correctness: without this a row
+            # approved here waits for the next idle pass (up to `interval`), and
+            # the person who just pressed the button watches nothing happen.
+            # Told, not awaited -- the loop is the one that runs it.
+            worker = getattr(request.app.state, "worker", None)
+            if worker is not None:
+                worker.wake()
 
         return JSONResponse(
             status_code=200,

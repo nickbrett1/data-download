@@ -73,6 +73,15 @@ class Settings:
     # deployment can run a Job.
     driver_runtime_url: str | None = None
     driver_runtime_token: str | None = None
+    # Phase 6: whether this process picks approved rows up by itself. On by
+    # default, because "approved and then nothing" is the state that made the
+    # worker necessary; the switch exists so tests and the CLI can own the
+    # running without two claimants racing, not because off is a sensible default.
+    runner: bool = True
+    # How long the worker waits between passes when nothing nudges it. A pass
+    # that ran something loops again at once, so this is the idle poll, not the
+    # latency of a newly approved row.
+    runner_interval: float = 60.0
 
     @property
     def driver_ready(self) -> bool:
@@ -187,6 +196,45 @@ def parse_approvers(raw: str | None) -> frozenset[str]:
     return frozenset(part.strip().lower() for part in raw.replace(",", " ").split() if part.strip())
 
 
+def parse_switch(raw: str | None, *, default: bool = True) -> bool:
+    """`DATA_DOWNLOAD_RUNNER`: on unless it is plainly off.
+
+    An unset value or a word this module does not recognise keeps the default,
+    which is *on*. The failure modes are not symmetric: a typo that leaves the
+    worker running is visible (rows run), one that silently stops it is the bug
+    this whole phase exists to remove.
+    """
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in {"0", "false", "no", "off", "n", "f"}:
+        return False
+    if value in {"1", "true", "yes", "on", "y", "t"}:
+        return True
+    log.warning("DATA_DOWNLOAD_RUNNER=%r is not a switch - leaving it %s", raw, "on" if default else "off")
+    return default
+
+
+def parse_interval(raw: str | None, *, default: float = 60.0) -> float:
+    """`DATA_DOWNLOAD_RUNNER_INTERVAL`: seconds between idle passes.
+
+    Bounded below at 1 s so a stray `0.001` cannot turn the worker into a spin
+    loop against sqlite, and above at an hour so a fat-fingered `60000` (which
+    reads like milliseconds and is 16 hours) is refused rather than obeyed.
+    """
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("DATA_DOWNLOAD_RUNNER_INTERVAL=%r is not a number - using %ss", raw, default)
+        return default
+    if not math.isfinite(value) or value < 1 or value > 3600:
+        log.warning("DATA_DOWNLOAD_RUNNER_INTERVAL=%r is outside 1..3600 - using %ss", raw, default)
+        return default
+    return value
+
+
 def find_plan_types_dir(explicit: str | Path | None = None) -> Path | None:
     """Locate the git-defined registry: `plan_types/*.yaml` at the repo root."""
     if explicit:
@@ -299,6 +347,17 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
             " (local fallback for vendors with no artefact)" if legacy_quote else "",
         )
 
+    runner = parse_switch(env.get("DATA_DOWNLOAD_RUNNER"))
+    runner_interval = parse_interval(env.get("DATA_DOWNLOAD_RUNNER_INTERVAL"))
+    if runner and not datasets_dir:
+        # The worker would claim nothing: `run_one` refuses before the claim
+        # without a datasets directory, so every pass would be a logged refusal.
+        # Say it once, here, where the operator can act on it.
+        log.warning(
+            "DATA_DOWNLOAD_RUNNER is on but DATA_DOWNLOAD_DATASETS_DIR is unset - "
+            "approved requests will wait: there is nowhere to land bytes."
+        )
+
     port_raw = (env.get("PORT") or "8820").strip()
     try:
         port = int(port_raw)
@@ -320,6 +379,8 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         datasets_dir=datasets_dir,
         driver_runtime_url=driver_runtime_url,
         driver_runtime_token=driver_runtime_token,
+        runner=runner,
+        runner_interval=runner_interval,
     )
 
 

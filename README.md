@@ -222,6 +222,42 @@ row stays `approved` instead of becoming a `failed` row that reads like a vendor
 outcome. A new driver is an install in the other container, not a deploy of this
 one — which is why the artefact directory is not mounted here.
 
+### The worker, and why nothing waits for a command
+
+Phase 6 starts the loop that phase 5 only had a command for. An approval is now
+enough: `worker.py` runs a pass every `DATA_DOWNLOAD_RUNNER_INTERVAL` seconds
+(default 60) over the approved queue, oldest first, and the approve route
+nudges it, so a request approved on the page is picked up in milliseconds rather
+than in up to a minute. A pass that ran something goes straight back for the
+next row, so a backlog drains at the speed of the downloads.
+
+It runs **in this process**, on the app's own event loop, sharing the store and
+the registry that are already open. The queue is a SQL query, not a broker; a
+second container would want the same sqlite file (two writers, one more mount to
+get wrong) to learn what one `SELECT` answers. The claim is still the
+permission: this loop and a human running `--next` can both want one row, and
+`Store.claim`'s CAS decides, exactly as before. Nothing about the worker is
+privileged.
+
+Two things it does not do. It does not run the download on the loop — the
+interpreter is blocking (a vendor job is 120 polls of 30 s), so it goes to a
+thread and the page stays answerable, including to a cancel. And it does not
+pretend to be running when it cannot finish: with no `DATA_DOWNLOAD_DATASETS_DIR`
+or no `DRIVER_RUNTIME_TOKEN` the loop is not started at all, because a pass that
+can only log a refusal would leave the row `approved` while filling the log with
+something that reads like a failure. `DATA_DOWNLOAD_RUNNER=off` turns it off
+deliberately (tests, or a deployment that runs the CLI instead).
+
+**The lease is renewed while the work outlives it.** The 900 s default was
+doing two jobs — "how long may this be worked on" and "how long will it take" —
+and a healthy run outlives it, which means the row is reclaimable while the
+first attempt is still spending and the vendor is asked twice. A longer lease is
+the wrong fix (a crashed claimant would freeze its rows for the worst case), so
+`Store.renew` pushes the lease forward on a heartbeat at a third of its length,
+carrying the same `AND state = 'running' AND owner = ?`. A false answer means
+the row is no longer ours: the run stops and records `lease_lost` rather than
+settling, and `settle`'s CAS refuses that write anyway.
+
 ## Retrying a failed request
 
 A failed row is history and stays history. `POST /v1/requests/{id}/retry` does

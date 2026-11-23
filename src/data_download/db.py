@@ -1151,6 +1151,26 @@ class Store:
         async with self.conn.execute(sql, args) as cur:
             return [str(row["id"]) for row in await cur.fetchall()]
 
+    async def approved_ids(self, limit: int = 100) -> list[str]:
+        """The queue: every approved Request, oldest first.
+
+        A method rather than a caller sorting `list_requests`, because that
+        surface is newest-first for the page and its `limit` is applied *before*
+        any re-sort -- so a caller that sorts afterwards still takes the newest
+        N and calls the oldest of them first. On a backlog larger than the
+        window, that starves the request that has waited longest, which is the
+        one ordering rule a queue has.
+
+        Ties break on id, so two rows filed in the same second have one order
+        forever rather than whatever the storage engine returns today.
+        """
+        async with self.conn.execute(
+            "SELECT id FROM requests WHERE state = 'approved' "
+            "ORDER BY created_at ASC, id ASC LIMIT ?",
+            (limit,),
+        ) as cur:
+            return [str(row["id"]) for row in await cur.fetchall()]
+
     async def rematch(
         self,
         request_id: str,
@@ -1346,6 +1366,54 @@ class Store:
         # checkout and its sha is the build arg. Recorded, not guessed at.
         if checker(str(sha)) is False:
             raise ClaimRefused("code_ref_unknown", row["state"], code_ref=str(sha))
+
+    async def renew(
+        self,
+        request_id: str,
+        owner: str,
+        *,
+        lease_seconds: int | None = None,
+        now: str | None = None,
+    ) -> bool:
+        """Push the lease forward while a run is still working. False: it is not ours.
+
+        A lease is a promise that *someone is working on this*, not an estimate of
+        how long the work takes. The 900 s default was doing both jobs, and a
+        healthy run of 120 polls at 30 s (≈ 3600 s) outlives it -- so the row is
+        reclaimed while the first attempt is still spending, and the vendor
+        charges twice. A longer lease is not the fix: it would keep a *crashed*
+        claimant's row frozen for as long as the worst case, and the whole point
+        of the lease is that a dead process gives its rows back quickly.
+
+        So the leaseholder says "still here" on a heartbeat instead. Same
+        discipline as `settle`: `AND state = 'running' AND owner = ?`. `False`
+        means the row was reclaimed (or settled by somebody else) and this
+        attempt must stop before it spends any more -- not raise, because losing
+        the lease is the reclaim working, not an error.
+        """
+        lease = LEASE_SECONDS if lease_seconds is None else lease_seconds
+        ts = now or utcnow()
+        until = shift_seconds(ts, lease)
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                async with self.conn.execute(
+                    "UPDATE requests SET lease_until = ? "
+                    "WHERE id = ? AND state = 'running' AND owner = ?",
+                    (until, request_id, owner),
+                ) as cur:
+                    renewed = cur.rowcount == 1
+                if not renewed:
+                    await self.conn.execute("ROLLBACK")
+                    return False
+                # No event per beat: a heartbeat is bookkeeping, and a 40-minute
+                # run would otherwise write a hundred rows that all say the same
+                # thing and bury the events that say something.
+                await self.conn.execute("COMMIT")
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        return True
 
     async def release(
         self,

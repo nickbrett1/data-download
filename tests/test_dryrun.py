@@ -143,7 +143,14 @@ def test_the_dry_run_writes_nothing_outside_its_temp_directory(filed, tmp_path, 
 
 
 def test_the_offline_driver_is_unreachable_from_the_service():
-    """No route and no import path reaches the fake: it is not a second surface."""
+    """No route and no import path reaches the fake: it is not a second surface.
+
+    The runner, by contrast, *is* in this process's import graph since phase 6 --
+    the worker is the service picking approved rows up, so `app` -> `worker` ->
+    `runner` is the design rather than a leak. What must stay out is the *fake*
+    driver, and the app must not reach the runner directly: a route that imported
+    it would be a second way to start a download, outside the queue.
+    """
     import ast
     import subprocess
     import sys
@@ -158,6 +165,9 @@ def test_the_offline_driver_is_unreachable_from_the_service():
             imported.add(node.module)
     # A docstring may mention the dry run; an import would wire it in.
     assert not any("dryrun" in name or "interpreter" in name for name in imported)
+    # The runner arrives through the worker and nowhere else.
+    assert not any(name.endswith("runner") for name in imported)
+    assert any(name.split(".")[-1] == "worker" for name in imported)
 
     code = (
         "import sys, data_download.app;"
@@ -170,10 +180,11 @@ def test_the_offline_driver_is_unreachable_from_the_service():
     )
     # `interpreter` is True on purpose since pricing moved to the driver's `cost`
     # verb: `vendor` -> `driver_client` -> `interpreter.InterpreterError`, so the
-    # protocol module is in the graph. It is the vocabulary, not the flow --
-    # nothing in the app calls `interpreter.run` -- which is why `runner` stays
-    # out and is the assertion that still means something here.
-    assert finished.stdout.strip() == "False False True"
+    # protocol module is in the graph. `runner` is True since phase 6: the worker
+    # runs rows in this process. `dryrun` stays False, and that is the assertion
+    # that still means something here -- the offline fake is reachable only from
+    # the command line, never from a request.
+    assert finished.stdout.strip() == "False True True"
 
 
 def test_the_fake_driver_makes_the_calls_it_says_it_makes(tmp_path):
