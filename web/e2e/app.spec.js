@@ -412,12 +412,13 @@ test.describe("plan types", () => {
     await mock(page);
     await page.goto("/plan-types");
 
-    // One row per type, each carrying installed/sellers -- "1/1" answers "is
-    // this implemented?" before anything is clicked.
+    // One row per type, each saying in words whether it has a driver -- a
+    // "1/1" fraction was only legible to someone who already knew what it
+    // counted.
     const rail = page.locator(".rail-item");
     await expect(rail).toHaveText([
-      "market_data_window 1/1",
-      "http_fetch 0/1",
+      "market_data_window driver",
+      "http_fetch no driver",
       "all drivers 2",
     ]);
 
@@ -434,6 +435,14 @@ test.describe("plan types", () => {
     await expect(pane.locator(".driver-row")).toHaveCount(1);
     await expect(pane.locator(".vendor")).toHaveText(["Databento"]);
     await expect(pane.locator(".impl-on")).toHaveText(["databento v1"]);
+    // No ratio and no invented "seller" noun: one driver is installed.
+    await expect(pane.locator(".pane-head .micro")).toHaveText([
+      "driver installed",
+    ]);
+    await expect(pane.locator(".driver-line .micro")).toHaveText([
+      "3 dataset codes",
+    ]);
+    expect(await page.locator("body").innerText()).not.toContain("seller");
   });
 
   // A driver matches on two things, and the page says them as a rule: this

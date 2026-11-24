@@ -90,6 +90,34 @@
     hash = fragment;
   }
 
+  // How many drivers a type has, in words rather than as a fraction. "1/1" is
+  // only legible if you already know what the two numbers are, and the answer
+  // here is one thing, not a ratio.
+  function driverCount(type) {
+    const total = type.implementations.length;
+    const have = type.installed_count;
+    if (total === 0) return "";
+    if (have === 0) return "no driver";
+    if (have === total) return total === 1 ? "driver" : `${total} drivers`;
+    return `${have} of ${total} drivers`;
+  }
+
+  // The same fact on the pane, spelled out, because there it is the answer to
+  // the question rather than a hint in a rail.
+  function driverSummary(type) {
+    const total = type.implementations.length;
+    const have = type.installed_count;
+    // Nothing installed needs no summary: the row under it already says so,
+    // and repeating it in the header reads as two problems instead of one.
+    if (total === 0 || have === 0) return "";
+    if (have === total) {
+      return total === 1
+        ? "driver installed"
+        : `all ${total} drivers installed`;
+    }
+    return `${have} of ${total} drivers installed`;
+  }
+
   function driverAnswers(row) {
     return (data?.types ?? []).filter((type) =>
       row.answers.includes(type.name),
@@ -136,8 +164,8 @@
             onclick={() => go(type.name)}
           >
             <span class="rail-name">{type.name}</span>
-            <span class="rail-count"
-              >{type.installed_count}/{type.implementations.length}</span
+            <span class="rail-count" class:off={type.installed_count === 0}
+              >{driverCount(type)}</span
             >
           </button>
         {/each}
@@ -209,24 +237,21 @@
             {/if}
             <span class="pill">v{current.version}</span>
             <span class="spacer"></span>
-            <span class="micro">
-              {current.installed_count} of {current.implementations.length} sellers
-              with a driver
-            </span>
+            <span class="micro">{driverSummary(current)}</span>
           </div>
           <p class="type-desc">{current.description}</p>
 
           <h3 class="sub-head">drivers</h3>
           {#if implementations.length === 0}
             <p class="hint">
-              No seller claims this type yet, so nothing can be filed as it.
+              No vendor is listed for this type, so no driver can answer it.
             </p>
           {:else}
             {#if !data.drivers.known}
               <p class="hint">
                 Driver state is unknown — {data.drivers.detail ||
                   "the driver runtime did not answer"} — so the rows below say what
-                each seller <em>claims</em>, not what is installed.
+                what each vendor <em>should</em> have installed, not what does.
               </p>
             {/if}
             <ul class="drivers">
@@ -260,7 +285,10 @@
                       <span class="pill impl-off">no driver installed</span>
                     {/if}
                     <span class="spacer"></span>
-                    <span class="micro">{impl.datasets.length} codes</span>
+                    <span class="micro"
+                      >{impl.datasets.length} dataset
+                      {impl.datasets.length === 1 ? "code" : "codes"}</span
+                    >
                     {#if impl.driver}
                       <span class="chev" aria-hidden="true"
                         >{open ? "−" : "+"}</span
@@ -396,13 +424,17 @@
     white-space: nowrap;
   }
 
-  /* Installed/sellers, e.g. 1/1. The denominator is the point: a 1/1 and a
-     0/2 both say something a bare count cannot. */
+  /* "driver" / "no driver" / "2 of 3 drivers". A word, because a fraction is
+     only legible to someone who already knows what it counts. */
   .rail-count {
     flex: 0 0 auto;
     font-size: 10px;
+    color: var(--accent);
+  }
+
+  /* Nothing installed is not an error, so it is quiet rather than red. */
+  .rail-count.off {
     color: var(--ink-muted);
-    font-variant-numeric: tabular-nums;
   }
 
   .rail-all {
