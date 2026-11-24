@@ -331,3 +331,84 @@ generated Dockerfile, compose file and Homepage widget stay consistent:
 
 Regenerate with `overwrite: true` to apply these to an existing repo — existing
 app code is preserved; only generated infra files are updated.
+
+## 10. The driver loop (a missing driver gets built)
+
+Phase 5.5. When an approved request's vendor has no installed driver, the runner
+does **not** fail the request: it leaves the row `approved`, notes
+`driver_state`, and enqueues one `driver_jobs` row for that vendor (the partial
+unique index means ten requests for one missing driver are one job). The driver
+loop works that queue:
+
+```
+queued -> building -> gated -> probing -> merging -> installing -> installed
+              \-> needs_human        (a stop, never a retry loop)
+```
+
+`driver_build` is **run-to-exit** — one job, walk it as far as it can, return.
+Nothing idles, so `scripts/driver-loop.sh` is the supervisor:
+
+```
+while :; do python -m data_download.driver_build --once; sleep 60; done
+```
+
+### It runs on the host, not in the app container
+
+This is deliberate and it is a constraint, not a preference. Two facts decide it:
+
+- **The app image has no `git`, `gh` or `curl`.** The loop's authoring harness is
+  a process contract (a ticket on stdin, one JSON line on stdout) whose default
+  implementation clones the drivers repo, runs an agent in it, pushes a branch
+  and opens a pull request. None of that can happen in the app image.
+- **The drivers volume is mounted read-only into the runtime.** The installer
+  needs the same host directory read-write, so the loop must be the one holding
+  the writable mount.
+
+On `ryzen` the host already has `goose`, `gh` and `git`, which is exactly what
+the harness needs. `deploy/driver-loop.service` is the unit; the environment is
+in `/srv/appdata/data-download-drivers/loop.env` (mode 0600, never committed):
+
+```
+DATA_DOWNLOAD_DB=/srv/appdata/data-download/data-download.db
+DATA_DOWNLOAD_DATASETS_DIR=/srv/datasets
+DATA_DOWNLOAD_PLAN_TYPES_DIR=/srv/appdata/data-download-drivers/loop/plan_types
+DATA_DOWNLOAD_DRIVER_RUNTIME_URL=http://127.0.0.1:8831
+DRIVER_RUNTIME_TOKEN=<the token in the drivers compose .env>
+DATA_DOWNLOAD_DRIVERS_DIR=/srv/appdata/data-download-drivers/drivers
+DRIVER_LOOP_REPO=nickbrett1/data-download-drivers
+DRIVER_LOOP_GITHUB_TOKEN=<a token that can push a branch and open a PR>
+DRIVER_LOOP_AUTHOR_CMD=/srv/appdata/data-download-drivers/loop/driver-author.sh
+GITHUB_TOKEN=<same token, read by the harness>
+DRIVER_LOOP_INTERVAL=60
+```
+
+The unit is sandboxed to the two paths it legitimately writes
+(`ProtectSystem=strict` plus `ReadWritePaths` for the store and the drivers
+volume): an authored artefact can install into `drivers/` and nowhere else.
+
+### What the loop will not do
+
+- **It does not merge what it was not allowed to merge.** Every changed path in
+  the pushed commit must be under `drivers/` or `tests/fixtures/`, read from
+  GitHub's own diff. One file outside and the job stops for a human.
+- **It does not trust its own gate.** Green means every check run is complete and
+  in `success`/`neutral`/`skipped`; no check runs at all is *not* green.
+- **It does not overwrite an installed version.** `drivers/<name>/<version>/` is
+  installed by an atomic `rename` from a staging directory inside the same
+  volume, and an existing version is refused — replacing one silently is how two
+  artefacts end up claiming one vendor. A reinstall is a human's act: remove the
+  directory and let the queue notice.
+- **It does not probe for free.** The probe is the triggering request's own Job,
+  shrunk to one symbol and one day, priced *before* `submit` and refused if it
+  would exceed `PROBE_BUDGET_USD` ($1).
+
+### Watching it
+
+```
+journalctl -u driver-loop -f
+sqlite3 /srv/appdata/data-download/data-download.db \
+  "select id, vendor, state, attempts, last_error from driver_jobs order by created_at desc"
+```
+
+A row in `needs_human` is the loop saying it stopped; `last_error` names the step.
+Nothing retries it — clear or fix the cause and re-enqueue.

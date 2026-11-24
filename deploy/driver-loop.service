@@ -1,0 +1,43 @@
+[Unit]
+Description=data-download driver loop (builds a missing driver on request)
+Documentation=https://github.com/nickbrett1/data-download/blob/main/deploy/README.md
+# The loop only reads the store and the drivers volume; it needs no network of
+# its own beyond GitHub and the vendor, but a host that has not finished booting
+# has neither. `network-online` is the honest ordering, not a fix for a bug.
+After=network-online.target docker.service
+Wants=network-online.target
+# Not `Requires=`: an app restart must not silently stop driver building. The
+# loop's job is idempotent per state and it re-reads the queue each pass.
+RequiresMountsFor=/srv/appdata/data-download /srv/appdata/data-download-drivers
+
+[Service]
+Type=simple
+User=nick
+Group=nick
+EnvironmentFile=/srv/appdata/data-download-drivers/loop.env
+WorkingDirectory=/srv/appdata/data-download-drivers
+# `scripts/driver-loop.sh` is the supervisor: driver_build is run-to-exit by
+# design, so something has to call it again. The script owns the backoff and
+# says out loud when it is misconfigured (a loop that cannot author must not
+# look like an idle host).
+ExecStart=/srv/appdata/data-download-drivers/loop-venv/bin/python -m data_download.driver_build --once --author-cmd /srv/appdata/data-download-drivers/loop/driver-author.sh --repo nickbrett1/data-download-drivers --drivers-dir /srv/appdata/data-download-drivers/drivers
+# A stop is a signal, not a kill: the loop's longest step is an authoring run
+# behind a 3600 s timeout, and a job interrupted mid-install leaves a staging
+# directory that the next pass cleans up. Nothing is corrupted by a stop, so a
+# generous grace is cheaper than an impatient kill.
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=60
+
+# The store and the drivers volume are all it writes. `ProtectSystem=strict`
+# with the two explicit paths is the whole point: a driver the loop authored is
+# installed into one directory, and nothing else on the host is writable from
+# here even if an authored artefact tried.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/srv/appdata/data-download /srv/appdata/data-download-drivers
+
+[Install]
+WantedBy=multi-user.target
