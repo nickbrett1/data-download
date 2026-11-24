@@ -297,6 +297,27 @@ def _driver_artifacts(settings: Settings) -> tuple[list[Any] | None, str]:
         return None, str(exc)
 
 
+def _norm(name: Any) -> str:
+    """Vendor names compared the way a person writes them: case and spacing are
+    not information. `driver_client.driver_for` does the same thing, and the two
+    must agree or a seller would be listed as un-implemented by one and matched
+    by the other."""
+    return " ".join(str(name or "").split()).lower()
+
+
+def _sellers(entry: Any) -> dict[str, list[str]]:
+    """Who this type accepts, and which dataset codes each of them claims.
+
+    A generic type has a `vendors:` attribution table; a pinned one names its
+    single seller in `vendor:`. Normalising that here means every caller --
+    the type card and the driver index -- reads one shape.
+    """
+    sellers = {name: list(patterns) for name, patterns in entry.vendors.items()}
+    if not sellers and entry.vendor:
+        sellers = {entry.vendor: []}
+    return sellers
+
+
 def _implementations(entry: Any, artifacts: list[Any] | None) -> list[dict[str, Any]]:
     """Who can answer this type, as one row per seller.
 
@@ -307,30 +328,57 @@ def _implementations(entry: Any, artifacts: list[Any] | None) -> list[dict[str, 
     is drawn here, where both facts are actually known: the registry says who
     the question accepts, the runtime says who can currently answer it.
     """
-    sellers = {name: list(patterns) for name, patterns in entry.vendors.items()}
-    if not sellers and entry.vendor:
-        # A pinned single-seller type names its one seller in `vendor:`.
-        sellers = {entry.vendor: []}
     installed = artifacts if artifacts is not None else []
     rows = []
-    for seller, patterns in sellers.items():
+    for seller, patterns in _sellers(entry).items():
         found = driver_client.driver_for(seller, artifacts=installed)
         rows.append(
             {
                 "vendor": seller,
                 "datasets": patterns,
                 # A driver is an artefact with a version, so the page can say
-                # *which* implementation and when it is out of date.
+                # *which* implementation, and since when.
                 "driver": (
                     {
                         "name": found.driver,
                         "version": found.version,
                         "protocol": found.protocol,
+                        # A runtime older than the field simply does not say,
+                        # which is a blank cell rather than a broken page.
+                        "installed_at": getattr(found, "installed_at", ""),
                     }
                     if found
                     else None
                 ),
                 "installed": found is not None,
+            }
+        )
+    return rows
+
+
+def _installed_drivers(artifacts: list[Any] | None, entries: list[Any]) -> list[dict[str, Any]]:
+    """Every artefact the runtime has, and which plan types it can answer.
+
+    `answers` is the join a reader would otherwise do by hand: a driver answers
+    a type when its vendor is one the type accepts. An artefact answering
+    nothing is not an error -- it is installed code no question here asks for,
+    and it is better shown with that said than hidden, because "why is this
+    vendor's driver doing nothing" is a question this page should answer.
+    """
+    claims = [
+        (_norm(seller), entry.name) for entry in entries for seller in _sellers(entry)
+    ]
+    rows = []
+    for artifact in artifacts or []:
+        vendor = _norm(artifact.vendor)
+        rows.append(
+            {
+                "name": artifact.driver,
+                "version": artifact.version,
+                "vendor": artifact.vendor,
+                "protocol": artifact.protocol,
+                "installed_at": getattr(artifact, "installed_at", ""),
+                "answers": [name for claimed, name in claims if vendor and claimed == vendor],
             }
         )
     return rows
@@ -1798,9 +1846,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/ui/plan-types.json")
     async def plan_types_json(request: Request) -> dict[str, Any]:
+        entries = registry.all()
         artifacts, detail = _driver_artifacts(settings)
         return {
-            "types": [_plan_type_view(entry, artifacts) for entry in registry.all()],
+            "types": [_plan_type_view(entry, artifacts) for entry in entries],
             # A separate fact from the registry, and stated as such: what is
             # *installed* is the runtime's answer. `known: false` means nobody
             # could ask, which is not the same as "nothing is installed".
@@ -1808,6 +1857,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "known": artifacts is not None,
                 "detail": detail,
                 "count": len(artifacts or []),
+                # The browse list: every artefact, joined to the types it can
+                # answer. Separate from `types[].implementations` because an
+                # artefact may answer no type at all, and a reader browsing
+                # *drivers* should meet that one too.
+                "installed": _installed_drivers(artifacts, entries),
             },
         }
 

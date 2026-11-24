@@ -110,6 +110,10 @@ class Artifact:
     version: str
     vendor: str = ""
     protocol: int = PROTOCOL_VERSION
+    #: The runtime's own timestamp for the install, if it publishes one. Free
+    #: text: this client sorts by `version`, never by this, because a clock is
+    #: not an ordering and a redeploy copies old bytes with a new mtime.
+    installed_at: str = ""
 
     def __str__(self) -> str:
         return f"{self.driver} v{self.version}" + (f" ({self.vendor})" if self.vendor else "")
@@ -192,6 +196,7 @@ def installed(
                 version=str(entry.get("version") or "1"),
                 vendor=str(entry.get("vendor") or ""),
                 protocol=int(entry.get("protocol") or PROTOCOL_VERSION),
+                installed_at=str(entry.get("installed_at") or ""),
             )
         )
     return out

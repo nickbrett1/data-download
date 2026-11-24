@@ -202,7 +202,31 @@ export const emptyBook = {
 export const planTypes = {
   // Whether anyone could ask the runtime what is installed -- `known: false` is
   // "unknown", which is not the same answer as "nothing installed".
-  drivers: { known: true, detail: "", count: 1 },
+  drivers: {
+    known: true,
+    detail: "",
+    count: 2,
+    // The browse list: every artefact, joined to the types it answers. `stub`
+    // answers nothing, which is a state the page has to draw rather than hide.
+    installed: [
+      {
+        name: "databento",
+        version: "1",
+        vendor: "Databento",
+        protocol: 1,
+        installed_at: "2026-11-23T00:00:00Z",
+        answers: ["market_data_window"],
+      },
+      {
+        name: "stub",
+        version: "1",
+        vendor: "Stub",
+        protocol: 1,
+        installed_at: "2026-11-22T00:00:00Z",
+        answers: [],
+      },
+    ],
+  },
   types: [
     {
       name: "market_data_window",
@@ -217,7 +241,12 @@ export const planTypes = {
         {
           vendor: "Databento",
           datasets: ["*.ITCH", "*.MDP3", "EQUS.*"],
-          driver: { name: "databento", version: "1", protocol: 1 },
+          driver: {
+            name: "databento",
+            version: "1",
+            protocol: 1,
+            installed_at: "2026-11-23T00:00:00Z",
+          },
           installed: true,
         },
       ],

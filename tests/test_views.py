@@ -377,12 +377,30 @@ def test_an_installed_driver_is_shown_as_the_implementation(client, monkeypatch)
         ),
     )
     body = client.get("/ui/plan-types.json").json()
-    assert body["drivers"] == {"known": True, "detail": "", "count": 1}
+    assert body["drivers"]["known"] is True
+    assert body["drivers"]["count"] == 1
     row = body["types"][0]["implementations"][0]
     assert row["vendor"] == "Databento"
-    assert row["driver"] == {"name": "databento", "version": "1", "protocol": 1}
+    assert row["driver"] == {
+        "name": "databento",
+        "version": "1",
+        "protocol": 1,
+        "installed_at": "",
+    }
     assert row["installed"] is True
     assert body["types"][0]["installed_count"] == 1
+    # The browse list the page filters: every artefact, and the types its
+    # vendor lets it answer -- not the type's view of itself.
+    assert body["drivers"]["installed"] == [
+        {
+            "name": "databento",
+            "version": "1",
+            "vendor": "Databento",
+            "protocol": 1,
+            "installed_at": "",
+            "answers": ["market_data_window"],
+        }
+    ]
 
 
 def test_an_unreachable_runtime_is_unknown_not_empty(client, monkeypatch):
@@ -396,6 +414,40 @@ def test_an_unreachable_runtime_is_unknown_not_empty(client, monkeypatch):
     assert body["drivers"]["known"] is False
     assert "connection refused" in body["drivers"]["detail"]
     assert body["types"][0]["implementations"][0]["installed"] is False
+
+
+def test_a_driver_that_answers_no_plan_type_is_still_listed(client, monkeypatch):
+    """"Installed and matching nothing" is a fact worth showing, not a gap.
+
+    The runtime carries the conformance stub, whose vendor no plan type accepts.
+    Filtering it out of the browse list would make the driver count disagree
+    with the list under it, and would hide the one artefact an operator is most
+    likely to be confused by.
+    """
+    from types import SimpleNamespace
+
+    from data_download import app as app_module
+
+    monkeypatch.setattr(
+        app_module,
+        "_driver_artifacts",
+        lambda _settings: (
+            [
+                SimpleNamespace(
+                    driver="databento", version="1", vendor="Databento", protocol=1
+                ),
+                SimpleNamespace(driver="stub", version="1", vendor="Stub", protocol=1),
+            ],
+            "",
+        ),
+    )
+    body = client.get("/ui/plan-types.json").json()
+    assert body["drivers"]["count"] == 2
+    by_name = {row["name"]: row for row in body["drivers"]["installed"]}
+    assert by_name["databento"]["answers"] == ["market_data_window"]
+    assert by_name["stub"]["answers"] == []
+    # And a type is not credited with a driver for a seller it does not accept.
+    assert [row["vendor"] for row in body["types"][0]["implementations"]] == ["Databento"]
 
 
 def test_the_view_models_ask_for_no_credential(client, db_path):

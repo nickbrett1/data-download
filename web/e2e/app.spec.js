@@ -404,135 +404,147 @@ test.describe("the request book", () => {
 });
 
 test.describe("plan types", () => {
-  test("every type is a card with a table of its parameters", async ({
+  // The page is a browser, not a document: a short list of questions on the
+  // left, the selected one on the right, and its drivers as rows you open.
+  test("lists the plan types and shows the selected one's drivers", async ({
     page,
   }) => {
     await mock(page);
     await page.goto("/plan-types");
 
-    await expect(page.locator(".type-card")).toHaveCount(2);
-    await expect(page.locator(".toc a")).toHaveText([
-      "market_data_window",
-      "http_fetch",
+    // One row per type, each carrying installed/sellers -- "1/1" answers "is
+    // this implemented?" before anything is clicked.
+    const rail = page.locator(".rail-item");
+    await expect(rail).toHaveText([
+      "market_data_window 1/1",
+      "http_fetch 0/1",
+      "all drivers 2",
     ]);
 
-    const first = page.locator(".type-card").first();
-    await expect(first).toContainText("2 required · 1 optional");
-    await expect(first.locator(".tbl-row")).toHaveCount(3);
-    await expect(first.locator(".tbl-head .col-label")).toHaveText([
-      "parameter",
-      "type",
-      "constraints",
-      "what it means",
-    ]);
-    // The enum is spelled out, not hidden behind a schema reference: that is the
-    // question the page exists to answer.
-    await expect(first).toContainText("enum: GLBX.MDP3, XNAS.ITCH");
-    // A field with no description is an em dash, not an empty cell.
-    await expect(first.locator(".tbl-row").nth(2).locator(".desc")).toHaveText(
-      "—",
+    // With no fragment the first type is selected, so the page opens on an
+    // answer rather than on a menu.
+    await expect(page.locator(".rail-item").first()).toHaveAttribute(
+      "aria-current",
+      "page",
     );
+    const pane = page.locator(".pane");
+    await expect(pane.locator("h2")).toHaveText("market_data_window");
+    // Only one type is ever expanded: that was the navigation problem.
+    await expect(page.locator(".pane-head")).toHaveCount(1);
+    await expect(pane.locator(".driver-row")).toHaveCount(1);
+    await expect(pane.locator(".vendor")).toHaveText(["Databento"]);
+    await expect(pane.locator(".impl-on")).toHaveText(["databento v1"]);
   });
 
-  // The page used to blend the two: a "vendor-agnostic" pill beside a table of
-  // dataset codes, with the installed driver invisible. A plan type is the
-  // question; a driver is one seller's implementation of it.
-  test("separates the question from the implementations", async ({ page }) => {
+  // A driver matches on two things, and the page says them as a rule: this
+  // vendor, and one of these dataset codes.
+  test("opens a driver to show what it matches", async ({ page }) => {
     await mock(page);
     await page.goto("/plan-types");
 
-    const generic = page.locator(".type-card").first();
-    // The question's own vocabulary, and no vendor-shaped pill on its header.
-    await expect(generic.locator(".type-head")).not.toContainText(
-      "vendor-agnostic",
+    const pane = page.locator(".pane");
+    // The newest installed artefact is open by default -- the common question
+    // is "what is answering this?", not "is anything".
+    await expect(pane.locator(".driver-detail")).toContainText(
+      "vendor Databento",
     );
-    await expect(generic.locator(".sub-head")).toHaveText([
-      "answered by",
-      "what it asks",
-    ]);
-    // An implementation is a seller, an artefact, and the codes it claims.
-    await expect(generic.locator(".impl-vendor")).toHaveText(["Databento"]);
-    await expect(generic.locator(".impl-on")).toHaveText([
-      "driver databento v1",
-    ]);
-    await expect(generic.locator(".impl-codes")).toContainText("*.MDP3");
-    await expect(generic.locator(".type-head")).toContainText(
-      "1 seller · 1 with a driver",
+    await expect(pane.locator(".driver-detail")).toContainText("*.MDP3");
+    await expect(pane.locator(".driver-detail")).toContainText("protocol 1");
+    await expect(pane.locator(".driver-detail")).toContainText(
+      "installed 2026-11-23",
     );
 
-    // And a type nobody has implemented says so, rather than looking broken.
-    const pinned = page.locator(".type-card").nth(1);
-    await expect(pinned.locator(".impl-off")).toHaveText([
-      "no driver installed",
+    // The row is the control, and it closes on a second click.
+    const toggle = pane.locator(".driver-toggle");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await toggle.click();
+    await expect(pane.locator(".driver-detail")).toHaveCount(0);
+    await toggle.click();
+    await expect(pane.locator(".driver-detail")).toContainText("*.MDP3");
+  });
+
+  test("a deep link selects the type, not the first one", async ({ page }) => {
+    // The dashboard links straight to /plan-types#<type>; that must land on
+    // the card for that type.
+    await mock(page);
+    await page.goto("/plan-types#http_fetch");
+
+    await expect(page.locator(".pane h2")).toHaveText("http_fetch");
+    await expect(page.locator(".rail-item").nth(1)).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    // A seller with no artefact is said out loud, and its row cannot be opened.
+    await expect(page.locator(".impl-off")).toHaveText(["no driver installed"]);
+    await expect(page.locator(".driver-toggle")).toBeDisabled();
+  });
+
+  // "Browse the drivers that match" also has to mean "and the ones that do
+  // not": an installed artefact no plan type asks for is a state an operator
+  // needs to see, not one to filter away.
+  test("browses every installed driver, including one that answers nothing", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/plan-types#all");
+
+    await expect(page.locator(".pane h2")).toHaveText("installed drivers");
+    const rows = page.locator(".driver-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.first().locator(".driver-name")).toHaveText("databento");
+    await expect(rows.first().locator(".answers a")).toHaveText([
+      "market_data_window",
     ]);
-    await expect(pinned.locator(".type-head")).toContainText(
-      "1 seller · 0 with a driver",
+    // The conformance stub matches no type here, and says so.
+    await expect(rows.nth(1).locator(".driver-name")).toHaveText("stub");
+    await expect(rows.nth(1).locator(".answers")).toContainText(
+      "no plan type here accepts Stub",
     );
   });
 
   // The Svelte port kept the header count and dropped the per-field marker, so
-  // the page said *how many* parameters were required but not *which*: a reader
-  // with three fields had to open the raw JSON to find out. The count is not a
-  // substitute for the tag, so both are asserted here.
-  async function expectRequiredMarkers(page, card) {
-    // The head carries two micro facts now — the shape's required/optional
-    // counts and the number of sellers that implement it — so this is the
-    // first of them, not the only one.
-    await expect(card.locator(".type-head .micro").first()).toHaveText(
-      "2 required · 1 optional",
-    );
-
-    const required = card.locator(".tbl-row").filter({ hasText: "dataset" });
-    // Visible, not merely present: the marker sits inline after the name
-    // because DataTable drops the header row under 600px, and a hidden tag
-    // would be the same regression in a quieter form.
-    await expect(required.locator(".req")).toBeVisible();
-    await expect(required.locator(".req")).toHaveText("required");
-
-    const optional = card.locator(".tbl-row").filter({ hasText: "symbols" });
-    await expect(optional.locator(".req")).toHaveCount(0);
+  // the page said *how many* parameters were required but not *which*. The
+  // count is not a substitute for the tag, so both are asserted -- inside the
+  // disclosure that now holds the table.
+  async function openFields(page) {
+    await page.locator(".asks > summary").click();
+    await expect(page.locator(".tbl-row").first()).toBeVisible();
   }
 
   test("each parameter says whether it is required", async ({ page }) => {
     await mock(page);
     await page.goto("/plan-types");
+    await openFields(page);
 
-    await expectRequiredMarkers(page, page.locator(".type-card").first());
-    // Property order stays the YAML's fill-in order: required first is a
-    // coincidence here (`dataset`, `start`), not a rule the page imposes.
+    // The label carries the count, so the disclosure is useful folded too.
+    await expect(page.locator(".asks > summary")).toContainText(
+      "2 required, 1 optional",
+    );
+
+    const required = page.locator(".tbl-row").filter({ hasText: "dataset" });
+    // Visible, not merely present: the marker sits inline after the name
+    // because DataTable drops the header row under 600px, and a hidden tag
+    // would be the same regression in a quieter form.
+    await expect(required.locator(".req")).toBeVisible();
+    await expect(required.locator(".req")).toHaveText("required");
     await expect(
-      page.locator(".type-card").first().locator(".tbl-row .name code"),
-    ).toHaveText(["dataset", "start", "symbols"]);
-  });
+      page.locator(".tbl-row").filter({ hasText: "symbols" }).locator(".req"),
+    ).toHaveCount(0);
 
-  // `vendors:` is who claims which dataset codes, not who the question is
-  // for. It used to be drawn as a pill AND as a `.sellers` definition list,
-  // which is exactly the blend this page has since removed: the codes now live
-  // in the implementation rows, under the seller that claims them.
-  test("a generic type does not wear one vendor's name", async ({ page }) => {
-    await mock(page);
-    await page.goto("/plan-types");
-
-    const generic = page.locator(".type-card").first();
-    // Only the version. No vendor pill, and no "vendor-agnostic" pill either:
-    // the absence of a vendor in the question needs no label.
-    await expect(generic.locator(".type-head .pill")).toHaveText(["v3"]);
-    // The codes are still visible — they are the part that decides whether a
-    // dataset matches — but under "answered by", where they belong.
-    await expect(generic.locator(".impls")).toContainText("*.MDP3");
-  });
-
-  test("a pinned type still names its seller", async ({ page }) => {
-    await mock(page);
-    await page.goto("/plan-types");
-
-    const pinned = page.locator(".type-card").nth(1);
-    // A pinned seller IS the type's identity, so it keeps the header pill...
-    await expect(pinned.locator(".type-head .pill")).toHaveText(["Nabu", "v1"]);
-    // ...and the implementation row repeats it, because that row answers
-    // "is it installed?", which the pill cannot.
-    await expect(pinned.locator(".impl-vendor")).toHaveText(["Nabu"]);
-    await expect(pinned.locator(".impl-codes")).toHaveCount(0);
+    // The enum is spelled out, not hidden behind a schema reference.
+    await expect(page.locator(".pane")).toContainText(
+      "enum: GLBX.MDP3, XNAS.ITCH",
+    );
+    // Property order stays the YAML's fill-in order.
+    await expect(page.locator(".tbl-row .name code")).toHaveText([
+      "dataset",
+      "start",
+      "symbols",
+    ]);
+    // A field with no description is an em dash, not an empty cell.
+    await expect(page.locator(".tbl-row").nth(2).locator(".desc")).toHaveText(
+      "—",
+    );
   });
 
   test("the marker survives a phone, where the header row does not", async ({
@@ -541,16 +553,15 @@ test.describe("plan types", () => {
     await mock(page);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/plan-types");
+    await openFields(page);
 
-    const first = page.locator(".type-card").first();
     // The reason the marker is inline and not a fifth column.
-    await expect(first.locator(".tbl-head")).toBeHidden();
-    await expectRequiredMarkers(page, first);
+    await expect(page.locator(".tbl-head")).toBeHidden();
 
     // DataTable truncates every cell (`.tbl-row :global(*)`), and the tag sits
     // inside `.name`: an overflowing cell would clip it while `toBeVisible()`
     // still passed, since clipping does not zero a bounding box.
-    const box = await first
+    const box = await page
       .locator(".tbl-row")
       .first()
       .evaluate((row) => {
@@ -559,16 +570,20 @@ test.describe("plan types", () => {
         return { nameRight: name.right, tagRight: tag.right };
       });
     expect(box.tagRight).toBeLessThanOrEqual(box.nameRight + 1);
+
+    // And the rail becomes a strip above the pane rather than squeezing it.
+    const rail = page.locator(".rail");
+    expect(
+      await rail.evaluate((el) => getComputedStyle(el).flexDirection),
+    ).toBe("row");
   });
 
-  test("the card is the table and the raw schema, and no glossary under it", async ({
+  test("the page is the drivers and the schema, and no glossary", async ({
     page,
   }) => {
     // A definition list used to sit under each table: extra fields, verify,
     // resume, source. Four labels of prose about a schema, on a page whose job
-    // is to answer "which fields does this plan take?". It went, and the card
-    // is now the description, the parameter rows, and the collapsed schema -
-    // the last of which is the document itself, so nothing is lost.
+    // is to answer "which driver takes this, and which fields does it need?".
     await mock(page);
     await page.goto("/plan-types");
 
@@ -578,22 +593,28 @@ test.describe("plan types", () => {
       "extra fields",
       "verify",
       "resume",
-      "Rejected",
-      "Accepted",
+      "vendor-agnostic",
+      "answered by",
+      "what it asks",
     ]) {
       expect(body.toLowerCase()).not.toContain(gone.toLowerCase());
     }
+    // The intro is a label, not an essay: the page opens straight onto the
+    // rail and the selected type.
+    expect((await page.locator(".lede").innerText()).length).toBeLessThan(20);
+    await expect(page.locator(".sub-lede")).toHaveCount(0);
 
-    const first = page.locator(".type-card").first();
-    await expect(first.locator(".tbl-row")).toHaveCount(3);
     // The raw schema still declares its dialect, so a copy-paste has the rules.
-    await expect(first.locator("details pre")).toContainText("draft/2020-12");
+    await page.locator(".asks > summary").click();
+    await page.locator(".raw > summary").click();
+    await expect(page.locator(".raw pre")).toContainText("draft/2020-12");
   });
 
   test("nothing on the page can change the registry", async ({ page }) => {
     await mock(page);
     await page.goto("/plan-types");
     // The registry is git, not the database: a control here would be a lie.
+    // The rail's buttons choose a view; none of them writes.
     await expect(page.locator("form")).toHaveCount(0);
     await expect(page.locator("input")).toHaveCount(0);
     // The other page is one click away, and the token rides along or it 401s.
@@ -604,7 +625,7 @@ test.describe("plan types", () => {
     page,
   }) => {
     await mock(page, {
-      types: { types: [] },
+      types: { types: [], drivers: planTypes.drivers },
     });
     await page.goto("/plan-types");
     await expect(page.locator(".empty-state")).toContainText(
@@ -725,7 +746,7 @@ test.describe("the shell on a phone", () => {
   test("plan types shows every view and a typed intro", async ({ page }) => {
     await mock(page);
     await page.goto("/plan-types");
-    await expect(page.locator(".type-card")).toHaveCount(2);
+    await expect(page.locator(".rail-item")).toHaveCount(3);
     await expectTabs(page, "Plan types");
     await expectLede(page, "Plan types");
     await expectNoHorizontalScroll(page);
@@ -752,7 +773,7 @@ test.describe("the shell on a phone", () => {
   test("the plan-types intro also clears a notched bar", async ({ page }) => {
     await mock(page);
     await page.goto("/plan-types");
-    await expect(page.locator(".type-card")).toHaveCount(2);
+    await expect(page.locator(".rail-item")).toHaveCount(3);
     await expectSafeAreaDoesNotCoverLede(page);
   });
 });
