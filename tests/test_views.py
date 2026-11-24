@@ -445,6 +445,36 @@ def test_a_driver_that_answers_no_plan_type_is_still_listed(client, monkeypatch)
     assert [row["vendor"] for row in body["types"][0]["implementations"]] == ["Databento"]
 
 
+def test_a_vendor_with_a_driver_being_built_says_so(client, db_path, monkeypatch):
+    """The queue's record of what was *asked for*, beside what is installed.
+
+    "No driver installed" and "someone is writing one" are different answers to
+    the same question, and the page drew both identically -- so a vendor whose
+    driver was in flight looked like a dead end.
+    """
+    from data_download import app as app_module
+
+    monkeypatch.setattr(app_module, "_driver_artifacts", lambda _settings: ([], ""))
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO driver_jobs (id, vendor, state, attempts, branch, "
+            "commit_sha, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            ("drv_1", "Databento", "queued", 1, "", "", iso(), iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    row = client.get("/ui/plan-types.json").json()["types"][0]["implementations"][0]
+    assert row["installed"] is False
+    assert row["build"]["vendor"] == "Databento"
+    assert row["build"]["state"] == "queued"
+    # Whether it is still moving is the store's judgement, not the page's: a
+    # second copy of the open-state list here would be a second state machine.
+    assert row["build"]["open"] is True
+
+
 def test_the_view_models_ask_for_no_credential(client, db_path):
     """The read-model is public, and that is a decision rather than an omission.
 

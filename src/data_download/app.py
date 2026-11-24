@@ -319,7 +319,47 @@ def _sellers(entry: Any) -> dict[str, list[str]]:
     return sellers
 
 
-def _implementations(entry: Any, artifacts: list[Any] | None) -> list[dict[str, Any]]:
+def _builds_by_vendor(jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The driver build for each vendor, newest first, keyed by vendor.
+
+    A driver job is the *other* kind of request this service holds: a download
+    request asks the vendor for data, a driver job asks an authoring agent for
+    the code that can talk to that vendor. The page had no way to say one was
+    happening -- a type whose vendor was queued read exactly like a type nobody
+    had ever written a driver for, which is the difference between "wait" and
+    "this will never run".
+
+    Only the newest job per vendor: a vendor whose first build was abandoned can
+    have more than one, and the answer to "what is happening about this vendor"
+    is the current one.
+    """
+    builds: dict[str, dict[str, Any]] = {}
+    for job in jobs:
+        key = _norm(job.get("vendor"))
+        if not key or key in builds:
+            continue  # the store lists newest first
+        state = str(job.get("state") or "")
+        builds[key] = {
+            "vendor": str(job.get("vendor") or ""),
+            "state": state,
+            # Whether it is still moving. The store owns that list; copying the
+            # tuple here would be a second opinion about the state machine.
+            "open": state in Store.OPEN_DRIVER_STATES,
+            "attempts": int(job.get("attempts") or 0),
+            "branch": str(job.get("branch") or ""),
+            "commit": str(job.get("commit_sha") or ""),
+            "error": str(job.get("last_error") or ""),
+            "created_at": str(job.get("created_at") or ""),
+            "updated_at": str(job.get("updated_at") or ""),
+        }
+    return builds
+
+
+def _implementations(
+    entry: Any,
+    artifacts: list[Any] | None,
+    builds: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Who can answer this type, as one row per seller.
 
     A plan type is the **question**; a driver is an **implementation** of it for
@@ -337,6 +377,11 @@ def _implementations(entry: Any, artifacts: list[Any] | None) -> list[dict[str, 
             {
                 "vendor": seller,
                 "datasets": patterns,
+                # The authoring request for this vendor, if there has ever been
+                # one. It is what turns "no driver installed" into a sentence
+                # with a subject: somebody asked for it, and here is what came
+                # back.
+                "build": (builds or {}).get(_norm(seller)),
                 # A driver is an artefact with a version, so the page can say
                 # *which* implementation. Nothing else about the artefact: the
                 # protocol is checked (and refused) on discovery, so it cannot
@@ -376,7 +421,11 @@ def _installed_drivers(artifacts: list[Any] | None, entries: list[Any]) -> list[
     return rows
 
 
-def _plan_type_view(entry: Any, artifacts: list[Any] | None = None) -> dict[str, Any]:
+def _plan_type_view(
+    entry: Any,
+    artifacts: list[Any] | None = None,
+    builds: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """The page's view of one plan type: a card, its parameter rows, its schema.
 
     Not `full_entry()` and not `index_entry()` either. The full entry carries
@@ -398,7 +447,7 @@ def _plan_type_view(entry: Any, artifacts: list[Any] | None = None) -> dict[str,
     # page's old pill. It is gone with the pill: the page draws "who answers
     # it" from `implementations` below, and a boolean describing a label that
     # no longer exists is the same blend in a quieter shape.
-    implementations = _implementations(entry, artifacts)
+    implementations = _implementations(entry, artifacts, builds)
     return {
         "name": entry.name,
         "version": entry.version,
@@ -1893,8 +1942,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def plan_types_json(request: Request) -> dict[str, Any]:
         entries = registry.all()
         artifacts, detail = _driver_artifacts(settings)
+        # The driver queue is the store's, not the runtime's: what is installed
+        # is the runtime's answer, what was *asked for* is ours.
+        builds = _builds_by_vendor(await (await _store(request)).driver_job_list())
         return {
-            "types": [_plan_type_view(entry, artifacts) for entry in entries],
+            "types": [
+                _plan_type_view(entry, artifacts, builds) for entry in entries
+            ],
             # A separate fact from the registry, and stated as such: what is
             # *installed* is the runtime's answer. `known: false` means nobody
             # could ask, which is not the same as "nothing is installed".

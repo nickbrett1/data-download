@@ -243,6 +243,19 @@ export const planTypes = {
           vendor: "Databento",
           datasets: ["*.ITCH", "*.MDP3", "EQUS.*"],
           driver: { name: "databento", version: "1" },
+          // The authoring request that produced it: the loop's record of what
+          // was asked for, which is a different fact from what is installed.
+          build: {
+            vendor: "Databento",
+            state: "installed",
+            open: false,
+            attempts: 1,
+            branch: "driver-loop/databento-20261124t160220z",
+            commit: "9f28f7583a9b233802aa6d32df4b4dc6a563b1c7",
+            error: "",
+            created_at: "2026-11-24T16:02:07Z",
+            updated_at: "2026-11-24T16:37:29Z",
+          },
           installed: true,
         },
       ],
@@ -290,6 +303,19 @@ export const planTypes = {
           vendor: "Nabu",
           datasets: [],
           driver: null,
+          // Queued: someone asked for a driver for this vendor and the loop has
+          // not finished one. The row must say that, not "no driver installed".
+          build: {
+            vendor: "Nabu",
+            state: "building",
+            open: true,
+            attempts: 1,
+            branch: "driver-loop/nabu-20261124t161000z",
+            commit: "",
+            error: "",
+            created_at: "2026-11-24T16:10:00Z",
+            updated_at: "2026-11-24T16:12:00Z",
+          },
           installed: false,
         },
       ],

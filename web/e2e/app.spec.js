@@ -65,6 +65,25 @@ async function mock(
   );
 }
 
+// The plan-types fixture with one vendor's build replaced. `null` clears it, so
+// a test can say what a vendor nobody has asked for looks like.
+function withBuildAt(index, build) {
+  return {
+    ...planTypes,
+    types: planTypes.types.map((type, i) =>
+      i === index
+        ? {
+            ...type,
+            implementations: type.implementations.map((impl) => ({
+              ...impl,
+              build,
+            })),
+          }
+        : type,
+    ),
+  };
+}
+
 test.describe("the request book", () => {
   test("is one list with a badge per row, and the figures line up", async ({
     page,
@@ -164,6 +183,43 @@ test.describe("the request book", () => {
     await expect(page.locator(".tbl-row").nth(1).locator(".window")).toHaveText(
       "2026-11-14 → 2026-11-15",
     );
+  });
+
+  test("a row waiting on a driver says so, not that nobody has it", async ({
+    page,
+  }) => {
+    // An approved row whose vendor has no driver: the worker that would claim it
+    // has nothing to drive, so "no worker has it yet" is true and misleading.
+    // `driver_state` was the answer, and no view read it.
+    const rows = dashboard.rows.map((row, index) =>
+      index === 2
+        ? { ...row, driver_state: "building", approved_unclaimed: false }
+        : row,
+    );
+    await mock(page, { requests: { ...dashboard, rows } });
+    await page.goto("/");
+
+    const waiting = page.locator(".tbl-row").nth(2);
+    await expect(waiting.locator(".state .detail")).toHaveText(
+      "waiting on a driver being built",
+    );
+    await expect(waiting.locator(".state .detail")).toHaveClass(/\binfo\b/);
+  });
+
+  test("a driver build that stopped is a fault, and says so", async ({
+    page,
+  }) => {
+    const rows = dashboard.rows.map((row, index) =>
+      index === 2
+        ? { ...row, driver_state: "needs_human", approved_unclaimed: false }
+        : row,
+    );
+    await mock(page, { requests: { ...dashboard, rows } });
+    await page.goto("/");
+
+    const stopped = page.locator(".tbl-row").nth(2).locator(".state .detail");
+    await expect(stopped).toHaveText("driver build stopped — needs a human");
+    await expect(stopped).toHaveClass(/\bbad\b/);
   });
 
   test("a stuck condition outranks the state it is stuck in", async ({
@@ -516,14 +572,14 @@ test.describe("plan types", () => {
       "vendor Databento",
     );
     await expect(first.locator(".driver-detail")).toContainText("*.MDP3");
-    // And only that. The panel used to restate the artefact underneath: its
-    // name and version (already the row's pill), the protocol number (a
-    // mismatch refuses discovery, so it can only ever read 1) and an install
-    // date that said when a file was copied, not what the driver does.
+    // Two lines: what it matches, and the build that produced it. Not the
+    // artefact restated -- its name and version are the row's pill, the
+    // protocol number can only ever read 1 (a mismatch refuses discovery) and
+    // an install date said when a file was copied, not what the driver does.
     const detail = await first.locator(".driver-detail").innerText();
     expect(detail).not.toMatch(/protocol/);
-    expect(detail).not.toMatch(/installed/);
     expect(detail).not.toContain("databento v1");
+    expect(detail).not.toMatch(/\binstalled 20/);
 
     // The row is the control, and it closes on a second click.
     const toggle = first.locator(".driver-toggle");
@@ -538,7 +594,10 @@ test.describe("plan types", () => {
   test("a type with no driver says so, and cannot be opened", async ({
     page,
   }) => {
-    await mock(page);
+    // A vendor nobody has ever asked for: no job in the queue, so the row has
+    // nothing to report but its own absence.
+    const types = withBuildAt(1, null);
+    await mock(page, { types });
     await page.goto("/plan-types");
 
     const pinned = page.locator(".plan-type").nth(1);
@@ -550,6 +609,69 @@ test.describe("plan types", () => {
       "no driver installed",
     ]);
     await expect(pinned.locator(".driver-toggle")).toBeDisabled();
+  });
+
+  // The other kind of request this service holds: a driver, asked for in the
+  // queue rather than a dataset asked for from a vendor. Without it, a vendor
+  // whose driver is being written reads exactly like one nobody will ever
+  // write -- "wait" and "never", drawn identically.
+  test("a driver being built says so, with the attempt it is on", async ({
+    page,
+  }) => {
+    await mock(page);
+    await page.goto("/plan-types");
+
+    const pinned = page.locator(".plan-type").nth(1);
+    // Not the dashed "nothing here": the row is in flight, and a dashed pill
+    // would send the reader away from the one thing that is happening.
+    await expect(pinned.locator(".build-on")).toHaveText([
+      "driver being built",
+    ]);
+    await expect(pinned.locator(".impl-off")).toHaveCount(0);
+    await expect(pinned.locator(".driver-line .micro")).toHaveText([
+      "attempt 1",
+    ]);
+    // Still not openable -- there is no artefact to describe yet.
+    await expect(pinned.locator(".driver-toggle")).toBeDisabled();
+  });
+
+  test("a build that stopped needs a human, and says why", async ({ page }) => {
+    const types = withBuildAt(1, {
+      state: "needs_human",
+      open: false,
+      attempts: 2,
+      branch: "driver-loop/nabu-20261124t161000z",
+      commit: "",
+      error: "pytest failed: tests/test_nabu_driver.py::test_cost",
+    });
+    await mock(page, { types });
+    await page.goto("/plan-types");
+
+    const stopped = page.locator(".plan-type").nth(1).locator(".impl-bad");
+    await expect(stopped).toHaveText(["driver build stopped"]);
+    await expect(stopped).toHaveAttribute(
+      "title",
+      /pytest failed: tests\/test_nabu_driver\.py/,
+    );
+    await expect(
+      page.locator(".plan-type").nth(1).locator(".driver-line .micro"),
+    ).toHaveText(["2 attempts"]);
+  });
+
+  test("an installed driver says which build produced it", async ({ page }) => {
+    await mock(page);
+    await page.goto("/plan-types");
+
+    // The provenance is the one thing in the panel that has an origin: a
+    // driver was written, and the branch and commit are where to read it.
+    const detail = page.locator(".plan-type").first().locator(".driver-detail");
+    await expect(detail).toContainText("built");
+    await expect(detail).toContainText("installed");
+    await expect(detail).toContainText("attempt 1");
+    await expect(detail).toContainText(
+      "driver-loop/databento-20261124t160220z",
+    );
+    await expect(detail).toContainText("9f28f75");
   });
 
   test("a deep link opens the type and the driver it names", async ({

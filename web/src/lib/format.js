@@ -241,6 +241,24 @@ export function stateDetail(row) {
       title: row.failure.detail ?? "",
     };
   }
+  // An approved row waiting for a driver is waiting on *us*, not on a worker:
+  // the worker that would otherwise claim it has nothing to drive. The column
+  // existed and was read nowhere, so this row used to say "no worker has it
+  // yet" -- true, and the wrong reason to give.
+  if (row.driver_state) {
+    return {
+      text:
+        row.driver_state === "needs_human"
+          ? "driver build stopped — needs a human"
+          : "waiting on a driver being built",
+      tone: row.driver_state === "needs_human" ? "bad" : "info",
+      title:
+        row.driver_state === "needs_human"
+          ? "the loop could not finish a driver for this vendor; the request stays approved"
+          : "no driver is installed for this vendor yet, and the loop is building one",
+    };
+  }
+
   if (row.facet === "todo") {
     // An approved row nobody picked up is an anomaly, not a restatement of
     // `approved`, so it is said. A draft says what approval would authorise,

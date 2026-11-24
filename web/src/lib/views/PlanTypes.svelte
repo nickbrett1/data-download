@@ -21,6 +21,12 @@
    * reads as an attribute of the name it shares a line with, so
    * "market_data_window  v1  driver" says the type is a driver. The rows below
    * already answer it: a driver row, or a row saying no driver is installed.
+   *
+   * A vendor row can also be a *request*: the driver queue asks an authoring
+   * agent for code, and that job is the only state between "nobody wrote one"
+   * and "one is installed". So the row says "driver being built" while it is in
+   * flight and "driver build stopped" when a human is needed -- both used to
+   * read "no driver installed", which drew "wait" and "never" identically.
    */
   import AppMark from "$lib/components/AppMark.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
@@ -77,6 +83,35 @@
     { label: "constraints", width: "minmax(9rem, 1.1fr)" },
     { label: "what it means", width: "minmax(12rem, 2fr)" },
   ];
+
+  // What a vendor row says when nothing is installed. The build is the difference
+  // between "nobody wrote one" and "somebody is writing one": both used to read
+  // "no driver installed", which made a queued vendor look like a dead end.
+  function noDriverLabel(impl) {
+    const build = impl.build;
+    if (!build) return "no driver installed";
+    if (build.open) return "driver being built";
+    if (build.state === "needs_human") return "driver build stopped";
+    return "no driver installed";
+  }
+
+  // The right-hand micro on a row with no driver: the one fact that row cannot
+  // say in a pill. It is the build's *state*, not a sentence about it, because
+  // the state is the vocabulary the queue uses.
+  function buildNote(impl) {
+    const build = impl.build;
+    if (!impl.driver && build?.open) {
+      const tries =
+        build.attempts === 1 ? "attempt 1" : `attempt ${build.attempts}`;
+      return tries;
+    }
+    if (!impl.driver && build?.state === "needs_human") {
+      return build.attempts
+        ? `${build.attempts} attempt${build.attempts === 1 ? "" : "s"}`
+        : "stopped";
+    }
+    return "";
+  }
 
   function openDriverFor(type) {
     if (Object.hasOwn(chosen, type.name)) return chosen[type.name];
@@ -158,14 +193,29 @@
                     <span class="pill impl-on"
                       >{impl.driver.name} v{impl.driver.version}</span
                     >
+                  {:else if impl.build?.open}
+                    <span class="pill impl-on build-on"
+                      >{noDriverLabel(impl)}</span
+                    >
                   {:else}
-                    <span class="pill impl-off">no driver installed</span>
+                    <span
+                      class="pill impl-off"
+                      class:impl-bad={impl.build?.state === "needs_human"}
+                      title={impl.build?.error ?? ""}
+                      >{noDriverLabel(impl)}</span
+                    >
                   {/if}
                   <span class="spacer"></span>
-                  <span class="micro"
-                    >{impl.datasets.length} dataset
-                    {impl.datasets.length === 1 ? "code" : "codes"}</span
-                  >
+                  {#if buildNote(impl)}
+                    <span class="micro" title={impl.build?.error ?? ""}
+                      >{buildNote(impl)}</span
+                    >
+                  {:else}
+                    <span class="micro"
+                      >{impl.datasets.length} dataset
+                      {impl.datasets.length === 1 ? "code" : "codes"}</span
+                    >
+                  {/if}
                   {#if impl.driver}
                     <span class="chev" aria-hidden="true"
                       >{open ? "−" : "+"}</span
@@ -191,6 +241,28 @@
                         · any dataset
                       {/if}
                     </dd>
+                    <!-- The authoring request behind this row. It is the one
+                         thing on the page that has an *origin*: a driver is not
+                         a fact of nature, it was written, and the branch and
+                         commit are where that work can be read. Shown only when
+                         there is one, because a hand-installed artefact has no
+                         such story. -->
+                    {#if impl.build}
+                      <dt>built</dt>
+                      <dd>
+                        {impl.build.state}
+                        {#if impl.build.attempts}
+                          · attempt{impl.build.attempts === 1 ? "" : "s"}
+                          {impl.build.attempts}
+                        {/if}
+                        {#if impl.build.branch}
+                          · <code>{impl.build.branch}</code>
+                        {/if}
+                        {#if impl.build.commit}
+                          @ <code>{impl.build.commit.slice(0, 7)}</code>
+                        {/if}
+                      </dd>
+                    {/if}
                   </dl>
                 {/if}
               </li>
@@ -390,6 +462,23 @@
     color: var(--ink-muted);
     background: transparent;
     border: 1px dashed var(--line);
+  }
+
+  /* A build that stopped is not the same as a build that has not started, and
+     the pill is where that difference has to be visible: a dashed pill reads as
+     "nothing here yet", which would send a reader away from the one row that
+     needs a human. */
+  .impl-off.impl-bad {
+    color: var(--bad);
+    border-style: solid;
+    border-color: var(--bad);
+  }
+
+  /* In flight, and in the accent colour: the row is doing something, and the
+     pill it replaces (a dashed "nothing") said the opposite. */
+  .build-on {
+    color: var(--accent);
+    background: var(--accent-soft);
   }
 
   /* The open driver: a small definition list, because each line answers one
