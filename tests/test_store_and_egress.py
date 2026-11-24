@@ -36,6 +36,13 @@ VENDOR_MODULE = "vendor.py"
 RUNTIME_IMPORTS = ("http.client",)
 RUNTIME_MODULE = "runtime_http.py"
 
+# Phase 5.5's loop is the one part of this service with business at a forge:
+# it reads a commit's checks and diff, merges a branch, and downloads the tree
+# it installs from. One named module holds that, so there is one egress path to
+# audit and one credential to revoke.
+GITHUB_IMPORTS = ("urllib.request", "urllib.error")
+GITHUB_MODULE = "github_api.py"
+
 
 def test_unusable_store_is_up_but_broken(tmp_path):
     settings = Settings(
@@ -195,6 +202,11 @@ def test_no_vendor_client_or_network_import(path: Path):
             assert path.name == RUNTIME_MODULE, (
                 f"{path.name} imports {module}; only {RUNTIME_MODULE} may open a "
                 "connection to the driver runtime, so there is one call site to audit"
+            )
+        if module.startswith(GITHUB_IMPORTS):
+            assert path.name == GITHUB_MODULE, (
+                f"{path.name} imports {module}; only {GITHUB_MODULE} may reach GitHub, "
+                "so the loop's egress and credential live in one file"
             )
 
 
