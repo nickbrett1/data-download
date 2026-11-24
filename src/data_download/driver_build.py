@@ -118,7 +118,9 @@ def artifact_digest(directory: Path) -> str:
     return digest.hexdigest()
 
 
-def install_tree(source: Path, drivers_dir: Path) -> dict[str, Any]:
+def install_tree(
+    source: Path, drivers_dir: Path, *, replace_sha256: str | None = None
+) -> dict[str, Any]:
     """`source` (a directory holding `manifest.json`) into the drivers volume.
 
     Atomic by rename: the copy lands in a temporary directory *inside*
@@ -126,6 +128,13 @@ def install_tree(source: Path, drivers_dir: Path) -> dict[str, Any]:
     and is renamed into `drivers/<name>/<version>/`. A version that already
     exists is refused rather than overwritten -- a reinstall is a human's act,
     and silently replacing one is how two artefacts claim one vendor.
+
+    The one exception is the loop replacing **its own** install: a probe that
+    came back `shortfall` sends the job round again, and the second turn's
+    artefact is the same name and version. `replace_sha256` is the digest this
+    job installed last time, so the loop may replace exactly what it put there
+    and nothing else -- a directory a human installed has a digest this job has
+    never recorded, and stays refused.
     """
     manifest_path = source / "manifest.json"
     if not manifest_path.is_file():
@@ -141,7 +150,11 @@ def install_tree(source: Path, drivers_dir: Path) -> dict[str, Any]:
         raise LoopRefused("the manifest must name a driver and a version")
     target = drivers_dir / name / version
     if target.exists():
-        raise LoopRefused(f"{target} already exists; refuse to overwrite an install")
+        mine = bool(replace_sha256) and artifact_digest(target) == replace_sha256
+        if not mine:
+            raise LoopRefused(f"{target} already exists; refuse to overwrite an install")
+        log.info("replacing the loop's own install at %s", target)
+        shutil.rmtree(target)
     drivers_dir.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".install-", dir=drivers_dir))
     try:
@@ -375,7 +388,9 @@ def default_steps(*, author_cmd: str, repo: str, drivers_dir: Path, settings: An
                 raise LoopRefused(
                     f"the merged tree has no driver declaring vendor {row['vendor']!r}"
                 )
-            return install_tree(source, drivers_dir)
+            return install_tree(
+                source, drivers_dir, replace_sha256=row.get("artifact_sha256")
+            )
 
     return Steps(
         author=_author_command(author_cmd),
@@ -394,14 +409,31 @@ async def run_once(
     job_id: str | None = None,
     now: str | None = None,
 ) -> dict[str, Any] | None:
-    """Take one queued job as far as it goes. `None` when there is nothing queued."""
+    """Take one job as far as it goes. `None` when there is nothing to do.
+
+    A job in `gated` is *waiting on CI*, not finished with: it is picked up
+    again and re-checked from the same branch and sha, without another authoring
+    turn. That is the difference between a push and a build -- the gate is red,
+    green, or **not yet**, and only the first of those is a human's.
+
+    A stop leaves the job in `needs_human` with `last_error`, and says so on the
+    request too: `driver_state` exists so the row can be honest about *why* it
+    is still `approved`, and a stale "building" after the loop gave up would be
+    the page lying about the one thing it is there to explain.
+    """
     row = await store.driver_job_get(job_id) if job_id else await store.driver_job_next()
-    if row is None or (job_id and row["state"] not in ("queued", "building")):
+    if row is None or (job_id and row["state"] not in ("queued", "building", "gated")):
         return None
-    attempts = int(row.get("attempts") or 0) + 1
-    row = await store.driver_job_update(
-        row["id"], state="building", attempts=attempts, now=now
-    ) or row
+    waiting_on_ci = row["state"] == "gated"
+    if waiting_on_ci:
+        # A CI wait is not an authoring attempt: counting it would exhaust the
+        # three tries on a slow pipeline rather than on a wrong driver.
+        attempts = int(row.get("attempts") or 0)
+    else:
+        attempts = int(row.get("attempts") or 0) + 1
+        row = await store.driver_job_update(
+            row["id"], state="building", attempts=attempts, now=now
+        ) or row
     try:
         if not row.get("branch"):
             authored = steps.author(row)
@@ -413,6 +445,12 @@ async def run_once(
             ) or row
         gate = steps.gate(row)
         if not gate.get("ok"):
+            if gate.get("pending"):
+                # Not yet. Leave it in `gated` and let the next pass look again.
+                row = await store.driver_job_update(
+                    row["id"], state="gated", now=now
+                ) or row
+                return await store.driver_job_get(row["id"])
             raise LoopRefused(f"CI is not green: {gate.get('detail') or 'no green check'}")
         row = await store.driver_job_update(row["id"], state="gated", now=now) or row
         outside = [
@@ -443,7 +481,9 @@ async def run_once(
             steps.merge(row)
         elif name == "shortfall" and attempts < MAX_ATTEMPTS:
             # The driver is wrong in a way another turn can fix. Forget the
-            # branch so the next attempt starts from a fresh one.
+            # branch so the next attempt starts from a fresh one -- but keep
+            # `artifact_sha256`, which is what lets that attempt replace the
+            # artefact this one installed instead of tripping over it.
             await store.driver_job_update(
                 row["id"], state="queued", branch=None, commit_sha=None, now=now
             )
@@ -457,9 +497,17 @@ async def run_once(
         return await store.driver_job_update(row["id"], state="installed", now=now)
     except LoopRefused as exc:
         log.warning("driver job %s stopped: %s", row["id"], exc)
-        return await store.driver_job_update(
+        row = await store.driver_job_update(
             row["id"], state="needs_human", last_error=str(exc), now=now
-        )
+        ) or row
+        if row.get("request_id"):
+            await store.note_driver_state(
+                str(row["request_id"]),
+                "needs_human",
+                detail={"job": row["id"], "stopped": str(exc)[:400]},
+                now=now,
+            )
+        return row
 
 
 def main(argv: list[str] | None = None) -> int:

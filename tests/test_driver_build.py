@@ -153,6 +153,92 @@ def test_red_ci_stops_for_a_human(tmp_path):
         _run(store.close())
 
 
+def test_a_pending_build_waits_instead_of_becoming_a_human(tmp_path):
+    """A push is pending for minutes; that is not a refusal, it is "not yet".
+
+    The first pass must leave the job in `gated` (still work, still the loop's),
+    must not spend an authoring attempt on the wait, and the second pass must
+    carry on from the same branch without authoring again.
+    """
+    store = _store(tmp_path)
+    try:
+        _job(store)
+        authored = {"n": 0}
+
+        def author(row):
+            authored["n"] += 1
+            return {"branch": "driver/databento", "commit_sha": "a" * 40}
+
+        waiting = _steps(
+            author=author,
+            gate=lambda row: {"ok": False, "pending": True, "detail": "still running: build"},
+        )
+        first = _run(driver_build.run_once(store, waiting))
+        assert first["state"] == "gated"
+        assert first["attempts"] == 1
+        assert authored["n"] == 1
+
+        # The next pass finds it again (gated is work) and the build has finished.
+        done = _run(
+            driver_build.run_once(
+                store, _steps(author=author), job_id=first["id"])
+        )
+        assert done["state"] == "installed"
+        assert authored["n"] == 1, "a CI wait must not author again"
+        assert done["attempts"] == 1, "a CI wait is not an attempt"
+    finally:
+        _run(store.close())
+
+
+def test_a_stop_says_so_on_the_request_too(tmp_path):
+    """`driver_state` exists so the row can say why it is still `approved`.
+
+    A job that gave up after writing "building" there would leave the request
+    page claiming the loop is still working -- the one sentence that page exists
+    to get right.
+    """
+    store = _store(tmp_path)
+    try:
+        job = _job(store)
+        _run(store.driver_job_update(job["id"], request_id="req_stopped"))
+        notes = []
+
+        async def spy(request_id, value, *, detail=None, now=None):
+            notes.append((request_id, value, detail))
+
+        store.note_driver_state = spy
+        done = _run(
+            driver_build.run_once(
+                store, _steps(gate=lambda row: {"ok": False, "detail": "build 12 red"})
+            )
+        )
+        assert done["state"] == "needs_human"
+        assert [n[:2] for n in notes] == [("req_stopped", "needs_human")]
+        assert "build 12 red" in notes[0][2]["stopped"]
+    finally:
+        _run(store.close())
+
+
+def test_the_loop_may_replace_its_own_install_but_not_a_strangers(tmp_path):
+    """A shortfall retry installs the same name and version as the turn before."""
+    source = _artifact(tmp_path)
+    drivers = tmp_path / "drivers"
+    first = driver_build.install_tree(source, drivers)
+
+    # A stranger's install: same path, digest this job never recorded.
+    with pytest.raises(driver_build.LoopRefused):
+        driver_build.install_tree(source, drivers)
+    # Its own: the digest it recorded last turn.
+    again = driver_build.install_tree(
+        source, drivers, replace_sha256=first["artifact_sha256"]
+    )
+    assert again["artifact_sha256"] == first["artifact_sha256"]
+    assert again["path"] == first["path"]
+    # And a different digest is not "its own" either.
+    with pytest.raises(driver_build.LoopRefused):
+        driver_build.install_tree(source, drivers, replace_sha256="e" * 64)
+
+
 def test_a_file_outside_drivers_stops_the_merge(tmp_path):
     store = _store(tmp_path)
     try:

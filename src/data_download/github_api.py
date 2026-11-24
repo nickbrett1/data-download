@@ -24,6 +24,11 @@ API = "https://api.github.com"
 #: required) is a stop.
 GREEN = frozenset({"success", "neutral", "skipped"})
 
+#: Commit *statuses* (the other CI vocabulary) that count as green. Only
+#: `success` does: unlike a check run there is no "skipped" state to be
+#: indifferent about, so anything that is not success is a wait or a stop.
+GREEN_STATES = frozenset({"success"})
+
 
 class GithubError(Exception):
     """GitHub refused, or answered something the loop cannot read."""
@@ -65,27 +70,67 @@ def _call(
 
 
 def gate(repo: str, sha: str, *, token: str) -> dict:
-    """Are this commit's check runs green?
+    """Is this commit's CI green, pending, or red?
 
-    Deliberately *all* runs, not a named one: a pipeline that renames its steps
-    should not be able to slip past the gate, and a commit with no checks at all
-    is not green -- it is untested, which is the same answer.
+    **Both** of GitHub's CI vocabularies, because a repo has one and not the
+    other and the loop must not care which: *check runs* (GitHub Actions, and
+    anything using the checks API) and *commit statuses* (Buildkite, CircleCI,
+    Jenkins). The drivers repo is on Buildkite, which publishes a status and
+    never a check run -- a gate that read only check runs refused it with "no
+    check runs for this commit" on every job, which is a structural stop rather
+    than a red build.
+
+    All of them, not a named one: a pipeline that renames its steps should not
+    be able to slip past the gate, and a commit with neither a check run nor a
+    status is not green -- it is untested, which is the same answer.
+
+    Three answers, because "wait" and "no" must not be confused:
+
+    * `{"ok": False, "pending": True}`  -- CI has not finished. Not a refusal:
+      the job waits in `gated` and is re-checked, because a freshly pushed
+      commit is pending for minutes and stopping there would make every job a
+      human's.
+    * `{"ok": False}`                   -- something went red. A stop.
+    * `{"ok": True}`                    -- every check concluded green.
     """
-    answer = _call("GET", f"/repos/{repo}/commits/{sha}/check-runs", token=token)
-    runs = (answer or {}).get("check_runs") or []
-    if not runs:
-        return {"ok": False, "detail": "no check runs for this commit"}
-    pending = [r.get("name") for r in runs if r.get("status") != "completed"]
-    if pending:
-        return {"ok": False, "detail": "still running: " + ", ".join(map(str, pending[:5]))}
+    runs = (
+        _call("GET", f"/repos/{repo}/commits/{sha}/check-runs", token=token) or {}
+    ).get("check_runs") or []
+    statuses = (
+        _call("GET", f"/repos/{repo}/commits/{sha}/status", token=token) or {}
+    ).get("statuses") or []
+    if not runs and not statuses:
+        return {"ok": False, "detail": "no check runs and no commit status for this commit"}
+
+    running = [str(r.get("name")) for r in runs if r.get("status") != "completed"]
+    running += [
+        f"{s.get('context')} ({s.get('state')})"
+        for s in statuses
+        if (s.get("state") or "") == "pending"
+    ]
+    if running:
+        return {
+            "ok": False,
+            "pending": True,
+            "detail": "still running: " + ", ".join(running[:5]),
+        }
+
     bad = [
         f"{r.get('name')}: {r.get('conclusion')}"
         for r in runs
         if (r.get("conclusion") or "") not in GREEN
     ]
+    bad += [
+        f"{s.get('context')}: {s.get('state')}"
+        for s in statuses
+        if (s.get("state") or "") not in GREEN_STATES
+    ]
     if bad:
         return {"ok": False, "detail": "; ".join(bad[:5])}
-    return {"ok": True, "detail": f"{len(runs)} check run(s) green"}
+    counted = f"{len(runs)} check run(s)" if runs else ""
+    counted += " and " if runs and statuses else ""
+    counted += f"{len(statuses)} commit status(es)" if statuses else ""
+    return {"ok": True, "detail": f"{counted} green"}
 
 
 def changed_paths(repo: str, sha: str, *, token: str) -> list[str]:

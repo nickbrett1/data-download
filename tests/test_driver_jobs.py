@@ -66,6 +66,14 @@ def test_next_is_the_oldest_queued_and_updates_are_column_checked(tmp_path):
         assert moved["state"] == "building"
         assert moved["attempts"] == 1
         assert _run(store.driver_job_next()) is None
+        # A job waiting on CI is still work -- but queued work goes first, so a
+        # slow pipeline cannot starve a vendor that has not been authored yet.
+        waiting = _run(store.driver_job_update(job["id"], state="gated"))
+        assert (_run(store.driver_job_next()) or {})["id"] == waiting["id"]
+        fresh = _run(
+            store.driver_job_enqueue(vendor="Stub", now="2026-11-24T02:00:00Z")
+        )
+        assert (_run(store.driver_job_next()) or {})["id"] == fresh["id"]
         try:
             _run(store.driver_job_update(job["id"], state="building", wrong="x"))
         except ValueError as exc:

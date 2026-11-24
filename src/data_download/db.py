@@ -1587,10 +1587,18 @@ class Store:
         return dict(row) if row else None
 
     async def driver_job_next(self) -> dict[str, Any] | None:
-        """The oldest queued job, or `None`. The dispatcher runs to exit."""
+        """The next job to work, or `None`. The dispatcher runs to exit.
+
+        A job in `gated` is waiting on CI, so it is work too -- but it is
+        cheaper work (one HTTP call and maybe a return), and it is *older* than
+        anything queued, so a plain "oldest first" would let one slow pipeline
+        starve the queue. Queued work therefore goes first, and a CI re-check
+        happens when there is nothing new to author.
+        """
         async with self.conn.execute(
-            "SELECT * FROM driver_jobs WHERE state = 'queued' "
-            "ORDER BY created_at, id LIMIT 1"
+            "SELECT * FROM driver_jobs WHERE state IN ('queued', 'gated') "
+            "ORDER BY CASE state WHEN 'queued' THEN 0 ELSE 1 END, created_at, id "
+            "LIMIT 1"
         ) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
