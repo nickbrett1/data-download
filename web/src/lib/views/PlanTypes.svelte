@@ -60,10 +60,12 @@
 
   <p class="lede">Plan types</p>
   <p class="sub-lede">
-    The closed set of shapes a request may be filed as. Definitions live in git
-    (<code>plan_types/*.yaml</code>) and are loaded at startup — a type that is
-    not here cannot be filed, and its parameters are validated against the
-    schema below before the request exists.
+    Two things, deliberately separate. A <strong>plan type</strong> is the
+    question — which instruments, which records, what window — and there is a
+    small closed set of them, in git (<code>plan_types/*.yaml</code>). A
+    <strong>driver</strong> is one seller's implementation of that question: a versioned
+    artefact in the driver runtime that answers it with real vendor calls. A type
+    nobody has installed a driver for can still be read here, and cannot yet be run.
   </p>
 
   {#if failure}
@@ -99,33 +101,60 @@
                where a reader can see that they are a lookup table. -->
           {#if type.vendor}
             <span class="pill">{type.vendor}</span>
-          {:else if type.vendor_agnostic}
-            <span class="pill">vendor-agnostic</span>
           {/if}
           <span class="pill">v{type.version}</span>
           <span class="spacer"></span>
+          <!-- The seller count and the installed count are the two facts that
+               used to be blended into one pill. Kept apart: the first is the
+               question's, the second is the runtime's. -->
           <span class="micro">
             {type.schema.required_count} required · {type.schema.optional_count} optional
+          </span>
+          <span class="micro">
+            {type.implementations.length}
+            {type.implementations.length === 1 ? "seller" : "sellers"} ·
+            {type.installed_count} with a driver
           </span>
         </div>
         <p class="type-desc">{type.description}</p>
 
-        {#if type.vendor_agnostic && type.sellers.length}
-          <!-- The mapping, said as what it is. Without this the pills above
-               were the only vendor-shaped thing on the page and the codes --
-               the part that actually decides whether a dataset matches --
-               were invisible. -->
-          <dl class="sellers">
-            <dt>dataset codes it claims</dt>
-            {#each type.sellers as seller (seller)}
-              <dd>
-                <strong>{seller}</strong>
-                <code>{(type.vendors[seller] ?? []).join(" · ")}</code>
-              </dd>
+        <!-- Who answers it, as rows rather than as a footnote on the pill:
+             one seller, the artefact that serves it, and — when there is none —
+             that said out loud, because "no driver installed" is why a request
+             for a perfectly good plan type would wait. -->
+        <h3 class="sub-head">answered by</h3>
+        {#if type.implementations.length === 0}
+          <p class="hint">
+            No seller claims this type yet, so nothing can be filed as it.
+          </p>
+        {:else}
+          <ul class="impls">
+            {#each type.implementations as impl (impl.vendor)}
+              <li class="impl">
+                <span class="impl-vendor">{impl.vendor}</span>
+                {#if impl.driver}
+                  <span class="pill impl-on"
+                    >driver {impl.driver.name} v{impl.driver.version}</span
+                  >
+                {:else}
+                  <span class="pill impl-off">no driver installed</span>
+                {/if}
+                {#if impl.datasets.length}
+                  <code class="impl-codes">{impl.datasets.join(" · ")}</code>
+                {/if}
+              </li>
             {/each}
-          </dl>
+          </ul>
+          {#if !data.drivers.known}
+            <p class="hint">
+              Driver state is unknown — {data.drivers.detail ||
+                "the driver runtime did not answer"} — so the rows above say what
+              each seller <em>claims</em>, not what is installed.
+            </p>
+          {/if}
         {/if}
 
+        <h3 class="sub-head">what it asks</h3>
         {#if type.schema.fields.length}
           <DataTable {columns} items={type.schema.fields}>
             {#snippet row(field)}
@@ -200,35 +229,62 @@
     max-width: 78ch;
   }
 
-  /* The attribution table, as one line per seller: a name in ink and the codes
-     in mono, because a dataset code is a value you copy and a vendor is a word
-     you read. Not a pill row -- six patterns do not fit in a pill. */
-  .sellers {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 4px 12px;
-    align-items: baseline;
+  /* The question and its implementations get their own headings, because the
+     whole point of this page is that they are not the same kind of thing. */
+  .sub-head {
+    margin: 14px 0 6px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+
+  .impls {
+    list-style: none;
     margin: 0 0 14px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  /* One row per seller: the name in ink, the artefact as a pill (it is a
+     versioned install, so it is a status, not prose), the dataset codes in
+     mono because a code is a value you copy. */
+  .impl {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 5px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
     font-size: 12px;
   }
 
-  .sellers dt {
+  .impl-vendor {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .impl-on {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  /* Not installed is not an error: the type is still readable, and a request
+     filed as it would wait for the driver rather than fail. */
+  .impl-off {
     color: var(--ink-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    background: transparent;
+    border: 1px dashed var(--line);
   }
 
-  .sellers dd {
-    grid-column: 1 / -1;
-    margin: 0;
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: baseline;
-  }
-
-  .sellers code {
+  .impl-codes {
     color: var(--ink-dim);
+    font-size: 11px;
   }
 
   /* Required/optional is a property of a schema field, not a house primitive,

@@ -200,15 +200,28 @@ export const emptyBook = {
 };
 
 export const planTypes = {
+  // Whether anyone could ask the runtime what is installed -- `known: false` is
+  // "unknown", which is not the same answer as "nothing installed".
+  drivers: { known: true, detail: "", count: 1 },
   types: [
     {
       name: "market_data_window",
       version: 3,
       // The generic shape: no pinned seller, an attribution table instead.
       vendor: "",
-      vendor_agnostic: true,
-      sellers: ["Databento"],
       vendors: { Databento: ["*.ITCH", "*.MDP3", "EQUS.*"] },
+      // The second half of the model: who answers the question. A seller with
+      // an artefact is a runnable implementation; one without is a type that
+      // can be read and cannot yet be run.
+      implementations: [
+        {
+          vendor: "Databento",
+          datasets: ["*.ITCH", "*.MDP3", "EQUS.*"],
+          driver: { name: "databento", version: "1", protocol: 1 },
+          installed: true,
+        },
+      ],
+      installed_count: 1,
       anchor: "market_data_window",
       description:
         "One batch download from any vendor, priced before it is approved.",
@@ -246,9 +259,16 @@ export const planTypes = {
       name: "http_fetch",
       version: 1,
       vendor: "Nabu",
-      vendor_agnostic: false,
-      sellers: [],
       vendors: {},
+      implementations: [
+        {
+          vendor: "Nabu",
+          datasets: [],
+          driver: null,
+          installed: false,
+        },
+      ],
+      installed_count: 0,
       anchor: "http_fetch",
       description: "A single URL, fetched once.",
       schema: {

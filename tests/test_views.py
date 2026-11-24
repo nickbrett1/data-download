@@ -334,7 +334,7 @@ def test_the_view_carries_no_server_trivia(client, db_path):
     assert "generated_at" not in types
 
 
-def test_a_generic_plan_type_says_it_is_vendor_agnostic(client):
+def test_a_generic_plan_type_keeps_its_vendor_out_of_its_identity(client):
     """The card must not name a vendor the type is not for.
 
     `market_data_window` declares a `vendors:` table -- who claims which dataset
@@ -345,9 +345,57 @@ def test_a_generic_plan_type_says_it_is_vendor_agnostic(client):
     """
     type_ = client.get("/ui/plan-types.json").json()["types"][0]
     assert type_["vendor"] == ""
-    assert type_["vendor_agnostic"] is True
-    assert type_["sellers"] == ["Databento"]
+    # The old `vendor_agnostic` flag and its pill are gone: the page draws the
+    # seller as an implementation, so a boolean about a label is not a fact.
+    assert "vendor_agnostic" not in type_
     assert "*.MDP3" in type_["vendors"]["Databento"]
+    # The second half of the model, which the page now draws separately: the
+    # seller is an *implementation* slot, and with no runtime configured the
+    # page says the state is unknown rather than "not installed".
+    assert [row["vendor"] for row in type_["implementations"]] == ["Databento"]
+    assert type_["implementations"][0]["datasets"] == type_["vendors"]["Databento"]
+    assert type_["implementations"][0]["installed"] is False
+    assert type_["installed_count"] == 0
+
+
+def test_an_installed_driver_is_shown_as_the_implementation(client, monkeypatch):
+    """A driver is an artefact with a version — that is what answers a type."""
+    from types import SimpleNamespace
+
+    from data_download import app as app_module
+
+    monkeypatch.setattr(
+        app_module,
+        "_driver_artifacts",
+        lambda _settings: (
+            [
+                SimpleNamespace(
+                    driver="databento", version="1", vendor="Databento", protocol=1
+                )
+            ],
+            "",
+        ),
+    )
+    body = client.get("/ui/plan-types.json").json()
+    assert body["drivers"] == {"known": True, "detail": "", "count": 1}
+    row = body["types"][0]["implementations"][0]
+    assert row["vendor"] == "Databento"
+    assert row["driver"] == {"name": "databento", "version": "1", "protocol": 1}
+    assert row["installed"] is True
+    assert body["types"][0]["installed_count"] == 1
+
+
+def test_an_unreachable_runtime_is_unknown_not_empty(client, monkeypatch):
+    """`known: false` is "nobody could ask", which is not "nothing installed"."""
+    from data_download import app as app_module
+
+    monkeypatch.setattr(
+        app_module, "_driver_artifacts", lambda _settings: (None, "connection refused")
+    )
+    body = client.get("/ui/plan-types.json").json()
+    assert body["drivers"]["known"] is False
+    assert "connection refused" in body["drivers"]["detail"]
+    assert body["types"][0]["implementations"][0]["installed"] is False
 
 
 def test_the_view_models_ask_for_no_credential(client, db_path):

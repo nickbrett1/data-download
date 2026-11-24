@@ -434,12 +434,51 @@ test.describe("plan types", () => {
     );
   });
 
+  // The page used to blend the two: a "vendor-agnostic" pill beside a table of
+  // dataset codes, with the installed driver invisible. A plan type is the
+  // question; a driver is one seller's implementation of it.
+  test("separates the question from the implementations", async ({ page }) => {
+    await mock(page);
+    await page.goto("/plan-types");
+
+    const generic = page.locator(".type-card").first();
+    // The question's own vocabulary, and no vendor-shaped pill on its header.
+    await expect(generic.locator(".type-head")).not.toContainText(
+      "vendor-agnostic",
+    );
+    await expect(generic.locator(".sub-head")).toHaveText([
+      "answered by",
+      "what it asks",
+    ]);
+    // An implementation is a seller, an artefact, and the codes it claims.
+    await expect(generic.locator(".impl-vendor")).toHaveText(["Databento"]);
+    await expect(generic.locator(".impl-on")).toHaveText([
+      "driver databento v1",
+    ]);
+    await expect(generic.locator(".impl-codes")).toContainText("*.MDP3");
+    await expect(generic.locator(".type-head")).toContainText(
+      "1 seller · 1 with a driver",
+    );
+
+    // And a type nobody has implemented says so, rather than looking broken.
+    const pinned = page.locator(".type-card").nth(1);
+    await expect(pinned.locator(".impl-off")).toHaveText([
+      "no driver installed",
+    ]);
+    await expect(pinned.locator(".type-head")).toContainText(
+      "1 seller · 0 with a driver",
+    );
+  });
+
   // The Svelte port kept the header count and dropped the per-field marker, so
   // the page said *how many* parameters were required but not *which*: a reader
   // with three fields had to open the raw JSON to find out. The count is not a
   // substitute for the tag, so both are asserted here.
   async function expectRequiredMarkers(page, card) {
-    await expect(card.locator(".type-head .micro")).toHaveText(
+    // The head carries two micro facts now — the shape's required/optional
+    // counts and the number of sellers that implement it — so this is the
+    // first of them, not the only one.
+    await expect(card.locator(".type-head .micro").first()).toHaveText(
       "2 required · 1 optional",
     );
 
@@ -466,25 +505,21 @@ test.describe("plan types", () => {
     ).toHaveText(["dataset", "start", "symbols"]);
   });
 
+  // `vendors:` is who claims which dataset codes, not who the question is
+  // for. It used to be drawn as a pill AND as a `.sellers` definition list,
+  // which is exactly the blend this page has since removed: the codes now live
+  // in the implementation rows, under the seller that claims them.
   test("a generic type does not wear one vendor's name", async ({ page }) => {
-    // `vendors:` is who claims which dataset codes, not who the question is
-    // for. Drawing it as a pill made the generic type look like a Databento
-    // type -- the one thing it exists not to be -- and hid the codes, which
-    // are the part that decides whether a dataset matches.
     await mock(page);
     await page.goto("/plan-types");
 
     const generic = page.locator(".type-card").first();
-    await expect(generic.locator(".type-head .pill")).toHaveText([
-      "vendor-agnostic",
-      "v3",
-    ]);
-    await expect(generic.locator(".sellers")).toContainText(
-      "dataset codes it claims",
-    );
-    // The codes, which were invisible while the pill was the only vendor-shaped
-    // thing on the card.
-    await expect(generic.locator(".sellers")).toContainText("*.MDP3");
+    // Only the version. No vendor pill, and no "vendor-agnostic" pill either:
+    // the absence of a vendor in the question needs no label.
+    await expect(generic.locator(".type-head .pill")).toHaveText(["v3"]);
+    // The codes are still visible — they are the part that decides whether a
+    // dataset matches — but under "answered by", where they belong.
+    await expect(generic.locator(".impls")).toContainText("*.MDP3");
   });
 
   test("a pinned type still names its seller", async ({ page }) => {
@@ -492,8 +527,12 @@ test.describe("plan types", () => {
     await page.goto("/plan-types");
 
     const pinned = page.locator(".type-card").nth(1);
+    // A pinned seller IS the type's identity, so it keeps the header pill...
     await expect(pinned.locator(".type-head .pill")).toHaveText(["Nabu", "v1"]);
-    await expect(pinned.locator(".sellers")).toHaveCount(0);
+    // ...and the implementation row repeats it, because that row answers
+    // "is it installed?", which the pill cannot.
+    await expect(pinned.locator(".impl-vendor")).toHaveText(["Nabu"]);
+    await expect(pinned.locator(".impl-codes")).toHaveCount(0);
   });
 
   test("the marker survives a phone, where the header row does not", async ({

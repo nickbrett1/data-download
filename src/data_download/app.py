@@ -28,7 +28,18 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, bind, catalogue, datasets, errors, match, profiles, rematch, vendor
+from . import (
+    auth,
+    bind,
+    catalogue,
+    datasets,
+    driver_client,
+    errors,
+    match,
+    profiles,
+    rematch,
+    vendor,
+)
 from . import job as job_mod
 from .config import Settings, load_settings
 from .db import (
@@ -257,7 +268,75 @@ def _schema_view(schema: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _plan_type_view(entry: Any) -> dict[str, Any]:
+#: How long the page will wait for the driver runtime. It is a *nice to have* on
+#: this page -- the registry is what the page is about -- so it gets a short
+#: deadline and a sentence when it does not answer, rather than a slow page.
+DRIVER_LIST_TIMEOUT_S = 2.0
+
+
+def _driver_artifacts(settings: Settings) -> tuple[list[Any] | None, str]:
+    """What the runtime has installed, or `None` and why it could not be asked.
+
+    Never a 500: a page that cannot see the runtime must still say what a plan
+    type *is*, and "no driver installed" is only meaningful when the question
+    was actually answered. `None` says "unknown", `[]` says "nothing installed"
+    -- a distinction the page draws rather than blurs.
+    """
+    if not (settings.driver_runtime_url and settings.driver_runtime_token):
+        return None, "no driver runtime is configured on this deployment"
+    try:
+        return (
+            driver_client.installed(
+                url=settings.driver_runtime_url,
+                token=settings.driver_runtime_token,
+                timeout=DRIVER_LIST_TIMEOUT_S,
+            ),
+            "",
+        )
+    except driver_client.DriverUnavailable as exc:
+        return None, str(exc)
+
+
+def _implementations(entry: Any, artifacts: list[Any] | None) -> list[dict[str, Any]]:
+    """Who can answer this type, as one row per seller.
+
+    A plan type is the **question**; a driver is an **implementation** of it for
+    one seller. The page used to draw them as one thing -- a "vendor-agnostic"
+    pill beside a table of dataset codes, with the installed artefact invisible
+    -- so it read as if Databento were part of the type's definition. The split
+    is drawn here, where both facts are actually known: the registry says who
+    the question accepts, the runtime says who can currently answer it.
+    """
+    sellers = {name: list(patterns) for name, patterns in entry.vendors.items()}
+    if not sellers and entry.vendor:
+        # A pinned single-seller type names its one seller in `vendor:`.
+        sellers = {entry.vendor: []}
+    installed = artifacts if artifacts is not None else []
+    rows = []
+    for seller, patterns in sellers.items():
+        found = driver_client.driver_for(seller, artifacts=installed)
+        rows.append(
+            {
+                "vendor": seller,
+                "datasets": patterns,
+                # A driver is an artefact with a version, so the page can say
+                # *which* implementation and when it is out of date.
+                "driver": (
+                    {
+                        "name": found.driver,
+                        "version": found.version,
+                        "protocol": found.protocol,
+                    }
+                    if found
+                    else None
+                ),
+                "installed": found is not None,
+            }
+        )
+    return rows
+
+
+def _plan_type_view(entry: Any, artifacts: list[Any] | None = None) -> dict[str, Any]:
     """The page's view of one plan type: a card, its parameter rows, its schema.
 
     Not `full_entry()` and not `index_entry()` either. The full entry carries
@@ -269,26 +348,31 @@ def _plan_type_view(entry: Any) -> dict[str, Any]:
     with a page that does not read half of it.
     """
     # `vendor` is the pinned single-seller shape; `vendors` is the generic one.
-    # Two different facts, so the page gets two different fields and does not
-    # have to guess which it is looking at:
+    # Two different facts, and only the first is the type's identity:
     #
-    # * `vendor`      -- the type is *for* one seller (`vendor:` in its YAML);
-    # * `vendor_agnostic` -- the type declares a `vendors:` attribution table,
-    #   which is who claims which dataset codes for *matching*, not who the
-    #   question is for. Naming the page's pill after the table made the
-    #   generic type look like a Databento type, which is exactly what the
-    #   generic type exists to stop being.
-    sellers = list(entry.vendors)
+    # * `vendor`  -- the type is *for* one seller (`vendor:` in its YAML);
+    # * `vendors` -- a `vendors:` attribution table, which is who claims which
+    #   dataset codes for *matching*, not who the question is for.
+    #
+    # There used to be a `vendor_agnostic` flag beside them, named after the
+    # page's old pill. It is gone with the pill: the page draws "who answers
+    # it" from `implementations` below, and a boolean describing a label that
+    # no longer exists is the same blend in a quieter shape.
+    implementations = _implementations(entry, artifacts)
     return {
         "name": entry.name,
         "version": entry.version,
+        # The pinned seller, when the *type* is for one. Empty means the
+        # question has no vendor in it -- which is a property of the question,
+        # and no longer the page's headline pill.
         "vendor": entry.vendor,
-        "vendor_agnostic": bool(sellers) and not entry.vendor,
-        "sellers": sellers,
         "vendors": {name: list(p) for name, p in entry.vendors.items()},
         "description": entry.description,
         "anchor": entry.name,
         "schema": _schema_view(entry.params_schema or {}),
+        # The second half of the model the page now draws: who answers it.
+        "implementations": implementations,
+        "installed_count": sum(1 for row in implementations if row["installed"]),
     }
 
 
@@ -1714,7 +1798,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/ui/plan-types.json")
     async def plan_types_json(request: Request) -> dict[str, Any]:
-        return {"types": [_plan_type_view(entry) for entry in registry.all()]}
+        artifacts, detail = _driver_artifacts(settings)
+        return {
+            "types": [_plan_type_view(entry, artifacts) for entry in registry.all()],
+            # A separate fact from the registry, and stated as such: what is
+            # *installed* is the runtime's answer. `known: false` means nobody
+            # could ask, which is not the same as "nothing is installed".
+            "drivers": {
+                "known": artifacts is not None,
+                "detail": detail,
+                "count": len(artifacts or []),
+            },
+        }
 
     def _index() -> FileResponse:
         index = WEB_DIST_DIR / "index.html"
