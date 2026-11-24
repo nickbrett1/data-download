@@ -378,6 +378,9 @@ DATA_DOWNLOAD_PLAN_TYPES_DIR=/srv/appdata/data-download-drivers/loop/plan_types
 DATA_DOWNLOAD_DRIVER_RUNTIME_URL=http://127.0.0.1:8831
 DRIVER_RUNTIME_TOKEN=<the token in the drivers compose .env>
 DATA_DOWNLOAD_DRIVERS_DIR=/srv/appdata/data-download-drivers/drivers
+# The datasets root AS THE RUNTIME SEES IT (only the runtime writes there, and
+# it validates every path against its own mount). Default /datasets.
+DATA_DOWNLOAD_DRIVER_DATASETS_ROOT=/datasets
 DRIVER_LOOP_REPO=nickbrett1/data-download-drivers
 DRIVER_LOOP_GITHUB_TOKEN=<a token that can push a branch and open a PR>
 DRIVER_LOOP_AUTHOR_CMD=/srv/appdata/data-download-drivers/loop/driver-author.sh

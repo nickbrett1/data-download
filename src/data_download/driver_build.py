@@ -230,11 +230,29 @@ def _as_date(value: Any) -> date | None:
         return None
 
 
+def probe_root(job_id: str, runtime_root: str = "/datasets") -> Path:
+    """Where the probe's bytes go **in the driver runtime's** view of the world.
+
+    Not the loop's own datasets directory. The loop may run anywhere -- on ryzen
+    it is a host process, so its datasets path is `/srv/datasets` -- while the
+    runtime is a container that knows only `/datasets`, and it validates every
+    root against its own mount. Handing it the host path earns `400 bad_request:
+    root '/srv/datasets/_probe/...' is outside /datasets`, which reads like a
+    pricing failure and is a path translation.
+
+    So the split is explicit: the loop names where the *runtime* should write,
+    and `DATA_DOWNLOAD_DRIVER_DATASETS_ROOT` is how a deployment whose mount
+    differs says so. The loop deletes nothing it did not create -- the probe's
+    own directory is the runtime's to clean.
+    """
+    return Path(runtime_root) / "_probe" / job_id
+
+
 def run_probe(
     row: dict[str, Any],
     artifact: Any,
     *,
-    datasets_dir: Path,
+    runtime_root: str = "/datasets",
     driver_url: str | None,
     driver_token: str | None,
     registry: Registry,
@@ -252,7 +270,7 @@ def run_probe(
     if not source:
         raise LoopRefused("no bound Job on the waiting request, so there is nothing to probe")
     job = probe_job(source)
-    root = Path(datasets_dir) / "_probe" / str(row.get("id") or "probe")
+    root = probe_root(str(row.get("id") or "probe"), runtime_root)
     driver = driver_client.RemoteDriver(
         root,
         "clean",
@@ -369,7 +387,7 @@ def default_steps(*, author_cmd: str, repo: str, drivers_dir: Path, settings: An
         return run_probe(
             row,
             artifact,
-            datasets_dir=Path(settings.datasets_dir or ""),
+            runtime_root=settings.driver_datasets_root or "/datasets",
             driver_url=settings.driver_runtime_url,
             driver_token=settings.driver_runtime_token,
             registry=registry,

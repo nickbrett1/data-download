@@ -123,6 +123,24 @@ def test_a_probe_is_the_waiting_job_shrunk_to_one_day_and_one_symbol():
 # -- the state machine -------------------------------------------------------
 
 
+def test_a_probe_is_rooted_in_the_runtimes_view_not_the_hosts(tmp_path):
+    """The loop may run on the host; the runtime knows only `/datasets`.
+
+    Getting this wrong is not exotic: on ryzen it produced `400 bad_request:
+    root '/srv/datasets/_probe/...' is outside /datasets`, which reads like a
+    pricing failure and was a path translation.
+    """
+    assert (
+        str(driver_build.probe_root("drv_1", "/datasets")) == "/datasets/_probe/drv_1"
+    )
+    assert (
+        str(driver_build.probe_root("drv_1", "/data/datasets"))
+        == "/data/datasets/_probe/drv_1"
+    )
+    # The default is the runtime's own mount point, never the caller's path.
+    assert str(driver_build.probe_root("drv_1")) == "/datasets/_probe/drv_1"
+
+
 def test_a_green_branch_installs(tmp_path):
     store = _store(tmp_path)
     try:

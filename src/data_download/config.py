@@ -73,6 +73,10 @@ class Settings:
     # deployment can run a Job.
     driver_runtime_url: str | None = None
     driver_runtime_token: str | None = None
+    #: The datasets root *as the driver runtime sees it*. Only the runtime
+    #: writes there, and it validates every path against its own mount, so a
+    #: loop running on the host must not hand it the host path.
+    driver_datasets_root: str | None = None
     # Phase 6: whether this process picks approved rows up by itself. On by
     # default, because "approved and then nothing" is the state that made the
     # worker necessary; the switch exists so tests and the CLI can own the
@@ -318,6 +322,9 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
 
     driver_runtime_url = (env.get("DATA_DOWNLOAD_DRIVER_RUNTIME_URL") or "").strip() or None
     driver_runtime_token = (env.get("DRIVER_RUNTIME_TOKEN") or "").strip() or None
+    driver_datasets_root = (
+        env.get("DATA_DOWNLOAD_DRIVER_DATASETS_ROOT") or ""
+    ).strip() or None
     if driver_runtime_token is None:
         # Fail closed and say so: the runtime refuses an unauthenticated caller,
         # and this process refuses to send one, so with no token no approved
@@ -379,6 +386,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         datasets_dir=datasets_dir,
         driver_runtime_url=driver_runtime_url,
         driver_runtime_token=driver_runtime_token,
+        driver_datasets_root=driver_datasets_root,
         runner=runner,
         runner_interval=runner_interval,
     )
