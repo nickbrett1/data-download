@@ -91,6 +91,19 @@ export function windowOf(start, end) {
   return `${start} → ${end} (end exclusive)`;
 }
 
+/** The same window, short enough for a table cell: `2026-11-20 → 2026-11-21`.
+ *
+ * Not a second way of saying the range -- the arrow means what it means -- but
+ * the book has one line per cell and `(end exclusive)` is 15 characters of the
+ * widest text in the row. So the cell carries the range and `windowOf` goes in
+ * its `title`, where the rule is available to the reader who hovers instead of
+ * being absent for everyone. The header still says "window", not "dates".
+ */
+export function windowRange(start, end) {
+  if (!start || !end) return "";
+  return `${start} → ${end}`;
+}
+
 /** A dataset, never as a bare vendor code: `GLBX.MDP3 · CME Globex MDP 3.0`.
  *
  * The code is the vendor's vocabulary and nobody outside Databento has it

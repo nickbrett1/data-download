@@ -27,6 +27,8 @@
     stateLabel,
     stateTone,
     usd,
+    windowOf,
+    windowRange,
   } from "$lib/format";
 
   const FACET_LABELS = {
@@ -119,12 +121,12 @@
     return data.facets[show] ?? [];
   });
 
-  // Four columns: what it is, where it is, what it costs, when it was asked
-  // for. The quote column spent the first three phases as a dash from top to
-  // bottom, because nothing priced anything; phase 4 fills it at submit, so it
-  // is a fact now rather than an empty cell dressed as one. It stays a dash
-  // only where there is no price to show: a blocked row has no Job to quote and
-  // the schema forbids it an estimate.
+  // Five columns: what it is, what window it covers, where it is, what it
+  // costs, when it was asked for. The quote column spent the first three phases
+  // as a dash from top to bottom, because nothing priced anything; phase 4
+  // fills it at submit, so it is a fact now rather than an empty cell dressed
+  // as one. It stays a dash only where there is no price to show: a blocked row
+  // has no Job to quote and the schema forbids it an estimate.
   //
   // A fifth -- "why it matters" -- was tried and removed: on a finished row it
   // repeated the badge or said nothing, and its useful half (what a blocked row
@@ -132,6 +134,12 @@
   // now. See `stateDetail`.
   const columns = [
     { label: "request", width: "minmax(11rem, 1.9fr)" },
+    // What the request is *for*, in time. It arrived in `params_json`, which the
+    // book drops, so the page could not show it at all -- and it is the one
+    // qualification a reader compares between rows ("which of these covers last
+    // week?"). Narrow, and next to the subject rather than after the state: the
+    // first two columns are what was asked for, the rest is what became of it.
+    { label: "window", width: "minmax(9rem, 0.85fr)" },
     { label: "state", width: "minmax(9rem, 0.9fr)" },
     { label: "quote", align: "end", width: "minmax(5rem, 0.5fr)" },
     { label: "filed", align: "end" },
@@ -212,6 +220,19 @@
                 )}{/if}</span
             >
           </span>
+          <!-- The range, or a dash. A dash is not an empty cell: a row with no
+               complete window (a draft still being assembled, an intent that
+               named a plan type and no dates) has nothing to print, and making
+               one up would be inventing the dates it is asking for. -->
+          <span
+            class="window"
+            title={request.window
+              ? windowOf(request.window.start, request.window.end)
+              : ""}
+            >{request.window
+              ? windowRange(request.window.start, request.window.end)
+              : "—"}</span
+          >
           <!-- The badge, and under it the one thing the badge cannot say: what a
                blocked row is short of, whether an approved row was ever claimed,
                or the ceiling a draft is asking to authorise. Most rows have
@@ -328,6 +349,14 @@
   }
 
   .filed {
+    color: var(--ink-dim);
+    white-space: nowrap;
+  }
+
+  /* Tabular, because the column exists to be compared down the page: the two
+     dates of one row should sit above the two of the next. */
+  .window {
+    font-variant-numeric: tabular-nums;
     color: var(--ink-dim);
     white-space: nowrap;
   }

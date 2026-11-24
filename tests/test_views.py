@@ -564,6 +564,59 @@ def test_a_plan_row_is_labelled_by_its_type(client, db_path):
     assert row["label"] == "market_data_window"
 
 
+def test_a_row_carries_the_window_it_asks_for(client, db_path):
+    """The dates, in one shape, whichever body the row came from.
+
+    They were in `params_json` -- the column the book drops so one row cannot
+    cost a page -- so the page could not show them at all, and the window is the
+    one qualification a reader compares between rows.
+    """
+    seed(
+        db_path,
+        [
+            # A plan: `start`/`end` flat, as the shared form asks for them.
+            {
+                "id": "req_plan",
+                "params_json": json.dumps(
+                    {
+                        "vendor": "Databento",
+                        "dataset": "GLBX.MDP3",
+                        "start": "2026-10-01",
+                        "end": "2026-10-08",
+                    }
+                ),
+            },
+            # An intent: the same range, nested under `window`.
+            {
+                "id": "req_intent",
+                "state": "blocked",
+                "body_kind": "intent",
+                "plan_type": None,
+                "job_json": None,
+                "estimate_usd": None,
+                "blocked_reason": "awaiting_plan",
+                "intent_json": json.dumps({"max_usd": 10}),
+                "params_json": json.dumps(
+                    {
+                        "dataset": "GLBX.MDP3",
+                        "window": {"start": "2026-10-01", "end": "2026-10-08"},
+                    }
+                ),
+            },
+            # Half a range is not a range: a draft still being assembled gets no
+            # window rather than a cell that invents the missing end.
+            {
+                "id": "req_partial",
+                "params_json": json.dumps({"dataset": "GLBX.MDP3", "start": "2026-10-01"}),
+            },
+        ],
+    )
+    by_id = {row["id"]: row for row in _book(client)["rows"]}
+    assert by_id["req_plan"]["window"] == {"start": "2026-10-01", "end": "2026-10-08"}
+    assert by_id["req_intent"]["window"] == {"start": "2026-10-01", "end": "2026-10-08"}
+    assert by_id["req_partial"]["window"] is None
+
+
 def test_a_row_names_the_vendor_the_dataset_belongs_to(client, db_path):
     """`XNAS.ITCH` is vendor vocabulary: without the vendor it means nothing.
 

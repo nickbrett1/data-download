@@ -473,11 +473,41 @@ async def _refuse_from_catalogue(
 
 def _start_of(params: dict[str, Any]) -> str | None:
     """The window start, flat on a plan's params or inside an intent's window."""
+    start, _end = _window_bounds(params)
+    return start
+
+
+def _window_bounds(params: dict[str, Any]) -> tuple[str | None, str | None]:
+    """`(start, end)` of the window a request asks for.
+
+    Two shapes, one meaning: a plan's params carry `start`/`end` flat (the
+    shared form asks for them), an intent carries `window: {start, end}`. A
+    caller should not have to know which door the body came through, and the
+    book reads both -- so the reading lives here once, and `_start_of` (the
+    catalogue check) and `_window_of` (the book's column) both go through it.
+    """
     window = params.get("window")
-    if isinstance(window, dict) and window.get("start"):
-        return str(window["start"])
-    start = params.get("start")
-    return str(start) if start else None
+    if isinstance(window, dict) and (window.get("start") or window.get("end")):
+        return (
+            str(window["start"]) if window.get("start") else None,
+            str(window["end"]) if window.get("end") else None,
+        )
+    start, end = params.get("start"), params.get("end")
+    return (str(start) if start else None, str(end) if end else None)
+
+
+def _window_of(row: dict[str, Any]) -> dict[str, str] | None:
+    """The window, or None when the body names no complete one.
+
+    `None` rather than a half-window: a start with no end is not a range, and
+    the column would have to invent the missing half to print one. A row can be
+    windowless -- a draft whose params are still being assembled, or an intent
+    that named a plan type but no dates -- and a dash is the honest answer.
+    """
+    start, end = _window_bounds(_params_of(row))
+    if not start or not end:
+        return None
+    return {"start": start, "end": end}
 
 
 async def _price(request: Request, job_text: str, vendor_name: str | None) -> float:
@@ -803,6 +833,12 @@ def _book_row(
     # every caller -- the book and the page -- gets the same reading of it.
     out["failure"] = _failure_of(out.pop("errors_json", None))
     out["label"] = _label(row)
+    # What the request is *for*, in time: the window is the second thing a
+    # reader scans for after the subject, and it was in `params_json` -- the one
+    # column the book drops -- so the page could not show it at all. Derived
+    # here for the same reason `label` is: the page should not have to know that
+    # a plan's dates are flat and an intent's are nested.
+    out["window"] = _window_of(row)
     out["vendor"] = _vendor_of(row, registry)
     out["gap"] = _gap_of(row)
     # The dataset code and what the vendor calls it. Both are on every row --
