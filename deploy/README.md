@@ -365,8 +365,11 @@ This is deliberate and it is a constraint, not a preference. Two facts decide it
   the writable mount.
 
 On `ryzen` the host already has `goose`, `gh` and `git`, which is exactly what
-the harness needs. `deploy/driver-loop.service` is the unit; the environment is
-in `/srv/appdata/data-download-drivers/loop.env` (mode 0600, never committed):
+the harness needs. `deploy/driver-loop.service` execs the **supervisor**
+(`scripts/driver-loop.sh`) rather than `driver_build --once`: a unit that ran the
+one-shot would look up once and never poll, and `Restart=on-failure` would never
+fire on a clean exit. Everything else is configuration, in
+`/srv/appdata/data-download-drivers/loop.env` (mode 0600, never committed):
 
 ```
 DATA_DOWNLOAD_DB=/srv/appdata/data-download/data-download.db
@@ -380,7 +383,26 @@ DRIVER_LOOP_GITHUB_TOKEN=<a token that can push a branch and open a PR>
 DRIVER_LOOP_AUTHOR_CMD=/srv/appdata/data-download-drivers/loop/driver-author.sh
 GITHUB_TOKEN=<same token, read by the harness>
 DRIVER_LOOP_INTERVAL=60
+# ryzen's `python3 -m venv` lacks ensurepip; `uv venv --seed` builds an
+# equivalent venv. Either way the supervisor must run the venv's interpreter:
+# a bare `python3` is the host's, with no package installed.
+PYTHON=/srv/appdata/data-download-drivers/loop-venv/bin/python
+# Quoted because `set -a; . ./loop.env` would otherwise read `goose run ...` as a
+# command with an environment prefix. systemd's EnvironmentFile accepts the
+# same form. `goose run -t` is v1.53's one-shot text flag.
+AUTHOR_AGENT_CMD="goose run --no-session -t"
 ```
+
+Two host facts this unit assumes, both learned the hard way:
+
+- **The store must be writable by the loop's user.** `…/data-download.db` is
+  created by the app container, which runs as root, so on a fresh deployment it
+  is `root:root 0644` and a loop running as `nick` gets a read-only SQLite open
+  and fails on the schema apply (`attempt to write a readonly database`). Fix
+  once with `docker exec data-download chown 1000:1000 /data/data-download.db*`
+  (root in the container still writes) — and again if the DB is ever recreated.
+- **The supervisor needs the venv on `PATH`.** `scripts/driver-loop.sh` runs
+  `${PYTHON:-python3}`, which is why `PYTHON` is in the env file at all.
 
 The unit is sandboxed to the two paths it legitimately writes
 (`ProtectSystem=strict` plus `ReadWritePaths` for the store and the drivers

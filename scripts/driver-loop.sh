@@ -23,18 +23,24 @@
 #                                            per wait rather than once a minute
 #
 # A misconfiguration must not look like an idle host: that is why 2 backs off.
+#
+# PYTHON is deliberate: on ryzen the package lives in a virtualenv, and a bare
+# `python3` on PATH is the host's interpreter with no package installed. A
+# supervisor that silently ran the wrong interpreter would answer exit 1 forever
+# and look like a job that keeps failing.
 set -u
 
+PYTHON="${PYTHON:-python3}"
 INTERVAL="${DRIVER_LOOP_INTERVAL:-60}"
 BACKOFF="${DRIVER_LOOP_MISCONFIG_INTERVAL:-600}"
 
 log() { printf '%s driver-loop: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 
-log "starting; interval ${INTERVAL}s, misconfigured backoff ${BACKOFF}s"
+log "starting; python ${PYTHON}; interval ${INTERVAL}s, misconfigured backoff ${BACKOFF}s"
 log "repo ${DRIVER_LOOP_REPO:-nickbrett1/data-download-drivers}; drivers dir ${DATA_DOWNLOAD_DRIVERS_DIR:-/drivers}"
 
 while :; do
-  python3 -m data_download.driver_build --once
+  "${PYTHON}" -m data_download.driver_build --once
   status=$?
   case "${status}" in
     0) log "nothing more to do right now"
