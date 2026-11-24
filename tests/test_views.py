@@ -612,8 +612,20 @@ def test_a_row_carries_the_window_it_asks_for(client, db_path):
         ],
     )
     by_id = {row["id"]: row for row in _book(client)["rows"]}
-    assert by_id["req_plan"]["window"] == {"start": "2026-10-01", "end": "2026-10-08"}
-    assert by_id["req_intent"]["window"] == {"start": "2026-10-01", "end": "2026-10-08"}
+    # `days` is the length, and it is the server's to compute: `end` is
+    # exclusive everywhere (the vendor's own semantics), so `1 -> 8` is seven
+    # days. In the browser that subtraction would be a second copy of the
+    # convention, in a language that parses dates as local time.
+    assert by_id["req_plan"]["window"] == {
+        "start": "2026-10-01",
+        "end": "2026-10-08",
+        "days": 7,
+    }
+    assert by_id["req_intent"]["window"] == {
+        "start": "2026-10-01",
+        "end": "2026-10-08",
+        "days": 7,
+    }
     assert by_id["req_partial"]["window"] is None
 
 

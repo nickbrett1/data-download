@@ -48,6 +48,22 @@
 
   let data = $state(null);
   let failure = $state("");
+
+  /** The start and the length, or the range when no length is known.
+   *
+   * `days` comes from the server because `end` is exclusive and that
+   * subtraction is the system's convention, not the view's. A body whose dates
+   * are not plain days (a stamp, a vendor's odd string) has no length, and the
+   * cell falls back to the range rather than guessing one.
+   */
+  function windowCell(range) {
+    if (!range) return "—";
+    if (range.days === null || range.days === undefined) {
+      return windowRange(range.start, range.end);
+    }
+    return `${range.start} · ${range.days} ${range.days === 1 ? "day" : "days"}`;
+  }
+
   let show = $state(currentShow());
 
   function currentShow() {
@@ -220,18 +236,22 @@
                 )}{/if}</span
             >
           </span>
-          <!-- The range, or a dash. A dash is not an empty cell: a row with no
-               complete window (a draft still being assembled, an intent that
-               named a plan type and no dates) has nothing to print, and making
-               one up would be inventing the dates it is asking for. -->
+          <!-- When it starts and how long it runs: `2026-11-18 · 3 days`. The
+               end date is the weaker half of the pair -- it is `start + days`,
+               and a reader comparing rows wants to know when a window opens and
+               how big it is, because the days are what the quote scales with.
+               The whole range, and the phrase saying which date is included,
+               are in the tooltip.
+
+               A dash is not an empty cell: a row with no complete window (a
+               draft still being assembled, an intent that named a plan type and
+               no dates) has nothing to print, and making one up would be
+               inventing the dates it is asking for. -->
           <span
             class="window"
             title={request.window
               ? windowOf(request.window.start, request.window.end)
-              : ""}
-            >{request.window
-              ? windowRange(request.window.start, request.window.end)
-              : "—"}</span
+              : ""}>{windowCell(request.window)}</span
           >
           <!-- The badge, and under it the one thing the badge cannot say: what a
                blocked row is short of, whether an approved row was ever claimed,

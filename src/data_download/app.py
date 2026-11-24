@@ -19,6 +19,7 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -496,18 +497,35 @@ def _window_bounds(params: dict[str, Any]) -> tuple[str | None, str | None]:
     return (str(start) if start else None, str(end) if end else None)
 
 
-def _window_of(row: dict[str, Any]) -> dict[str, str] | None:
+def _window_of(row: dict[str, Any]) -> dict[str, Any] | None:
     """The window, or None when the body names no complete one.
 
     `None` rather than a half-window: a start with no end is not a range, and
     the column would have to invent the missing half to print one. A row can be
     windowless -- a draft whose params are still being assembled, or an intent
     that named a plan type but no dates -- and a dash is the honest answer.
+
+    `days` is the length, counted here rather than in the view: `end` is
+    exclusive, so `18 -> 19` is one day, and that subtraction is arithmetic on
+    the system's convention. Done in the browser it would be a second copy of
+    the convention, in a language that parses dates as local time.
+    `None` if either bound is not a plain date -- the page then prints the range
+    instead of a length it had to guess.
     """
     start, end = _window_bounds(_params_of(row))
     if not start or not end:
         return None
-    return {"start": start, "end": end}
+    return {"start": start, "end": end, "days": _days_between(start, end)}
+
+
+def _days_between(start: str, end: str) -> int | None:
+    """Whole days from `start` to `end`, or None if they are not plain dates."""
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+    except (TypeError, ValueError):
+        return None
+    days = (last - first).days
+    return days if days >= 0 else None
 
 
 async def _price(request: Request, job_text: str, vendor_name: str | None) -> float:

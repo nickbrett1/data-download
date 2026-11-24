@@ -111,25 +111,25 @@ test.describe("the request book", () => {
     // it used to be invisible: it lives in `params_json`, the column the book
     // drops, so the page could not draw it at all.
     const first = page.locator(".tbl-row").first();
-    await expect(first.locator(".window")).toHaveText(
-      "2026-10-01 → 2026-10-08",
-    );
-    // The arrow alone cannot say which date is included, and the convention is
-    // the vendor's: `20 → 21` is one day. The cell has no room for the phrase,
-    // so it rides in the tooltip rather than being lost.
+    // When it opens, and how long it runs. The end date is the weaker half of
+    // the pair -- it is `start + days` -- and the length is what the quote
+    // scales with, so the length is what the cell prints.
+    await expect(first.locator(".window")).toHaveText("2026-10-01 · 7 days");
+    // The whole range, and the phrase that says which date is included (the
+    // convention is the vendor's: `20 → 21` is one day), ride in the tooltip.
     await expect(first.locator(".window")).toHaveAttribute(
       "title",
       "2026-10-01 → 2026-10-08 (end exclusive)",
     );
 
-    // One range per row, from either body shape: a plan's flat `start`/`end`
-    // and an intent's nested `window` read the same here.
+    // One reading per row, from either body shape: a plan's flat `start`/`end`
+    // and an intent's nested `window` arrive as the same window.
     await expect(page.locator(".tbl-row .window")).toHaveText([
-      "2026-10-01 → 2026-10-08",
-      "2026-11-14 → 2026-11-15",
-      "2026-11-15 → 2026-11-16",
-      "2026-10-01 → 2026-10-08",
-      "2026-11-01 → 2026-11-05",
+      "2026-10-01 · 7 days",
+      "2026-11-14 · 1 day",
+      "2026-11-15 · 1 day",
+      "2026-10-01 · 7 days",
+      "2026-11-01 · 4 days",
     ]);
   });
 
@@ -148,6 +148,22 @@ test.describe("the request book", () => {
     const second = page.locator(".tbl-row").nth(1);
     await expect(second.locator(".window")).toHaveText("—");
     await expect(second.locator(".window")).toHaveAttribute("title", "");
+
+    // A window whose dates are not plain days has no length, and the cell says
+    // the range rather than a length it had to guess.
+    const odd = dashboard.rows.map((row, index) =>
+      index === 1
+        ? {
+            ...row,
+            window: { start: "2026-11-14", end: "2026-11-15", days: null },
+          }
+        : row,
+    );
+    await mock(page, { requests: { ...dashboard, rows: odd } });
+    await page.goto("/");
+    await expect(page.locator(".tbl-row").nth(1).locator(".window")).toHaveText(
+      "2026-11-14 → 2026-11-15",
+    );
   });
 
   test("a stuck condition outranks the state it is stuck in", async ({
