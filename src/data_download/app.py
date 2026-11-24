@@ -337,18 +337,11 @@ def _implementations(entry: Any, artifacts: list[Any] | None) -> list[dict[str, 
                 "vendor": seller,
                 "datasets": patterns,
                 # A driver is an artefact with a version, so the page can say
-                # *which* implementation, and since when.
+                # *which* implementation. Nothing else about the artefact: the
+                # protocol is checked (and refused) on discovery, so it cannot
+                # differ here, and the install time is a clock, not an ordering.
                 "driver": (
-                    {
-                        "name": found.driver,
-                        "version": found.version,
-                        "protocol": found.protocol,
-                        # A runtime older than the field simply does not say,
-                        # which is a blank cell rather than a broken page.
-                        "installed_at": getattr(found, "installed_at", ""),
-                    }
-                    if found
-                    else None
+                    {"name": found.driver, "version": found.version} if found else None
                 ),
                 "installed": found is not None,
             }
@@ -376,8 +369,6 @@ def _installed_drivers(artifacts: list[Any] | None, entries: list[Any]) -> list[
                 "name": artifact.driver,
                 "version": artifact.version,
                 "vendor": artifact.vendor,
-                "protocol": artifact.protocol,
-                "installed_at": getattr(artifact, "installed_at", ""),
                 "answers": [name for claimed, name in claims if vendor and claimed == vendor],
             }
         )

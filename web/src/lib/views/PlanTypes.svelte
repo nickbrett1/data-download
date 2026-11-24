@@ -174,7 +174,10 @@
                 </button>
                 {#if open}
                   <!-- The match as a rule rather than as prose: this vendor,
-                       and one of these dataset codes. -->
+                       and one of these dataset codes. Nothing else: the name
+                       and version are already the row's pill, protocol can
+                       only be 1 here (a mismatch refuses discovery outright),
+                       and the install date is a clock, not an ordering. -->
                   <dl class="driver-detail">
                     <dt>matches</dt>
                     <dd>
@@ -186,14 +189,6 @@
                         {/each}
                       {:else}
                         · any dataset
-                      {/if}
-                    </dd>
-                    <dt>artefact</dt>
-                    <dd>
-                      <code>{impl.driver.name}</code> v{impl.driver.version} · protocol
-                      {impl.driver.protocol}
-                      {#if impl.driver.installed_at}
-                        · installed {impl.driver.installed_at.slice(0, 10)}
                       {/if}
                     </dd>
                   </dl>
@@ -260,13 +255,6 @@
                 <code class="driver-name">{row.name}</code>
                 <span class="pill">v{row.version}</span>
                 <span class="vendor">{row.vendor || "—"}</span>
-                <span class="spacer"></span>
-                <span class="micro">protocol {row.protocol}</span>
-                {#if row.installed_at}
-                  <span class="micro"
-                    >installed {row.installed_at.slice(0, 10)}</span
-                  >
-                {/if}
               </div>
             </li>
           {/each}

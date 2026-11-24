@@ -452,10 +452,14 @@ test.describe("plan types", () => {
       "vendor Databento",
     );
     await expect(first.locator(".driver-detail")).toContainText("*.MDP3");
-    await expect(first.locator(".driver-detail")).toContainText("protocol 1");
-    await expect(first.locator(".driver-detail")).toContainText(
-      "installed 2026-11-23",
-    );
+    // And only that. The panel used to restate the artefact underneath: its
+    // name and version (already the row's pill), the protocol number (a
+    // mismatch refuses discovery, so it can only ever read 1) and an install
+    // date that said when a file was copied, not what the driver does.
+    const detail = await first.locator(".driver-detail").innerText();
+    expect(detail).not.toMatch(/protocol/);
+    expect(detail).not.toMatch(/installed/);
+    expect(detail).not.toContain("databento v1");
 
     // The row is the control, and it closes on a second click.
     const toggle = first.locator(".driver-toggle");

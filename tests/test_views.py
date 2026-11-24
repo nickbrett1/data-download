@@ -381,12 +381,9 @@ def test_an_installed_driver_is_shown_as_the_implementation(client, monkeypatch)
     assert body["drivers"]["count"] == 1
     row = body["types"][0]["implementations"][0]
     assert row["vendor"] == "Databento"
-    assert row["driver"] == {
-        "name": "databento",
-        "version": "1",
-        "protocol": 1,
-        "installed_at": "",
-    }
+    # Name and version only: the protocol cannot differ here (discovery
+    # refuses on mismatch) and the install time is not the page's question.
+    assert row["driver"] == {"name": "databento", "version": "1"}
     assert row["installed"] is True
     assert body["types"][0]["installed_count"] == 1
     # The browse list the page filters: every artefact, and the types its
@@ -396,8 +393,6 @@ def test_an_installed_driver_is_shown_as_the_implementation(client, monkeypatch)
             "name": "databento",
             "version": "1",
             "vendor": "Databento",
-            "protocol": 1,
-            "installed_at": "",
             "answers": ["market_data_window"],
         }
     ]
