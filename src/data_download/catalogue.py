@@ -297,3 +297,97 @@ def schedule(
         )
         _TASKS.add(task)
         task.add_done_callback(_TASKS.discard)
+
+
+# -- the free pre-flight ------------------------------------------------------
+#
+# `describe` answers three questions a *submit* cares about -- is this a code the
+# vendor knows, which schemas does it carry, and when does its data begin -- so a
+# request the vendor could never satisfy can be refused here, against the cache,
+# before a metered `cost` call. What it must never do is refuse on a guess: one
+# wrong refusal is a request nobody can file, and the vendor's own 400 is a
+# better answer than ours when the cache is cold, stale, or simply older than
+# today's dataset list.
+
+
+def _as_date(value: Any) -> date | None:
+    """A date or an ISO instant as a UTC date.
+
+    A timezone matters by a day at the edges: `2010-06-05T23:00-05:00` is
+    2010-06-06 UTC, which is the day the vendor means.
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(UTC)
+    return moment.date()
+
+
+def refusal(
+    entry_row: dict[str, Any] | None,
+    *,
+    dataset: str,
+    schema: str | None = None,
+    start: str | None = None,
+) -> dict[str, Any] | None:
+    """Why the catalogue says this request cannot be satisfied, or `None`.
+
+    Only positive, current evidence refuses:
+
+    * no cached row, an unparseable `fetched_at`, or a description older than
+      `STALE_AFTER_S` -> `None`. The vendor gets to answer; a stale cache must
+      not be the reason a valid request is impossible;
+    * `described: false` -> `None` too, deliberately. A dataset code can be
+      released *after* we asked, and refusing a new code for a week is worse
+      than the typo this would have caught -- which the vendor already catches
+      for free at `cost`;
+    * a schema the dataset does not carry -> refuse. A dataset's schema set is
+      the vendor's and effectively static;
+    * a window starting before the dataset's first day -> refuse. Data does not
+      move backwards (a backfill could, but that is rarer than the mistake);
+    * a window ending after the range's end -> **allowed**. Measured live
+      2026-11-24: the range end sits hours behind the clock, so "ends today" is
+      a real request against a range that has not caught up. The end is a clock;
+      the start is a fact.
+
+    The answer is a dict rather than an exception so this module stays free of
+    HTTP vocabulary; the route turns `message` into the caller's 422.
+    """
+    if entry_row is None or is_stale(entry_row):
+        return None
+    if not entry_row.get("described"):
+        return None
+    schemas = [str(s) for s in entry_row.get("schemas") or []]
+    if schema and schemas and schema not in schemas:
+        return {
+            "reason": "schema",
+            "dataset": dataset,
+            "schema": schema,
+            "schemas": schemas,
+            "message": (
+                f"{dataset} does not carry {schema!r}; it carries: "
+                + ", ".join(schemas)
+            ),
+        }
+    first = _as_date(entry_row.get("available_from"))
+    asked = _as_date(start)
+    if first is not None and asked is not None and asked < first:
+        return {
+            "reason": "window",
+            "dataset": dataset,
+            "available_from": first.isoformat(),
+            "start": asked.isoformat(),
+            "message": (
+                f"{dataset} starts {first.isoformat()}; this window starts "
+                f"{asked.isoformat()}"
+            ),
+        }
+    return None

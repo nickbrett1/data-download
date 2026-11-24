@@ -37,6 +37,12 @@ STORE_UNAVAILABLE = "store_unavailable"
 QUOTE_UNAVAILABLE = "quote_unavailable"
 OVER_CEILING = "over_ceiling"
 
+# The catalogue's submit-time refusal. Distinct from `quote_unavailable` on
+# purpose: one means "nobody could price this", the other means "the vendor
+# cannot answer this question", and the repair is different -- fix the schema or
+# the window, rather than wait for a pricing service that was never the problem.
+NOT_IN_CATALOGUE = "not_in_catalogue"
+
 # Not one of §7.4's submit-time codes. A read for an id that does not exist has
 # to answer something, and the closed set is about what a *submit* can be
 # refused with; `not_found` is the read-surface answer.
@@ -155,6 +161,11 @@ def quote_unavailable(message: str) -> ApiError:
     with no quote step) is repaired.
     """
     return ApiError(422, QUOTE_UNAVAILABLE, message)
+
+
+def not_in_catalogue(message: str, **extra: Any) -> ApiError:
+    """The vendor's own facts, refusing a request before it is priced."""
+    return ApiError(422, NOT_IN_CATALOGUE, message, **extra)
 
 
 def over_ceiling(estimate_usd: float, max_usd: float) -> ApiError:

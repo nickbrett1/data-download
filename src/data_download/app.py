@@ -313,6 +313,50 @@ async def _store(request: Request) -> Store:
     return state.store
 
 
+async def _refuse_from_catalogue(
+    request: Request,
+    store: Any,
+    vendor_name: str | None,
+    params: dict[str, Any],
+) -> None:
+    """Refuse a request the vendor's own catalogue says cannot be satisfied.
+
+    Free, and that is the whole point: `cost` answers the same mistake with a
+    paid call, and a window that starts before a dataset existed is refused by
+    the vendor *after* the quote is charged for -- or worse, after a job is
+    approved for a download that can never land. The catalogue is what we
+    already asked the vendor, so the refusal costs nothing.
+
+    Asymmetric on purpose (see `catalogue.refusal`): the first day is a fact and
+    a start before it is refused; the last day is a clock that visibly trails
+    "now", so an end past it is allowed. And only a positive, current answer
+    refuses: no cache row, a stale row, or an undescribed code all mean the
+    vendor gets to answer.
+    """
+    dataset = str(params.get("dataset") or "")
+    if not dataset or not vendor_name:
+        return
+    found = await catalogue.lookup(store, [(vendor_name, dataset)])
+    refused = catalogue.refusal(
+        found.get((vendor_name, dataset)),
+        dataset=dataset,
+        schema=params.get("schema"),
+        start=_start_of(params),
+    )
+    if refused:
+        detail = {key: value for key, value in refused.items() if key != "message"}
+        raise errors.not_in_catalogue(refused["message"], **detail)
+
+
+def _start_of(params: dict[str, Any]) -> str | None:
+    """The window start, flat on a plan's params or inside an intent's window."""
+    window = params.get("window")
+    if isinstance(window, dict) and window.get("start"):
+        return str(window["start"])
+    start = params.get("start")
+    return str(start) if start else None
+
+
 async def _price(request: Request, job_text: str, vendor_name: str | None) -> float:
     """Price a bound Job for `vendor`, or refuse the submit (§5.2, phase 4).
 
@@ -907,9 +951,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # and no row if either fails -- an unpriced draft is a request
             # nobody can authorise honestly, because approving it means
             # approving a number that does not exist.
-            estimate = await _price(
-                request, job_text, registry.vendor_of_request(plan.name, validated["params"])
-            )
+            vendor_name = registry.vendor_of_request(plan.name, validated["params"])
+            # Slice 3: ask the cache before asking the vendor. A request whose
+            # dataset cannot carry this schema, or whose window opens before the
+            # dataset existed, has no quote worth fetching.
+            await _refuse_from_catalogue(request, store, vendor_name, validated["params"])
+            estimate = await _price(request, job_text, vendor_name)
             submit_quote = estimate
             ceiling = body.get("max_usd")
             if isinstance(ceiling, (int, float)) and estimate > ceiling:
@@ -975,9 +1022,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ceiling_reason = None
             refused_quote = None
             if job_text:
-                estimate = await _price(
-                    request, job_text, registry.vendor_of_request(plan_type, params)
-                )
+                vendor_name = registry.vendor_of_request(plan_type, params)
+                await _refuse_from_catalogue(request, store, vendor_name, params)
+                estimate = await _price(request, job_text, vendor_name)
                 ceiling = body.get("max_usd")
                 if isinstance(ceiling, (int, float)) and estimate > ceiling:
                     ceiling_reason = "ceiling_exceeded"

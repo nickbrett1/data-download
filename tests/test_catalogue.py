@@ -16,7 +16,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import seed
+from conftest import PLAN_BODY, auth, seed
 from data_download import catalogue
 from data_download.app import create_app
 from data_download.db import Store
@@ -267,3 +267,109 @@ def _clean_failures():
     yield
     catalogue._FAILED_AT.clear()
 
+
+
+# -- slice 3: the free pre-flight ---------------------------------------------
+#
+# `refusal` is pure, so the asymmetry is testable without a store: a start
+# before the first day refuses, an end past the last measured instant does not,
+# and nothing refuses on an answer we do not currently hold.
+
+
+# The answer `_fresh` builds from, kept apart from `GLBX` only in `fetched_at`:
+# these tests need a row that is current, not one dated to a session.
+GLBX_ANSWER = {
+    "dataset": "GLBX.MDP3",
+    "described": True,
+    "description": "CME Globex MDP 3.0",
+    "venue": "GLBX",
+    "venues": ["GLBX"],
+    "range": {"start": 1275782400000000000, "end": 1795392000000000000},
+    "schemas": ["ohlcv-1d", "trades"],
+}
+
+
+def _fresh(**changes):
+    """A described entry fetched now, so `is_stale` cannot be the reason."""
+    answer = dict(GLBX_ANSWER, **changes)
+    return catalogue.entry("Databento", answer)
+
+
+def test_a_schema_the_dataset_does_not_carry_is_refused():
+    refused = catalogue.refusal(_fresh(), dataset="GLBX.MDP3", schema="mbo")
+    assert refused["reason"] == "schema"
+    assert refused["schema"] == "mbo"
+    # The sentence names what it *does* carry: a refusal should say what to ask
+    # instead, not just that the question was wrong.
+    assert "ohlcv-1d" in refused["message"]
+
+
+def test_a_window_before_the_datasets_first_day_is_refused():
+    refused = catalogue.refusal(
+        _fresh(), dataset="GLBX.MDP3", schema="trades", start="2009-01-01"
+    )
+    assert refused["reason"] == "window"
+    assert refused["available_from"] == "2010-06-06"
+    assert "2009-01-01" in refused["message"]
+
+
+def test_a_window_ending_after_the_range_is_allowed():
+    # The range end trails the clock by hours on a live dataset, so "ends
+    # today" is a real request against a range that has not caught up. The
+    # end is a clock; the start is a fact.
+    assert (
+        catalogue.refusal(
+            _fresh(), dataset="GLBX.MDP3", schema="trades", start="2026-11-01"
+        )
+        is None
+    )
+    assert (
+        catalogue.refusal(
+            _fresh(), dataset="GLBX.MDP3", schema="trades", start="2010-06-06"
+        )
+        is None
+    )
+
+
+def test_a_cold_stale_or_undescribed_cache_never_refuses():
+    # A cache that refuses is worse than a vendor that refuses: in each of
+    # these cases the vendor still gets to answer.
+    assert catalogue.refusal(None, dataset="GLBX.MDP3", schema="mbo") is None
+    stale = _fresh()
+    stale["fetched_at"] = "2026-01-01T00:00:00Z"
+    assert catalogue.refusal(stale, dataset="GLBX.MDP3", schema="mbo") is None
+    undescribed = _fresh(described=False, description="", schemas=[])
+    assert catalogue.refusal(undescribed, dataset="GLBX.MDP3", schema="mbo") is None
+
+
+def test_submit_refuses_a_schema_the_catalogue_does_not_carry(client, settings):
+    _run(_put_catalogue(settings.db_path, catalogue.entry("Databento", GLBX_ANSWER)))
+    body = dict(PLAN_BODY, params=dict(PLAN_BODY["params"], schema="mbo"))
+
+    refused = client.post("/v1/requests", json=body, headers=auth())
+
+    assert refused.status_code == 422
+    error = refused.json()["error"]
+    assert error["code"] == "not_in_catalogue"
+    assert error["reason"] == "schema"
+    # Refused before it was priced, so nothing was filed.
+    assert client.get("/v1/requests", headers=auth("tok-read")).json()["total"] == 0
+
+
+def test_submit_refuses_a_window_before_the_data_starts(client, settings):
+    _run(_put_catalogue(settings.db_path, catalogue.entry("Databento", GLBX_ANSWER)))
+    body = dict(PLAN_BODY, params=dict(PLAN_BODY["params"], start="2009-01-01"))
+
+    refused = client.post("/v1/requests", json=body, headers=auth())
+
+    assert refused.status_code == 422
+    error = refused.json()["error"]
+    assert error["code"] == "not_in_catalogue"
+    assert error["reason"] == "window"
+    assert error["available_from"] == "2010-06-06"
+
+
+def test_submit_proceeds_when_the_catalogue_has_not_been_asked(client):
+    # No cached row at all: the pre-flight must stay silent and let the vendor
+    # answer, or a brand-new deployment could file nothing.
+    assert client.post("/v1/requests", json=PLAN_BODY, headers=auth()).status_code == 202
