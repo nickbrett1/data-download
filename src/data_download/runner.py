@@ -96,6 +96,9 @@ class RunRefused(Exception):
             "job_invalid",
             "job_hash_mismatch",
             "driver_not_ready",
+            # Phase 5.5: the runtime answered and nobody drives this vendor. The
+            # request is not failed -- it is waiting for the loop to build one.
+            "driver_missing",
         }
     )
 
@@ -123,6 +126,9 @@ class RunResult:
     errors: dict[str, Any] | None = None
     settled: bool = True
     steps: tuple[str, ...] = ()
+    #: Set when the runner declined to run: `driver_missing` is the only one
+    #: that is not a failure, because it is a queue.
+    refused: str | None = None
 
     @property
     def landed(self) -> bool:
@@ -142,6 +148,7 @@ class RunResult:
             "errors": self.errors,
             "settled": self.settled,
             "steps": list(self.steps),
+            "refused": self.refused,
         }
 
 
@@ -321,6 +328,91 @@ async def keep_lease(
 # -- one run --------------------------------------------------------------
 
 
+def _vendor_and_dataset(row: dict[str, Any], registry: Registry) -> tuple[str, str | None]:
+    """Who is being asked, and for what -- read from the row, before any claim."""
+    try:
+        params = json.loads(row.get("params_json") or "{}")
+    except (TypeError, ValueError):
+        params = {}
+    if not isinstance(params, dict):
+        params = {}
+    vendor = registry.vendor_of_request(row.get("plan_type"), params)
+    job: Any = None
+    if row.get("job_json"):
+        try:
+            job = json.loads(row["job_json"])
+        except (TypeError, ValueError):
+            job = None
+    dataset = dataset_of(job) if job is not None else params.get("dataset")
+    return vendor, str(dataset) if dataset else None
+
+
+async def _queue_for_missing_driver(
+    request_id: str,
+    *,
+    store: Store,
+    row: dict[str, Any],
+    registry: Registry,
+    driver_url: str | None,
+    token: str | None,
+) -> RunResult | None:
+    """Leave the row `approved` and ask the loop for a driver, or return `None`.
+
+    This runs **before the claim**, because the claim is the permission to run
+    and there is nothing to run: settling `failed` would say a vendor attempt
+    happened, and creating the request directory would leave an empty one that
+    reads as "an attempt produced nothing".
+
+    Two absences are deliberately different. No runtime token is
+    `driver_not_ready` -- a configuration fault that a queue cannot fix, so the
+    runner refuses and the row stays `approved`. A reachable runtime with no
+    artefact for the vendor is `driver_missing` -- a driver to write, which is
+    what phase 5.5's loop exists to do.
+    """
+    vendor, dataset = _vendor_and_dataset(row, registry)
+    if not vendor:
+        return None  # let the claimed path settle `vendor_unknown` as it always did
+    try:
+        entries = driver_client.installed(url=driver_url, token=token)
+    except driver_client.DriverUnavailable as exc:
+        raise RunRefused("driver_not_ready", str(exc)) from None
+    if driver_client.driver_for(vendor, artifacts=entries) is not None:
+        return None
+
+    job = await store.driver_job_enqueue(
+        vendor=vendor,
+        plan_types=[row["plan_type"]] if row.get("plan_type") else [],
+        dataset=dataset,
+        request_id=request_id,
+    )
+    await store.note_driver_state(
+        request_id,
+        "building",
+        detail={
+            "vendor": vendor,
+            "driver_job": (job or {}).get("id"),
+            "queued": job is not None,
+            "installed": [str(entry) for entry in entries],
+        },
+    )
+    available = ", ".join(str(entry) for entry in entries) or "nothing"
+    return RunResult(
+        request_id=request_id,
+        state=str(row.get("state")),
+        verdict=None,
+        disposition=None,
+        owner="",
+        errors={
+            "error": "driver_missing",
+            "detail": f"no driver is installed for vendor {vendor!r} "
+            f"(installed: {available}); queued for the driver loop",
+        },
+        settled=False,
+        steps=("driver_missing",),
+        refused="driver_missing",
+    )
+
+
 async def run_one(
     request_id: str,
     *,
@@ -365,7 +457,30 @@ async def run_one(
         )
 
     owner = owner or default_owner()
+    if driver_factory is None:
+        # Discovery before the claim: a row nobody can drive stays `approved`
+        # and gains a queue entry, rather than failing for a reason that is
+        # ours to fix (phase 5.5).
+        wanted = await store.get_request(request_id)
+        if wanted is not None and wanted.get("state") == "approved":
+            queued = await _queue_for_missing_driver(
+                request_id,
+                store=store,
+                row=wanted,
+                registry=registry or load_registry(find_plan_types_dir()),
+                driver_url=driver_url,
+                token=token,
+            )
+            if queued is not None:
+                return queued
     row = await store.claim(request_id, owner, lease_seconds=lease_seconds)
+    if row.get("driver_state"):
+        # The loop's answer arrived (or somebody installed a driver by hand) and
+        # this row is running: the waiting label is no longer true, and a
+        # `succeeded` row still saying "building" is a lie that outlives it.
+        await store.note_driver_state(
+            request_id, None, detail={"cleared": "running", "owner": owner}
+        )
 
     try:
         job_text = row.get("job_json")
@@ -673,6 +788,13 @@ async def run(args: argparse.Namespace) -> int:
             except RunRefused as exc:
                 print(f"refused: {exc}", file=sys.stderr)
                 return 2
+            if result.refused == "driver_missing":
+                # Not a failure: the row is still `approved` and the loop has
+                # been asked for a driver. Printing it as a state would claim
+                # something happened to the request that did not.
+                detail = (result.errors or {}).get("detail", "")
+                print(f"{result.request_id}: waiting for a driver -- {detail}")
+                return 0
             print(
                 f"{result.request_id}: {result.state} ({result.verdict or 'no verdict'}, "
                 f"{len(result.files)} file(s), {result.total_bytes} bytes) "

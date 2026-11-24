@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -81,6 +82,10 @@ ADDED_COLUMNS = (
     # Archiving a settled row. Nullable and added in place: a column, not a
     # state, so the CHECK does not widen and no table rebuild is needed.
     ("requests", "archived_at", "TEXT"),
+    # Phase 5.5: the request is waiting for a driver the loop is building.
+    # Nullable and added in place -- like `archived_at`, a column rather than a
+    # state, because the request's state is still honestly `approved`.
+    ("requests", "driver_state", "TEXT"),
 )
 
 
@@ -1529,6 +1534,150 @@ class Store:
         row = await self.get_request(request_id) or {}
         row["settled"] = True
         return row
+
+    # -- the driver queue (phase 5.5) --------------------------------------
+
+    #: States a job can be in and still be worth a dispatcher's attention. A job
+    #: is "open" until it is installed or a human has been asked to look.
+    OPEN_DRIVER_STATES = ("queued", "building", "gated", "probing", "merging", "installing")
+
+    async def driver_job_enqueue(
+        self,
+        *,
+        vendor: str,
+        plan_types: list[str] | None = None,
+        dataset: str | None = None,
+        request_id: str | None = None,
+        now: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Queue a driver build for `vendor`, or return `None` if one is open.
+
+        `INSERT OR IGNORE` against the partial unique index is the dedupe: ten
+        requests for a vendor nobody drives are one driver to write. The caller
+        is not told off for the second one -- it is the same answer.
+        """
+        job_id = "drv_" + uuid.uuid4().hex
+        ts = now or utcnow()
+        async with self._write_lock:
+            async with self.conn.execute(
+                "INSERT OR IGNORE INTO driver_jobs "
+                "(id, vendor, state, plan_types_json, dataset, request_id, attempts, "
+                " created_at, updated_at) VALUES (?, ?, 'queued', ?, ?, ?, 0, ?, ?)",
+                (
+                    job_id,
+                    vendor,
+                    canonical_json(list(plan_types or [])),
+                    dataset,
+                    request_id,
+                    ts,
+                    ts,
+                ),
+            ) as cur:
+                created = cur.rowcount == 1
+            await self.conn.commit()
+        if not created:
+            return None
+        return await self.driver_job_get(job_id)
+
+    async def driver_job_get(self, job_id: str) -> dict[str, Any] | None:
+        async with self.conn.execute(
+            "SELECT * FROM driver_jobs WHERE id = ?", (job_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def driver_job_next(self) -> dict[str, Any] | None:
+        """The oldest queued job, or `None`. The dispatcher runs to exit."""
+        async with self.conn.execute(
+            "SELECT * FROM driver_jobs WHERE state = 'queued' "
+            "ORDER BY created_at, id LIMIT 1"
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def driver_job_list(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        async with self.conn.execute(
+            "SELECT * FROM driver_jobs ORDER BY created_at DESC, id LIMIT ?", (limit,)
+        ) as cur:
+            return [dict(row) for row in await cur.fetchall()]
+
+    async def driver_jobs_open(self) -> int:
+        """How many jobs are still being worked on.
+
+        The pages poll while a request is in flight; a request waiting for a
+        driver is not in flight by the requests table's own vocabulary, so this
+        is the second half of "something is moving".
+        """
+        marks = ", ".join("?" for _ in self.OPEN_DRIVER_STATES)
+        async with self.conn.execute(
+            f"SELECT COUNT(*) AS n FROM driver_jobs WHERE state IN ({marks})",
+            self.OPEN_DRIVER_STATES,
+        ) as cur:
+            row = await cur.fetchone()
+        return int(row["n"] if row else 0)
+
+    async def driver_job_update(
+        self, job_id: str, *, now: str | None = None, **fields: Any
+    ) -> dict[str, Any] | None:
+        """Move a job along. Only the columns the state machine owns."""
+        allowed = {
+            "state",
+            "branch",
+            "commit_sha",
+            "artifact_sha256",
+            "verdict_json",
+            "last_error",
+            "attempts",
+            "request_id",
+        }
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"driver_jobs has no column {sorted(unknown)[0]!r}")
+        if not fields:
+            return await self.driver_job_get(job_id)
+        assignments = ", ".join(f"{name} = ?" for name in fields)
+        async with self._write_lock:
+            await self.conn.execute(
+                f"UPDATE driver_jobs SET {assignments}, updated_at = ? WHERE id = ?",
+                (*fields.values(), now or utcnow(), job_id),
+            )
+            await self.conn.commit()
+        return await self.driver_job_get(job_id)
+
+    async def note_driver_state(
+        self,
+        request_id: str,
+        value: str | None,
+        *,
+        detail: dict[str, Any] | None = None,
+        now: str | None = None,
+    ) -> None:
+        """Say what is happening to this request's driver, and record it.
+
+        A column rather than a state: the request is still honestly `approved`
+        while a driver is being written, and moving it to a pseudo-state would
+        make every query that asks "what is waiting on me" need to know about
+        the loop.
+        """
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                await self.conn.execute(
+                    "UPDATE requests SET driver_state = ?, updated_at = ? WHERE id = ?",
+                    (value, ts, request_id),
+                )
+                await self._event(
+                    request_id,
+                    ts,
+                    "system",
+                    "driver_state",
+                    {"driver_state": value, **(detail or {})},
+                )
+                await self.conn.execute("COMMIT")
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
 
     # -- long poll ---------------------------------------------------------
 

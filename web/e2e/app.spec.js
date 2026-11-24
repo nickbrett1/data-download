@@ -1185,6 +1185,28 @@ test.describe("approving a request", () => {
     );
   });
 
+  test("a row waiting for a driver says so, not 'no worker'", async ({
+    page,
+  }) => {
+    // Phase 5.5: the loop has the row, so "no worker has picked it up" would
+    // send the reader looking for a runner when the repair is a driver.
+    await mock(page, {
+      detail: {
+        ...draftDetail,
+        state: "approved",
+        approved_unclaimed: true,
+        driver_state: "building",
+      },
+    });
+    await page.goto("/requests/req_draft01");
+    const grid = page.locator(".meta-grid");
+    await expect(grid).toContainText("driver");
+    await expect(grid).toContainText(
+      "none installed for this vendor — the loop is building one",
+    );
+    await expect(grid).not.toContainText("no worker has picked it up");
+  });
+
   test("a blocked row has nothing to click either", async ({ page }) => {
     await mock(page);
     await page.goto("/requests/req_0a7c9d33");

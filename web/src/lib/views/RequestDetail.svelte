@@ -105,7 +105,19 @@
     // should find that sentence here, not a second vocabulary for it. It is no
     // longer a stuck condition -- money authorised and waiting for a worker is
     // a queue, not a fault -- so this is where it is stated in full.
-    if (data.approved_unclaimed) {
+    // Phase 5.5: an approved row waiting for a driver is not waiting for a
+    // worker -- the loop has it, and saying "no worker has picked it up" over
+    // the top of that would send the reader looking for the wrong repair.
+    if (data.driver_state) {
+      rows.push({
+        label: "driver",
+        value:
+          data.driver_state === "building"
+            ? "none installed for this vendor — the loop is building one"
+            : data.driver_state,
+      });
+    }
+    if (data.approved_unclaimed && !data.driver_state) {
       rows.push({
         label: "worker",
         value: "none — no worker has picked it up",

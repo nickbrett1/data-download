@@ -59,7 +59,13 @@
 
     async function tick() {
       await load(controller.signal);
-      const moving = (data?.totals?.in_flight ?? 0) > 0;
+      // A request waiting for a driver is not in flight by the requests
+      // table's vocabulary, but it is the one case where the page must keep
+      // looking: the loop installs a driver, then the row moves without a
+      // reload (§7 of the phase 5.5 order).
+      const moving =
+        (data?.totals?.in_flight ?? 0) > 0 ||
+        (data?.totals?.driver_jobs_open ?? 0) > 0;
       if (moving && !controller.signal.aborted) timer = setTimeout(tick, 5000);
     }
 

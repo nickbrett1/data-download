@@ -424,6 +424,9 @@ def _request_payload(row: dict[str, Any]) -> dict[str, Any]:
         "job_hash": row["job_hash"],
         "code_ref": row["code_ref"],
         "landed_sha256": row["landed_sha256"],
+        # Phase 5.5: what is happening to this request's driver, when the
+        # vendor has none installed. Null is the normal case.
+        "driver_state": row["driver_state"] if "driver_state" in row.keys() else None,
         "errors": json.loads(row["errors_json"]) if row["errors_json"] else [],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -443,6 +446,8 @@ def _summary_payload(row: dict[str, Any]) -> dict[str, Any]:
         "escalated_at": row["escalated_at"] if "escalated_at" in row.keys() else None,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        # Phase 5.5: null unless a driver is being built for this row's vendor.
+        "driver_state": row["driver_state"] if "driver_state" in row.keys() else None,
     }
 
 
@@ -1666,6 +1671,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if vendor["vendor_slug"]
             for group in vendor["datasets"]
         }
+        # A request waiting for a driver is not "in flight" by the requests
+        # table's vocabulary, so the page needs this second number or it
+        # freezes through exactly the minutes it should be moving (§7 of the
+        # phase 5.5 order).
+        body["totals"]["driver_jobs_open"] = await store.driver_jobs_open()
         descriptions = await _catalogue_for(store, pairs, settings)
         for bucket in body["vendors"]:
             for group in bucket["datasets"]:

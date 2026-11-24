@@ -46,6 +46,11 @@ CREATE TABLE IF NOT EXISTS requests (
   -- column rather than a state for exactly that reason: a state would overwrite
   -- the outcome, and the outcome is the thing worth keeping.
   archived_at      TEXT,
+  -- Phase 5.5: the driver loop is building one for this row's vendor. A
+  -- column, not a state: the request is still honestly `approved`, and a
+  -- pseudo-state would make every "what is waiting on me" query learn about
+  -- the loop.
+  driver_state     TEXT,
   why              TEXT,                   -- the human reason, verbatim (§7.2)
   max_usd          REAL,                   -- the ceiling that travelled with the body
   created_at       TEXT NOT NULL,
@@ -289,6 +294,11 @@ SELECT r.id,
        -- column's own note above. `v_requests` is dropped and recreated on
        -- every start, so this needs no rebuild.
        r.archived_at,
+       -- Phase 5.5: the loop is building a driver for this row's vendor. A
+       -- column, not a state -- the request is still honestly `approved` --
+       -- and in this view rather than the facet views, which are
+       -- `IF NOT EXISTS` and would keep an old column list on a deployed store.
+       r.driver_state,
        s.condition AS stuck_condition,
        s.detail AS stuck_detail
   FROM requests r
@@ -323,3 +333,35 @@ CREATE TABLE IF NOT EXISTS dataset_catalogue (
   fetched_at   TEXT NOT NULL,
   PRIMARY KEY (vendor, dataset)
 );
+
+-- The driver queue (phase 5.5). A request whose vendor has no installed
+-- driver is not failed: it is *waiting*, and the loop that builds the driver
+-- is a separate process that may take minutes. The row stays `approved` and
+-- carries `driver_state`; this table is what the dispatcher works from.
+--
+-- One *open* job per vendor is the dedupe: ten requests for a vendor nobody
+-- drives are one driver to write, not ten. The partial unique index is the
+-- rule, enforced by SQLite rather than by the enqueue's own bookkeeping.
+CREATE TABLE IF NOT EXISTS driver_jobs (
+  id               TEXT PRIMARY KEY,
+  vendor           TEXT NOT NULL,
+  state            TEXT NOT NULL,       -- queued|building|gated|probing|merging|installing|installed|needs_human
+  plan_types_json  TEXT,                -- the plan types this vendor serves, for the ticket
+  dataset          TEXT,                -- the dataset the first request asked for
+  request_id       TEXT,                -- who is waiting (nullable: a manual enqueue)
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  branch           TEXT,
+  commit_sha       TEXT,
+  artifact_sha256  TEXT,
+  verdict_json     TEXT,                -- probe verdict, reviewer findings
+  last_error       TEXT,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL,
+  CHECK (state IN ('queued','building','gated','probing','merging',
+                   'installing','installed','needs_human'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_driver_jobs_open
+    ON driver_jobs(vendor) WHERE state NOT IN ('installed','needs_human');
+CREATE INDEX IF NOT EXISTS idx_driver_jobs_state
+    ON driver_jobs(state, created_at);

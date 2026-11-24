@@ -636,11 +636,17 @@ def test_no_token_refuses_before_the_claim(
     assert wire.requests == []  # nothing was sent at all
 
 
-def test_a_vendor_with_no_installed_driver_fails_and_names_what_is_installed(
+def test_a_vendor_with_no_installed_driver_waits_instead_of_failing(
     client, settings, tmp_path
 ):
     """The registry says Databento sells this; the runtime has only `stub`.
-    That is a refusal the operator can act on, not a vendor failure."""
+
+    Phase 5.5 changed what that means. It used to settle `failed` with a
+    sentence naming what *is* installed -- an honest refusal with no repair.
+    Now it is a queue: the row stays `approved`, says `driver_state: building`,
+    and a driver job exists for the vendor. Nothing is failed, because nothing
+    was attempted.
+    """
     request_id = _approved(client, settings)
     with FakeRuntime(tmp_path / "datasets", vendor="Stub", driver="stub") as runtime:
         store = Store(str(settings.db_path))
@@ -656,17 +662,49 @@ def test_a_vendor_with_no_installed_driver_fails_and_names_what_is_installed(
                     driver_token=runtime.token,
                 )
             )
+            row = _run(store.get_request(request_id))
+            jobs = _run(store.driver_job_list())
+            open_jobs = _run(store.driver_jobs_open())
         finally:
             _run(store.close())
 
-    assert result.state == "failed"
-    assert result.verdict is None  # no driver, so no Job ran at all
-    assert result.errors and result.errors["error"] == "driver_not_ready"
-    assert "Databento" in result.errors["detail"]
+    assert result.state == "approved"
+    assert result.refused == "driver_missing"
+    assert result.settled is False
+    assert result.errors and result.errors["error"] == "driver_missing"
     assert "stub v1 (Stub)" in result.errors["detail"]  # says what IS installed
+    assert row["state"] == "approved"
+    assert row["driver_state"] == "building"
+    assert [(job["vendor"], job["state"]) for job in jobs] == [("Databento", "queued")]
+    assert open_jobs == 1
     # Nothing was created: no driver means no attempt, and an empty request
     # directory would read as an attempt that produced nothing.
     assert not (tmp_path / "datasets" / "databento").exists()
+
+
+def test_ten_requests_for_one_missing_driver_are_one_job(client, settings, tmp_path):
+    """A queue, not a stampede: the partial unique index is the dedupe."""
+    ids = [_approved(client, settings) for _ in range(3)]
+    with FakeRuntime(tmp_path / "datasets", vendor="Stub", driver="stub") as runtime:
+        store = Store(str(settings.db_path))
+        _run(store.connect())
+        try:
+            for request_id in ids:
+                _run(
+                    run_one(
+                        request_id,
+                        store=store,
+                        datasets_dir=tmp_path / "datasets",
+                        owner="host:1:abc",
+                        driver_url=runtime.url,
+                        driver_token=runtime.token,
+                    )
+                )
+            jobs = _run(store.driver_job_list())
+        finally:
+            _run(store.close())
+    assert len(jobs) == 1
+    assert jobs[0]["vendor"] == "Databento"
 
 
 def test_the_session_is_closed_when_the_run_finishes(client, settings, tmp_path, wire):
