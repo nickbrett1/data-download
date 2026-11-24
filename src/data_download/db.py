@@ -1579,9 +1579,18 @@ class Store:
             return None
         return await self.driver_job_get(job_id)
 
+    #: A job row plus the one thing a probe needs from the request it is waiting
+    #: on: the bound Job. Without the join the probe reads `job_json` off
+    #: `driver_jobs`, where it has never existed, and refuses every time -- which
+    #: is exactly how the first acceptance run died at `probing`.
+    _DRIVER_JOB_SELECT = (
+        "SELECT j.*, r.job_json AS request_job_json, r.state AS request_state "
+        "FROM driver_jobs j LEFT JOIN requests r ON r.id = j.request_id"
+    )
+
     async def driver_job_get(self, job_id: str) -> dict[str, Any] | None:
         async with self.conn.execute(
-            "SELECT * FROM driver_jobs WHERE id = ?", (job_id,)
+            f"{self._DRIVER_JOB_SELECT} WHERE j.id = ?", (job_id,)
         ) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
@@ -1596,8 +1605,8 @@ class Store:
         happens when there is nothing new to author.
         """
         async with self.conn.execute(
-            "SELECT * FROM driver_jobs WHERE state IN ('queued', 'gated') "
-            "ORDER BY CASE state WHEN 'queued' THEN 0 ELSE 1 END, created_at, id "
+            f"{self._DRIVER_JOB_SELECT} WHERE j.state IN ('queued', 'gated') "
+            "ORDER BY CASE j.state WHEN 'queued' THEN 0 ELSE 1 END, j.created_at, j.id "
             "LIMIT 1"
         ) as cur:
             row = await cur.fetchone()

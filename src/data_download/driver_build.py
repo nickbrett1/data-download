@@ -246,7 +246,9 @@ def run_probe(
     reaches `submit`, because the budget exists to bound a spend the loop
     decides on, not to police the caller's ceiling.
     """
-    source = row.get("job_json") or ""
+    # `driver_jobs` carries the vendor and the request id; the Job itself is on
+    # the request, and `Store.driver_job_*` joins it in as `request_job_json`.
+    source = row.get("request_job_json") or row.get("job_json") or ""
     if not source:
         raise LoopRefused("no bound Job on the waiting request, so there is nothing to probe")
     job = probe_job(source)

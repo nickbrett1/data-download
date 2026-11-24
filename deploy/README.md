@@ -403,6 +403,18 @@ Two host facts this unit assumes, both learned the hard way:
   (root in the container still writes) — and again if the DB is ever recreated.
 - **The supervisor needs the venv on `PATH`.** `scripts/driver-loop.sh` runs
   `${PYTHON:-python3}`, which is why `PYTHON` is in the env file at all.
+- **Install the package with `-e`, or a deploy is not a deploy.** A plain
+  `pip install ./loop` copies the package into `site-packages`, so
+  `git reset --hard origin/main` updates the checkout while the loop keeps
+  running the old code — and the symptom is a loop that "ignores" a fix that is
+  plainly on disk. Install it editable once:
+
+  ```
+  /srv/appdata/data-download-drivers/loop-venv/bin/pip install -e /srv/appdata/data-download-drivers/loop
+  ```
+
+  after which updating is `git -C …/loop reset --hard origin/main` and a
+  restart.
 
 The unit is sandboxed to the two paths it legitimately writes
 (`ProtectSystem=strict` plus `ReadWritePaths` for the store and the drivers

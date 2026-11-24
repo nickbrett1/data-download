@@ -10,7 +10,9 @@ rather than a state that would lie about the request.
 from __future__ import annotations
 
 import asyncio
+import json
 
+from conftest import seed
 from data_download.db import Store
 
 
@@ -80,6 +82,33 @@ def test_next_is_the_oldest_queued_and_updates_are_column_checked(tmp_path):
             assert "wrong" in str(exc)
         else:  # pragma: no cover - the raise is the assertion
             raise AssertionError("an unknown column was written")
+    finally:
+        _run(store.close())
+
+
+def test_a_job_row_carries_the_waiting_requests_bound_job(db_path):
+    """The probe runs the *request's* Job, and `driver_jobs` does not hold it.
+
+    The first acceptance run died at `probing` with "no bound Job on the waiting
+    request" for exactly this reason: `job_json` lives on `requests`, the job row
+    carries only the request's id, and nothing joined them. The join is in the
+    read, so every caller of `driver_job_get`/`driver_job_next` gets it.
+    """
+    store = Store(str(db_path))
+    _run(store.connect())
+    try:
+        bound = json.dumps({"steps": [{"kind": "quote", "kwargs": {}}]}, sort_keys=True)
+        seed(db_path, [{"id": "req_waiting", "state": "approved", "job_json": bound}])
+        job = _run(
+            store.driver_job_enqueue(vendor="Databento", request_id="req_waiting")
+        )
+        row = _run(store.driver_job_next())
+        assert row["id"] == job["id"]
+        assert row["request_job_json"] == bound
+        assert row["request_state"] == "approved"
+        # A job with no request (a vendor nothing is waiting on) is not an error.
+        _run(store.driver_job_update(job["id"], request_id=None))
+        assert (_run(store.driver_job_next()) or {})["request_job_json"] is None
     finally:
         _run(store.close())
 

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import seed
 from data_download import driver_build
 from data_download.db import Store
 
@@ -186,6 +187,34 @@ def test_a_pending_build_waits_instead_of_becoming_a_human(tmp_path):
         assert done["state"] == "installed"
         assert authored["n"] == 1, "a CI wait must not author again"
         assert done["attempts"] == 1, "a CI wait is not an attempt"
+    finally:
+        _run(store.close())
+
+
+def test_the_probe_runs_the_waiting_requests_own_job(tmp_path):
+    """Not a "small run" invented for the loop: the request's Job, shrunk.
+
+    This is the seam that was broken when the probe read `job_json` off the
+    `driver_jobs` row: it went through the real store, so the join in
+    `driver_job_*` is what supplies it.
+    """
+    store = _store(tmp_path)
+    try:
+        bound = json.dumps({"steps": [{"kind": "quote", "kwargs": {}}]}, sort_keys=True)
+        seed(
+            tmp_path / "loop.db",
+            [{"id": "req_waiting", "state": "approved", "job_json": bound}],
+        )
+        _job(store, request_id="req_waiting")
+        seen = {}
+
+        def probe(row):
+            seen["job"] = row.get("request_job_json")
+            return {"verdict": "pass"}
+
+        done = _run(driver_build.run_once(store, _steps(probe=probe)))
+        assert done["state"] == "installed"
+        assert seen["job"] == bound
     finally:
         _run(store.close())
 
