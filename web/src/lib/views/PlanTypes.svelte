@@ -16,6 +16,11 @@
    * The parameter table is the type's, and sits folded at the foot of its
    * section: it is reference material, and expanded it pushed the drivers off
    * the screen.
+   *
+   * Nothing sits to the right of a heading except the version. A status there
+   * reads as an attribute of the name it shares a line with, so
+   * "market_data_window  v1  driver" says the type is a driver. The rows below
+   * already answer it: a driver row, or a row saying no driver is installed.
    */
   import AppMark from "$lib/components/AppMark.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
@@ -73,17 +78,6 @@
     { label: "what it means", width: "minmax(12rem, 2fr)" },
   ];
 
-  // How many drivers a type has, in words. A fraction ("1/1") is only legible
-  // to someone who already knows what the two numbers count.
-  function driverStatus(type) {
-    const total = type.implementations.length;
-    const have = type.installed_count;
-    if (total === 0) return "no vendor listed";
-    if (have === 0) return "no driver yet";
-    if (have === total) return total === 1 ? "driver" : `${total} drivers`;
-    return `${have} of ${total} drivers`;
-  }
-
   function openDriverFor(type) {
     if (Object.hasOwn(chosen, type.name)) return chosen[type.name];
     if (hashType === type.name) return hashDriver;
@@ -131,11 +125,6 @@
             <span class="pill">{type.vendor}</span>
           {/if}
           <span class="pill">v{type.version}</span>
-          <span class="spacer"></span>
-          <!-- A status about the section, not a second thing in it. Shown when
-               there is nothing installed, because that is the only case the
-               rows below cannot say loudly enough. -->
-          <span class="micro">{driverStatus(type)}</span>
         </div>
         <p class="type-desc">{type.description}</p>
 

@@ -253,7 +253,7 @@ export const planTypes = {
       installed_count: 1,
       anchor: "market_data_window",
       description:
-        "One batch download from any vendor, priced before it is approved.",
+        "A vendor job for a symbol-scoped window of records, split per day and verified against the vendor's own manifest.",
       schema: {
         required_count: 2,
         optional_count: 1,

@@ -432,7 +432,11 @@ test.describe("plan types", () => {
     await expect(first.locator(".driver-line .micro")).toHaveText([
       "3 dataset codes",
     ]);
-    await expect(first.locator(".type-head .micro")).toHaveText(["driver"]);
+    // Nothing is drawn beside the heading but the version: a status there
+    // reads as an attribute of the name, which is how "market_data_window v1
+    // driver" came to look like a driver called market_data_window.
+    await expect(first.locator(".type-head .pill")).toHaveText(["v3"]);
+    await expect(first.locator(".type-head .micro")).toHaveCount(0);
   });
 
   // A driver matches on two things, and the page says them as a rule: this
@@ -476,9 +480,6 @@ test.describe("plan types", () => {
     // ...and the missing implementation is a row, not a pill on the heading.
     await expect(pinned.locator(".impl-off")).toHaveText([
       "no driver installed",
-    ]);
-    await expect(pinned.locator(".type-head .micro")).toHaveText([
-      "no driver yet",
     ]);
     await expect(pinned.locator(".driver-toggle")).toBeDisabled();
   });
@@ -628,9 +629,11 @@ test.describe("plan types", () => {
 
     await expect(page.locator(".kv")).toHaveCount(0);
     const body = await page.locator("body").innerText();
+    // Labels of the removed glossary. "verify" is deliberately not in this
+    // list: the type's description says the download is verified against the
+    // vendor's manifest, which is the one place the word belongs.
     for (const gone of [
       "extra fields",
-      "verify",
       "resume",
       "vendor-agnostic",
       "answered by",
