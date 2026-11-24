@@ -1834,7 +1834,7 @@ test.describe("a finished request can be archived", () => {
     archived_at: null,
   };
 
-  test("offers the verb on a failed row, and says nothing is deleted", async ({
+  test("offers the verb on a failed row, and leaves the page with the row", async ({
     page,
   }) => {
     let posted = null;
@@ -1870,8 +1870,12 @@ test.describe("a finished request can be archived", () => {
 
     await page.getByRole("button", { name: "Archive" }).click();
     expect(posted).toEqual({ archived: true });
-    // The same card is the way back.
-    await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
+    // Putting the row away ends the visit: the request page is a decision
+    // record, and a decision you have finished with is not something to keep
+    // reading. You land back on the list you archived it from, where the
+    // Archived filter now has a row in it.
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator(".tbl-row").first()).toBeVisible();
   });
 
   test("an archived row offers the way back, not the way out", async ({
@@ -1906,6 +1910,9 @@ test.describe("a finished request can be archived", () => {
     );
     await page.getByRole("button", { name: "Restore" }).click();
     expect(posted).toEqual({ archived: false });
+    // Asking for the row back keeps you on it: you are reading the thing you
+    // just asked to keep, so only archiving ends the visit.
+    await expect(page).toHaveURL(/\/requests\/req_draft01$/);
   });
 
   test("is not offered on a draft, which is cancelled instead", async ({

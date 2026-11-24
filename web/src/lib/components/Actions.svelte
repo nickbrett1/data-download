@@ -30,7 +30,10 @@
    * - **Archive** writes a date rather than a state. A `failed` attempt's state
    *   is the outcome of something that really happened, so cancelling it would
    *   make the record lie; archiving only takes it off the book's "what needs
-   *   me" list, and the same button puts it back.
+   *   me" list, and the same button puts it back. Archiving is also the one verb
+   *   that ends the visit: the row is being put away, so `onarchived` hands the
+   *   decision to leave the page back to whoever owns the route. Restoring does
+   *   not, because you are asking for the row, not putting it away.
    *
    * - **Cancel** moves a `draft` to `cancelled` and is not a delete: the row,
    *   its quote, its `why` and its events stay. Two clicks, and the second says
@@ -48,7 +51,7 @@
   import { getView, postJson } from "$lib/api";
   import { bound, isArchivable, isRetryable, usd } from "$lib/format";
 
-  let { request, onchanged } = $props();
+  let { request, onchanged, onarchived } = $props();
 
   const id = $derived(request.id);
   const draft = $derived(request.state === "draft");
@@ -153,9 +156,14 @@
   }
 
   async function toggleArchive() {
-    archiveResult = await run("archive", `${base}/archive`, {
+    const result = await run("archive", `${base}/archive`, {
       archived: !archived,
     });
+    if (!result) return;
+    archiveResult = result;
+    // Putting the row away ends the visit; asking for it back (a null
+    // `archived_at`) does not -- you are still reading the row you asked for.
+    if (result.archived_at) onarchived?.();
   }
 </script>
 

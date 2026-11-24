@@ -67,6 +67,16 @@
     return () => controller.abort();
   });
 
+  /** Archiving takes the row off the book, so this page -- a decision record --
+   * is the wrong place to still be: you put it away, you do not want to keep
+   * reading it. `assign("/")` rather than `history.back()` because a request
+   * page is a link you can arrive at from anywhere (a note, a chat, a
+   * bookmark), and "back" then leaves the app instead of returning to the
+   * list. The list is the destination either way. */
+  function leaveToList() {
+    window.location.assign("/");
+  }
+
   // Any verb at all, so a running row does not get an empty line where the
   // buttons would have been.
   const hasVerbs = $derived(
@@ -353,7 +363,11 @@
            A request page is a decision record: what was asked, why, and then
            one cluster of buttons. -->
       {#if hasVerbs}
-        <Actions request={data} onchanged={() => load()} />
+        <Actions
+          request={data}
+          onchanged={() => load()}
+          onarchived={leaveToList}
+        />
       {/if}
 
       {#if BLOCKED.has(data.facet)}
