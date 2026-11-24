@@ -15,8 +15,8 @@
 name: market_data_window
 version: 1
 description: >-
-  A vendor job for a symbol-scoped window of records, split per day,
-  downloaded with its manifest, metadata and condition receipts.
+  A vendor job for a symbol-scoped window of records, split per day and
+  verified against the vendor's own manifest.
 
 form: instruments_window
 
