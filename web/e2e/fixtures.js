@@ -8,10 +8,32 @@
  * JSON, and they can state it here.
  */
 
+// What the vendor says about a dataset code, as the three read routes now carry
+// it (`/ui/dashboard.json`, `/ui/request/<id>.json`, `/ui/datasets.json`).
+// `label` is the server's: it is the vendor's description, or the sentence that
+// says the vendor has none -- the page never decides which.
+export const glbx = {
+  vendor: "Databento",
+  dataset: "GLBX.MDP3",
+  described: true,
+  description: "CME Globex MDP 3.0",
+  label: "CME Globex MDP 3.0",
+  venue: "GLBX",
+  venues: ["GLBX"],
+  available_from: "2010-06-06",
+  available_to: "now",
+  schemas: ["ohlcv-1d", "trades"],
+  fetched_at: "2026-11-23T03:00:00Z",
+};
+
 export const dashboard = {
   rows: [
     {
       id: "req_9f2a41c8",
+      // The dataset, and what the vendor calls it: a code alone is vocabulary
+      // only Databento has memorised.
+      dataset: "GLBX.MDP3",
+      catalogue: glbx,
       created_at: "2026-11-14T23:10:00Z",
       seq: 1,
       label: "market_data_window",
@@ -348,6 +370,8 @@ export const draftDetail = {
   id: "req_draft01",
   seq: 6,
   label: "market_data_window",
+  dataset: "GLBX.MDP3",
+  catalogue: glbx,
   state: "draft",
   facet: "todo",
   facet_label: "Approval",
@@ -460,6 +484,7 @@ export const datasets = {
       datasets: [
         {
           dataset: "GLBX.MDP3",
+          catalogue: glbx,
           files: 2,
           bytes: 8158,
           requests: [

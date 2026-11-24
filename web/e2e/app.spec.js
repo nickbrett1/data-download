@@ -759,8 +759,12 @@ test.describe("naming a request, and opening it", () => {
     );
     await expect(first.locator(".req-id")).toHaveCount(0);
     await expect(first).not.toContainText("9f2a41c8");
-    // Who is being asked. A dataset is vendor vocabulary; the name is context.
-    await expect(first.locator(".req-vendor")).toHaveText("Databento");
+    // Who is being asked, and what the code means. A dataset is vendor
+    // vocabulary, so the second line carries the vendor's own name for it --
+    // `GLBX.MDP3` on its own is a name only Databento uses.
+    await expect(first.locator(".req-vendor")).toHaveText(
+      "Databento · GLBX.MDP3 · CME Globex MDP 3.0",
+    );
 
     const link = first.locator("a.req");
     await expect(link).toHaveAttribute("href", /\/requests\/req_9f2a41c8$/);
@@ -882,7 +886,9 @@ test.describe("naming a request, and opening it", () => {
     const request = page.locator(".block.request");
     // A request as a person says it: the list is a list and the window is a
     // range, not two JSON blobs shown one key at a time.
-    await expect(request).toContainText("GLBX.MDP3");
+    // The dataset param, named. The code is drawn the same way here as on the
+    // book and the datasets page: one helper, three surfaces.
+    await expect(request).toContainText("GLBX.MDP3 · CME Globex MDP 3.0");
     await expect(request).toContainText("ES.c.0");
     await expect(request).toContainText("2026-11-04 → 2026-11-06");
     await expect(request).not.toContainText('{"start"');
@@ -1402,7 +1408,15 @@ test.describe("the datasets browser", () => {
     // vocabulary: `GLBX.MDP3` under `databento` is the same fact as the path
     // on disk.
     await expect(page.locator(".vendor h2")).toHaveText("databento");
-    await expect(page.locator(".vendor h3")).toHaveText("GLBX.MDP3");
+    // The heading is where the code is drawn, so it is where the vendor's name
+    // for it belongs -- and how far back it goes is the fact a code is most
+    // often asked about.
+    await expect(page.locator(".vendor h3")).toHaveText(
+      "GLBX.MDP3 · CME Globex MDP 3.0",
+    );
+    await expect(page.locator(".since")).toHaveText(
+      "available 2010-06-06 → now",
+    );
     await expect(page.locator(".card")).toHaveCount(2);
 
     const landed = page.locator(".card").nth(0);

@@ -20,7 +20,14 @@
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import FilterPanel from "$lib/components/nb/FilterPanel.svelte";
   import { getView } from "$lib/api";
-  import { filed, stateDetail, stateLabel, stateTone, usd } from "$lib/format";
+  import {
+    datasetLabel,
+    filed,
+    stateDetail,
+    stateLabel,
+    stateTone,
+    usd,
+  } from "$lib/format";
 
   const FACET_LABELS = {
     broken: "Broken",
@@ -189,7 +196,21 @@
               <span class="req-num">#{request.seq}</span>
               <span class="req-subject">{request.label}</span>
             </a>
-            <span class="req-vendor">{request.vendor || "—"}</span>
+            <!-- The second line is who is being asked and *what* the code is.
+                 A dataset code is vendor vocabulary (see `datasetLabel`), and
+                 the book is where a reader scans for "the Globex one" -- so the
+                 vendor's own name for it rides here rather than a bare
+                 `GLBX.MDP3` in a subject that is already a plan type. -->
+            <span
+              class="req-vendor"
+              title={request.dataset
+                ? `${request.vendor || "—"} · ${datasetLabel(request.dataset, request.catalogue)}`
+                : ""}
+              >{request.vendor || "—"}{#if request.dataset}{" · "}{datasetLabel(
+                  request.dataset,
+                  request.catalogue,
+                )}{/if}</span
+            >
           </span>
           <!-- The badge, and under it the one thing the badge cannot say: what a
                blocked row is short of, whether an approved row was ever claimed,
@@ -299,6 +320,11 @@
     margin-top: 2px;
     font-size: 10.5px;
     color: var(--ink-muted);
+    /* One line, clipped: the title carries the whole phrase, and a long vendor
+       description must not push the `state` column off the grid. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .filed {

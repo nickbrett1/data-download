@@ -22,6 +22,7 @@
   import { getView } from "$lib/api";
   import {
     bound,
+    datasetLabel,
     filed,
     isArchivable,
     isRetryable,
@@ -159,6 +160,11 @@
    * reads as one, and `null` says `—` instead of the word "null". */
   function say(key, value) {
     if (value === null || value === undefined) return "—";
+    // The dataset code is the one param that is not self-explanatory: it is
+    // vendor vocabulary, and the server sends what the vendor calls it. The
+    // same helper the book and the Datasets page use, so `GLBX.MDP3` is named
+    // the same way on all three surfaces (or said to be undescribed).
+    if (key === "dataset") return datasetLabel(String(value), data?.catalogue);
     if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
     if (typeof value === "object") {
       if (value.start && value.end) return windowOf(value.start, value.end);
@@ -393,7 +399,9 @@
               </dd>
               {#if match.dataset}
                 <dt>dataset</dt>
-                <dd><code>{match.dataset}</code></dd>
+                <dd>
+                  <code>{datasetLabel(match.dataset, data.catalogue)}</code>
+                </dd>
               {/if}
               {#if match.plan_type}
                 <dt>plan type</dt>

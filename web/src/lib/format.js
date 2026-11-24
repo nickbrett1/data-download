@@ -91,6 +91,36 @@ export function windowOf(start, end) {
   return `${start} → ${end} (end exclusive)`;
 }
 
+/** A dataset, never as a bare vendor code: `GLBX.MDP3 · CME Globex MDP 3.0`.
+ *
+ * The code is the vendor's vocabulary and nobody outside Databento has it
+ * memorised, so the three places a dataset is drawn (`RequestDetail`'s row,
+ * the book's row and the Datasets page) all go through this one function --
+ * `entry.label` comes from the server, which is the only place that knows
+ * whether the vendor answered "I do not describe this code" or has not been
+ * asked yet.
+ *
+ * `entry === null` is "not asked yet", not "no name": the catalogue fills in
+ * behind the page, so the honest thing to show is that something is pending
+ * rather than a bare code that reads like the whole answer. */
+export function datasetLabel(code, entry) {
+  if (!code) return "—";
+  if (!entry) return `${code} · description pending`;
+  return `${code} · ${entry.label}`;
+}
+
+/** How far back a dataset's data goes: `available 2010-06-06 → now`.
+ *
+ * The end is usually "now" -- a live feed's range end tracks the present --
+ * and the server says so rather than printing yesterday's date, because a date
+ * there reads as "the dataset stopped". */
+export function availableWindow(entry) {
+  if (!entry?.available_from) return "";
+  return entry.available_to
+    ? `available ${entry.available_from} → ${entry.available_to}`
+    : `available from ${entry.available_from}`;
+}
+
 /** A ceiling, not a price: `$5`, `$5.50`, `$120`.
  *
  * The trailing `.00` stays off. A price reads as money spent (`$5.00`, two

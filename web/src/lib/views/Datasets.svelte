@@ -27,7 +27,14 @@
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import { getView } from "$lib/api";
-  import { filed, stateLabel, stateTone, windowOf } from "$lib/format";
+  import {
+    availableWindow,
+    datasetLabel,
+    filed,
+    stateLabel,
+    stateTone,
+    windowOf,
+  } from "$lib/format";
 
   let data = $state(null);
   let failure = $state("");
@@ -135,7 +142,14 @@
         <h2>{vendor.vendor_slug || vendor.vendor}</h2>
 
         {#each vendor.datasets as group (group.dataset)}
-          <h3>{group.dataset}</h3>
+          <!-- The heading is where the code is drawn, so it is where the
+               vendor's name for it has to be: "GLBX.MDP3" alone is a name only
+               Databento uses. The availability line is the one fact the code
+               most often gets asked about ("how far back does this go?"). -->
+          <h3>{datasetLabel(group.dataset, group.catalogue)}</h3>
+          {#if availableWindow(group.catalogue)}
+            <p class="since">{availableWindow(group.catalogue)}</p>
+          {/if}
 
           {#each group.requests as request (request.request_id)}
             <article class="card">
@@ -236,6 +250,14 @@
     margin: 14px 0 8px;
     font-family: var(--mono, ui-monospace, SFMono-Regular, monospace);
     font-size: 15px;
+  }
+
+  /* Under the dataset heading: the range, not a badge. Muted so the code and
+     its name stay the heading's job. */
+  .since {
+    margin: -4px 0 8px;
+    color: var(--ink-muted);
+    font-size: 12px;
   }
 
   .card {
