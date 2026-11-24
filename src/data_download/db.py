@@ -1532,6 +1532,54 @@ class Store:
 
     # -- long poll ---------------------------------------------------------
 
+    async def catalogue_get(
+        self, pairs: list[tuple[str, str]]
+    ) -> list[dict[str, Any]]:
+        """The cached catalogue entries for some `(vendor, dataset)` pairs.
+
+        One query with one `OR` per pair rather than a query per row: the pages
+        that call this pass every dataset they are about to draw.
+        """
+        wanted = [(str(v), str(d)) for v, d in pairs if v and d]
+        if not wanted:
+            return []
+        clause = " OR ".join("(vendor = ? AND dataset = ?)" for _ in wanted)
+        args = [value for pair in wanted for value in pair]
+        async with self.conn.execute(
+            f"SELECT * FROM dataset_catalogue WHERE {clause}", args
+        ) as cur:
+            return [dict(row) for row in await cur.fetchall()]
+
+    async def catalogue_put(self, row: dict[str, Any]) -> None:
+        """Insert or replace one description. Last write wins: it is a cache."""
+        async with self._write_lock:
+            await self.conn.execute(
+                "INSERT INTO dataset_catalogue "
+                "(vendor, dataset, description, described, venue, venues_json, "
+                " range_json, schemas_json, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(vendor, dataset) DO UPDATE SET "
+                "  description = excluded.description, "
+                "  described = excluded.described, "
+                "  venue = excluded.venue, "
+                "  venues_json = excluded.venues_json, "
+                "  range_json = excluded.range_json, "
+                "  schemas_json = excluded.schemas_json, "
+                "  fetched_at = excluded.fetched_at",
+                (
+                    row["vendor"],
+                    row["dataset"],
+                    row["description"],
+                    int(row.get("described") or 0),
+                    row.get("venue"),
+                    row.get("venues_json"),
+                    row.get("range_json"),
+                    row.get("schemas_json"),
+                    row["fetched_at"],
+                ),
+            )
+            await self.conn.commit()
+
     async def wait_for_state_change(
         self, request_id: str, initial_state: str, timeout: float
     ) -> dict[str, Any] | None:

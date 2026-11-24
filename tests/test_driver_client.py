@@ -121,6 +121,25 @@ def test_every_verb_answers_in_the_shape_the_interpreter_asks_for(tmp_path):
         ]
 
 
+def test_describe_travels_like_the_other_verbs(tmp_path):
+    """The ninth verb is not a step: it answers about a code, and spends nothing.
+
+    It shares the session (the wire has no unrooted verb), but it is asked
+    before any Job exists -- which is why the client exposes it and the
+    interpreter does not call it.
+    """
+    with FakeRuntime(tmp_path) as runtime:
+        with _driver(runtime, _root(tmp_path, "describe")) as driver:
+            answer = driver.describe(dataset="GLBX.MDP3")
+        assert driver.calls == ["describe"]
+    assert answer["dataset"] == "GLBX.MDP3"
+    assert answer["described"] is True
+    assert answer["description"] == "Fake dataset GLBX.MDP3"
+    assert ("POST", "/v1/describe") in runtime.requests
+    # 60 s in the client's table, mirrored from the wire's.
+    assert DEADLINES["describe"] == 60
+
+
 def test_one_session_serves_the_whole_job_and_closing_kills_it(tmp_path):
     with FakeRuntime(tmp_path) as runtime:
         driver = _driver(runtime, _root(tmp_path, "session"))

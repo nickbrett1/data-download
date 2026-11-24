@@ -28,7 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, bind, datasets, errors, match, profiles, rematch, vendor
+from . import auth, bind, catalogue, datasets, errors, match, profiles, rematch, vendor
 from . import job as job_mod
 from .config import Settings, load_settings
 from .db import (
@@ -447,6 +447,44 @@ def _vendor_of(row: dict[str, Any], registry: Registry) -> str:
     return registry.vendor_of_request(row.get("plan_type"), _params_of(row))
 
 
+def _dataset_of(row: dict[str, Any]) -> str:
+    """The dataset code this request downloads, or "".
+
+    The Job is asked first because it is what ran; params are the earlier draft
+    of the same fact, and a draft that never bound has only those. Parsed here
+    rather than stored as a column: it is one field of a write-once blob, and a
+    copy would be a second place for it to be wrong.
+    """
+    job: Any = None
+    if row.get("job_json"):
+        try:
+            job = json.loads(row["job_json"])
+        except (TypeError, ValueError):
+            job = None
+    facts = datasets.job_facts(job if isinstance(job, dict) else None)
+    return str(facts.get("dataset") or _params_of(row).get("dataset") or "")
+
+
+async def _catalogue_for(
+    store: Store,
+    pairs: set[tuple[str, str]] | list[tuple[str, str]],
+    settings: Settings,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Cached dataset descriptions, and a background ask for the rest.
+
+    Never blocks on the vendor: the page draws what is known and a task fills in
+    what is not, so a fresh code is bare on its first render and named on the
+    next. Only deployments that can reach a driver runtime schedule anything --
+    there is no one to ask otherwise.
+    """
+    found = await catalogue.lookup(store, pairs)
+    if settings.driver_ready:
+        todo = [pair for pair in pairs if catalogue.is_stale(found.get(pair))]
+        if todo:
+            catalogue.schedule(store, todo, root=settings.datasets_dir)
+    return found
+
+
 def _gap_of(row: dict[str, Any]) -> dict[str, Any] | None:
     """The one short sentence for why a blocked row has no Job.
 
@@ -567,7 +605,11 @@ def _failure_of(raw: Any) -> dict[str, str] | None:
     return {"code": str(code), "detail": text}
 
 
-def _book_row(row: dict[str, Any], registry: Registry) -> dict[str, Any]:
+def _book_row(
+    row: dict[str, Any],
+    registry: Registry,
+    descriptions: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """One row of the request book.
 
     `params_json` is the raw column, not the page's business: the label and the
@@ -591,6 +633,17 @@ def _book_row(row: dict[str, Any], registry: Registry) -> dict[str, Any]:
     out["label"] = _label(row)
     out["vendor"] = _vendor_of(row, registry)
     out["gap"] = _gap_of(row)
+    # The dataset code and what the vendor calls it. Both are on every row --
+    # `dataset` is the code the page shows and `catalogue` is the description it
+    # may show beside it -- because the code alone is vendor vocabulary that a
+    # reader cannot be expected to have memorised. `None` means "not asked yet",
+    # which is different from a vendor that answered "I do not describe it".
+    out["dataset"] = _dataset_of(row) or None
+    out["catalogue"] = (
+        (descriptions or {}).get((out["vendor"], out["dataset"]))
+        if out["dataset"]
+        else None
+    )
     return out
 
 
@@ -1446,9 +1499,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/ui/dashboard.json")
     async def dashboard_json(request: Request) -> dict[str, Any]:
         store = await _store(request)
-        rows = [
-            _book_row(_with_facet(row), registry) for row in await store.overview()
-        ]
+        raw = [_with_facet(row) for row in await store.overview()]
+        # Two passes because a description is looked up by (vendor, dataset) and
+        # both come off the row: one query for the whole book, then the row that
+        # needs a description gets the one it asked for.
+        pairs = {
+            (_vendor_of(row, registry), _dataset_of(row))
+            for row in raw
+            if _dataset_of(row)
+        }
+        descriptions = await _catalogue_for(store, pairs, settings)
+        rows = [_book_row(row, registry, descriptions) for row in raw]
         keys = (*FACET_ORDER, "cancelled", "archived", "other")
         # `total` is what the book is *showing*, and the list it shows is the one
         # minus the requests nobody needs to look at. Claiming 5 while listing 4
@@ -1486,8 +1547,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # opinion that drifts.
         view = await store.overview_one(request_id) or row
         events = await store.events_for(request_id)
+        book = _with_facet(view)
+        dataset = _dataset_of(book)
+        vendor_name = _vendor_of(book, registry)
+        descriptions = await _catalogue_for(
+            store, {(vendor_name, dataset)} if dataset else set(), settings
+        )
         return {
-            **_book_row(_with_facet(view), registry),
+            **_book_row(book, registry, descriptions),
+            # The page draws the code once, beside what the vendor calls it, so
+            # `GLBX.MDP3` never appears alone. `None` = not asked yet; an entry
+            # with `described: false` = the vendor answered that it has no name.
+            "dataset": dataset or None,
+            "catalogue": descriptions.get((vendor_name, dataset)) if dataset else None,
             "payload": {
                 "body_kind": row["body_kind"],
                 "plan_type": row["plan_type"],
@@ -1536,7 +1608,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             states=sorted(datasets.VISIBLE_STATES), limit=500
         )
         rows.sort(key=lambda r: str(r["created_at"]), reverse=True)
-        return datasets.tree(rows, root=settings.datasets_dir, registry=registry)
+        body = datasets.tree(rows, root=settings.datasets_dir, registry=registry)
+        # One description per dataset group, not per request: the group heading
+        # is where the code is drawn, and twenty requests for GLBX.MDP3 should
+        # cost one lookup, not twenty. A group whose vendor is unknown has
+        # nobody to ask, so it keeps a bare code.
+        pairs = {
+            (vendor["vendor"], group["dataset"])
+            for vendor in body["vendors"]
+            if vendor["vendor_slug"]
+            for group in vendor["datasets"]
+        }
+        descriptions = await _catalogue_for(store, pairs, settings)
+        for bucket in body["vendors"]:
+            for group in bucket["datasets"]:
+                group["catalogue"] = descriptions.get(
+                    (bucket["vendor"], group["dataset"])
+                )
+        return body
 
     @app.get("/datasets/file/{vendor}/{dataset}/{request_id}/{name}")
     async def dataset_file(

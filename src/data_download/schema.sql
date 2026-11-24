@@ -299,3 +299,27 @@ SELECT r.id,
           FROM v_stuck
          GROUP BY request_id
        ) s ON s.request_id = r.id;
+
+-- What a vendor says its dataset codes are (the `describe` verb), cached.
+--
+-- A code like `GLBX.MDP3` is the only handle the book and the Datasets page
+-- have on a dataset, and it is vendor vocabulary. The driver asks the vendor
+-- and the answer is cached here rather than fetched per page: the Datasets
+-- page polls, and a read-model that called a vendor every five seconds would
+-- be a page whose speed depends on somebody else's API.
+--
+-- A cache, not a fact: `fetched_at` is stored so a stale description can be
+-- shown as stale, and `range_json` moves daily. `dataset`+`vendor` is the key
+-- because the same code can mean different things to different sellers.
+CREATE TABLE IF NOT EXISTS dataset_catalogue (
+  vendor       TEXT NOT NULL,
+  dataset      TEXT NOT NULL,
+  description  TEXT NOT NULL,      -- '' when the vendor does not describe it
+  described    INTEGER NOT NULL DEFAULT 0,  -- 1 when the vendor had a row for it
+  venue        TEXT,
+  venues_json  TEXT,
+  range_json   TEXT,
+  schemas_json TEXT,
+  fetched_at   TEXT NOT NULL,
+  PRIMARY KEY (vendor, dataset)
+);

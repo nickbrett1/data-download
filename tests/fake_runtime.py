@@ -234,6 +234,25 @@ class FakeRuntime:
         args = {k: v for k, v in body.items() if k != "session_id"}
         if verb in self.overrides:
             return dict(self.overrides[verb])
+        if verb == "describe":
+            # The catalogue's verb: no Job, no spend, just the vendor's words.
+            dataset = str(args.get("dataset") or "")
+            venue = dataset.split(".", 1)[0]
+            return {
+                "dataset": dataset,
+                "described": True,
+                "description": f"Fake dataset {dataset}",
+                "venue": venue,
+                "venues": [venue],
+                "publishers": [],
+                "range": {
+                    "start": 1275782400000000000,
+                    "end": 1795392000000000000,
+                },
+                "schemas": ["ohlcv-1d"],
+                "fetched_at": "2026-11-23T00:00:00Z",
+                "stub": True,
+            }
         if verb == "resolve":
             symbols = args.get("symbols") or []
             return {"symbols": list(symbols), "resolved": len(symbols), "stub": True}

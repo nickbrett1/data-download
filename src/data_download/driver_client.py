@@ -1,8 +1,9 @@
-"""`interpreter.Driver` over the wire: eight verbs, one session, no retries.
+"""`interpreter.Driver` over the wire: eight Job verbs plus `describe`.
 
 Phase 5 could hand `interpreter.run` a driver that lived in this process. The
 split moves the driver to its own container, and this module is the whole cost
-of that move: a proxy that implements the same eight methods by POSTing them.
+of that move: a proxy that implements the same eight methods by POSTing them,
+plus the one verb that answers a question asked *before* any Job exists.
 
 Three things are deliberate:
 
@@ -67,6 +68,9 @@ DEADLINES: dict[str, float] = {
     "cost": 120,
     "submit": 60,
     "poll": 30,
+    # Cheap (~1 s live, 2026-11-23) but a cold session imports the vendor SDK,
+    # and a fifty-second import must not read as "the runtime is down".
+    "describe": 60,
     "list_files": 120,
     "fetch": 300,
     "convert": 300,
@@ -391,6 +395,22 @@ class RemoteDriver:
 
     def _verb(self, verb: str, **kwargs: Any) -> dict[str, Any]:
         return self._post(verb, {"session_id": self.open(), **kwargs})
+
+    # -- the verb that is not a step -----------------------------------------
+
+    def describe(self, **kwargs: Any) -> dict[str, Any]:
+        """What the vendor says a dataset code is.
+
+        Not part of `interpreter.Driver`: describing spends nothing, submits
+        nothing and creates no Job, so the interpreter has no business calling
+        it. It still needs a session -- the wire has no unrooted verb -- which
+        is why the catalogue roots its session in a directory of its own.
+
+        The answer is returned whole, not prettified: the vendor's vocabulary
+        and its `described: false` both have to survive the hop so the page can
+        say exactly what it was told.
+        """
+        return self._verb("describe", **kwargs)
 
     def cost(self, **kwargs: Any) -> float:
         body = self._verb("cost", **kwargs)
