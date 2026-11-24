@@ -466,6 +466,36 @@ test.describe("plan types", () => {
     ).toHaveText(["dataset", "start", "symbols"]);
   });
 
+  test("a generic type does not wear one vendor's name", async ({ page }) => {
+    // `vendors:` is who claims which dataset codes, not who the question is
+    // for. Drawing it as a pill made the generic type look like a Databento
+    // type -- the one thing it exists not to be -- and hid the codes, which
+    // are the part that decides whether a dataset matches.
+    await mock(page);
+    await page.goto("/plan-types");
+
+    const generic = page.locator(".type-card").first();
+    await expect(generic.locator(".type-head .pill")).toHaveText([
+      "vendor-agnostic",
+      "v3",
+    ]);
+    await expect(generic.locator(".sellers")).toContainText(
+      "dataset codes it claims",
+    );
+    // The codes, which were invisible while the pill was the only vendor-shaped
+    // thing on the card.
+    await expect(generic.locator(".sellers")).toContainText("*.MDP3");
+  });
+
+  test("a pinned type still names its seller", async ({ page }) => {
+    await mock(page);
+    await page.goto("/plan-types");
+
+    const pinned = page.locator(".type-card").nth(1);
+    await expect(pinned.locator(".type-head .pill")).toHaveText(["Nabu", "v1"]);
+    await expect(pinned.locator(".sellers")).toHaveCount(0);
+  });
+
   test("the marker survives a phone, where the header row does not", async ({
     page,
   }) => {
@@ -879,6 +909,33 @@ test.describe("naming a request, and opening it", () => {
     }
     await expect(request.locator(".spec")).toContainText("$0.81");
     await expect(request.locator(".spec")).toContainText("$5");
+  });
+
+  test("a quote under a cent is cheap, not free", async ({ page }) => {
+    // A real one-day, one-symbol Databento quote: $0.0000099. Rounded to two
+    // decimals that is `$0.00`, which is the claim "no charge" -- and the
+    // difference between "cheap" and "free" is the whole question this figure
+    // answers before somebody approves a spend.
+    await mock(page, {
+      detail: { ...draftDetail, estimate_usd: 9.909272e-6 },
+    });
+    await page.goto("/requests/req_draft01");
+
+    await expect(page.locator(".block.request .kv")).toContainText("<$0.01");
+    await expect(page.locator(".block.request .kv")).not.toContainText("$0.00");
+    await expect(page.locator(".block.actions .ask")).toContainText(
+      "Quoted <$0.01.",
+    );
+  });
+
+  test("a window says which end is exclusive", async ({ page }) => {
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+    // The arrow alone cannot say whether the second date is included, and half
+    // of the readers guess wrong -- expensively, since a day is a day.
+    await expect(page.locator(".block.request .kv")).toContainText(
+      "2026-11-04 → 2026-11-06 (end exclusive)",
+    );
   });
 
   test("an unpriced request says which kind of unpriced it is", async ({

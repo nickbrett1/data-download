@@ -65,11 +65,20 @@ params_schema:
     start:
       type: string
       pattern: "^\\d{4}-\\d{2}-\\d{2}([T ]\\d{2}:\\d{2}(:\\d{2})?(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?)?$"
-      description: Absolute window start (ISO-8601). No open-ended windows.
+      description: >-
+        Absolute window start, inclusive (ISO-8601). No open-ended windows.
     end:
       type: string
       pattern: "^\\d{4}-\\d{2}-\\d{2}([T ]\\d{2}:\\d{2}(:\\d{2})?(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?)?$"
-      description: Absolute window end, exclusive (ISO-8601).
+      description: >-
+        Absolute window end, exclusive (ISO-8601): the window stops *before*
+        this instant, so start 2026-11-20 with end 2026-11-21 is one day — the
+        20th — and the landed file is named for the 20th. Half-open is this
+        service's contract with the driver, and it is also what the batch APIs
+        we drive do: Databento's window is half-open, confirmed against a
+        landed file. A driver whose vendor counted days inclusively would have
+        to shift the end itself, which is why the convention is stated once,
+        here, rather than left to be inferred from an arrow.
     split_duration:
       type: string
       enum: [day]

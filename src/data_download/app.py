@@ -269,13 +269,22 @@ def _plan_type_view(entry: Any) -> dict[str, Any]:
     with a page that does not read half of it.
     """
     # `vendor` is the pinned single-seller shape; `vendors` is the generic one.
-    # The page draws one name, so a mapped type is named by its sellers with the
-    # mapping kept alongside for a caller that wants the codes.
-    sellers = list(entry.vendors) or ([entry.vendor] if entry.vendor else [])
+    # Two different facts, so the page gets two different fields and does not
+    # have to guess which it is looking at:
+    #
+    # * `vendor`      -- the type is *for* one seller (`vendor:` in its YAML);
+    # * `vendor_agnostic` -- the type declares a `vendors:` attribution table,
+    #   which is who claims which dataset codes for *matching*, not who the
+    #   question is for. Naming the page's pill after the table made the
+    #   generic type look like a Databento type, which is exactly what the
+    #   generic type exists to stop being.
+    sellers = list(entry.vendors)
     return {
         "name": entry.name,
         "version": entry.version,
-        "vendor": ", ".join(sellers),
+        "vendor": entry.vendor,
+        "vendor_agnostic": bool(sellers) and not entry.vendor,
+        "sellers": sellers,
         "vendors": {name: list(p) for name, p in entry.vendors.items()},
         "description": entry.description,
         "anchor": entry.name,

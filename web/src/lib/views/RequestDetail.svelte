@@ -28,6 +28,7 @@
     stateLabel,
     stateTone,
     usd,
+    windowOf,
   } from "$lib/format";
 
   // The three blocked facets are the same state and three different answers to
@@ -160,7 +161,7 @@
     if (value === null || value === undefined) return "—";
     if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
     if (typeof value === "object") {
-      if (value.start && value.end) return `${value.start} → ${value.end}`;
+      if (value.start && value.end) return windowOf(value.start, value.end);
       return JSON.stringify(value);
     }
     return String(value);
@@ -180,7 +181,10 @@
       rows.push({ key, value: say(key, value) });
     }
     if (ranged) {
-      rows.push({ key: "window", value: `${params.start} → ${params.end}` });
+      rows.push({
+        key: "window",
+        value: windowOf(params.start, params.end),
+      });
     }
     const rank = (key) => {
       const at = PARAM_ORDER.indexOf(key);

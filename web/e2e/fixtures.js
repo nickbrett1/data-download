@@ -182,10 +182,14 @@ export const planTypes = {
     {
       name: "market_data_window",
       version: 3,
-      vendor: "Databento",
+      // The generic shape: no pinned seller, an attribution table instead.
+      vendor: "",
+      vendor_agnostic: true,
+      sellers: ["Databento"],
+      vendors: { Databento: ["*.ITCH", "*.MDP3", "EQUS.*"] },
       anchor: "market_data_window",
       description:
-        "One batch download from Databento, priced before it is approved.",
+        "One batch download from any vendor, priced before it is approved.",
       schema: {
         required_count: 2,
         optional_count: 1,
@@ -216,8 +220,13 @@ export const planTypes = {
       },
     },
     {
+      // A pinned single-seller type, so the page's two branches are both drawn.
       name: "http_fetch",
       version: 1,
+      vendor: "Nabu",
+      vendor_agnostic: false,
+      sellers: [],
+      vendors: {},
       anchor: "http_fetch",
       description: "A single URL, fetched once.",
       schema: {

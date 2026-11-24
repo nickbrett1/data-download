@@ -54,17 +54,41 @@ export function stateLabel(state) {
   return STATE_LABELS[state] ?? state;
 }
 
-/** `$0.04`, or an em dash. Cents are the unit a person buys in.
+/** `$0.04`, `<$0.01`, or an em dash. Cents are the unit a person buys in.
  *
  * It was four decimals, on the argument that 4c and 4.9c are different
  * purchases. True of a vendor's invoice, and not true of this screen: the
  * reader is deciding whether a figure is roughly what they expected, and the
  * fourth decimal is noise in a decision that has a ceiling on it anyway. The
  * exact number is still stored, still compared against the ceiling, and still
- * in the API -- this is the display. */
+ * in the API -- this is the display.
+ *
+ * A quote *under* a cent is not rounded to `$0.00`, because `$0.00` is the
+ * claim "this is free" and the vendor charges per record: a one-day, one-symbol
+ * window really does cost about a hundredth of a cent (measured live at
+ * $0.0000099). Both figures would print as `$0.00`, and "free" and "cheap" are
+ * different answers to the question this number exists to answer. Zero still
+ * prints as `$0.00` -- a vendor that returns no charge is making that claim
+ * itself. */
 export function usd(value) {
   if (value === null || value === undefined) return "—";
-  return `$${Number(value).toFixed(2)}`;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  if (amount !== 0 && Math.abs(amount) < 0.01) return "<$0.01";
+  return `$${amount.toFixed(2)}`;
+}
+
+/** A window, as a person reads it: `2026-11-20 → 2026-11-21 (end exclusive)`.
+ *
+ * The convention is not decoration. `end` is exclusive everywhere in this
+ * system -- the vendor's own semantics, so `20 → 21` is one day, the 20th, and
+ * a landed file is named for the 20th -- and the arrow alone cannot say which
+ * of the two dates is included. Left implicit, half the readers assume the
+ * window covers the second date and pay for a day they did not order.
+ */
+export function windowOf(start, end) {
+  if (!start || !end) return "";
+  return `${start} → ${end} (end exclusive)`;
 }
 
 /** A ceiling, not a price: `$5`, `$5.50`, `$120`.

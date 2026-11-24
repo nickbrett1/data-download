@@ -91,7 +91,17 @@
       <section class="card type-card" id={type.anchor}>
         <div class="type-head">
           <h2>{type.name}</h2>
-          {#if type.vendor}<span class="pill">{type.vendor}</span>{/if}
+          <!-- A pinned seller is the type's identity, so it is the pill. A
+               `vendors:` map is who claims which dataset codes for matching,
+               which is a different fact: the question itself has no vendor in
+               it, and saying "Databento" here made the generic type look like
+               a Databento type. The codes are itemised below the description,
+               where a reader can see that they are a lookup table. -->
+          {#if type.vendor}
+            <span class="pill">{type.vendor}</span>
+          {:else if type.vendor_agnostic}
+            <span class="pill">vendor-agnostic</span>
+          {/if}
           <span class="pill">v{type.version}</span>
           <span class="spacer"></span>
           <span class="micro">
@@ -99,6 +109,22 @@
           </span>
         </div>
         <p class="type-desc">{type.description}</p>
+
+        {#if type.vendor_agnostic && type.sellers.length}
+          <!-- The mapping, said as what it is. Without this the pills above
+               were the only vendor-shaped thing on the page and the codes --
+               the part that actually decides whether a dataset matches --
+               were invisible. -->
+          <dl class="sellers">
+            <dt>dataset codes it claims</dt>
+            {#each type.sellers as seller (seller)}
+              <dd>
+                <strong>{seller}</strong>
+                <code>{(type.vendors[seller] ?? []).join(" · ")}</code>
+              </dd>
+            {/each}
+          </dl>
+        {/if}
 
         {#if type.schema.fields.length}
           <DataTable {columns} items={type.schema.fields}>
@@ -172,6 +198,37 @@
     margin: 0 0 12px;
     color: var(--ink-dim);
     max-width: 78ch;
+  }
+
+  /* The attribution table, as one line per seller: a name in ink and the codes
+     in mono, because a dataset code is a value you copy and a vendor is a word
+     you read. Not a pill row -- six patterns do not fit in a pill. */
+  .sellers {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 12px;
+    align-items: baseline;
+    margin: 0 0 14px;
+    font-size: 12px;
+  }
+
+  .sellers dt {
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .sellers dd {
+    grid-column: 1 / -1;
+    margin: 0;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: baseline;
+  }
+
+  .sellers code {
+    color: var(--ink-dim);
   }
 
   /* Required/optional is a property of a schema field, not a house primitive,

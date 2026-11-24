@@ -27,7 +27,7 @@
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import { getView } from "$lib/api";
-  import { filed, stateLabel, stateTone } from "$lib/format";
+  import { filed, stateLabel, stateTone, windowOf } from "$lib/format";
 
   let data = $state(null);
   let failure = $state("");
@@ -78,10 +78,9 @@
     return `${i === 0 ? n.toFixed(0) : n.toFixed(1)} ${units[i]}`;
   }
 
-  function window_of(request) {
-    if (!request.start || !request.end) return "";
-    return `${request.start} → ${request.end}`;
-  }
+  // One helper for the whole app, so the boundary convention is said the same
+  // way on the card as on the request page.
+  const window_of = (request) => windowOf(request.start, request.end);
 
   function facts(request) {
     return [

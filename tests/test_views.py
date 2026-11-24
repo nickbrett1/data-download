@@ -334,12 +334,20 @@ def test_the_view_carries_no_server_trivia(client, db_path):
     assert "generated_at" not in types
 
 
-def test_a_plan_type_card_names_its_vendor(client):
-    """The type's name carries the vendor as a prefix, which is not the same
-    thing as saying who sells the data to a reader who does not decode
-    `market_data_window`."""
-    types = client.get("/ui/plan-types.json").json()["types"]
-    assert [t["vendor"] for t in types] == ["Databento"]
+def test_a_generic_plan_type_says_it_is_vendor_agnostic(client):
+    """The card must not name a vendor the type is not for.
+
+    `market_data_window` declares a `vendors:` table -- who claims which dataset
+    codes, which is what matching needs to name a seller on an intent. Reading
+    that table as the type's identity put a "Databento" pill on the one type
+    built to serve any seller, and hid the codes, which are the part that
+    decides whether a dataset matches at all.
+    """
+    type_ = client.get("/ui/plan-types.json").json()["types"][0]
+    assert type_["vendor"] == ""
+    assert type_["vendor_agnostic"] is True
+    assert type_["sellers"] == ["Databento"]
+    assert "*.MDP3" in type_["vendors"]["Databento"]
 
 
 def test_the_view_models_ask_for_no_credential(client, db_path):
