@@ -18,6 +18,10 @@
    *   empty list under a running badge reads as "not started".
    * - Stub landings say so, once, on the card. Placeholder bytes next to real
    *   ones must not be indistinguishable just because both downloaded.
+   * - Only what is committed or on its way is here. A `failed` row is a
+   *   quarantine -- bytes the verifier refused -- so it belongs on the request
+   *   book, not on the page that answers "what do I have?". The server decides
+   *   that (`VISIBLE_STATES`); this view simply never has to draw one.
    */
   import AppMark from "$lib/components/AppMark.svelte";
   import AppShell from "$lib/components/nb/AppShell.svelte";
@@ -172,8 +176,10 @@
                 <p class="quiet">No bytes on disk yet.</p>
               {:else if !request.on_disk}
                 <p class="quiet">
-                  This request is {stateLabel(request.state).toLowerCase()}, but
-                  no landing is on disk — the directory is missing.
+                  This request settled {stateLabel(
+                    request.state,
+                  ).toLowerCase()}, but nothing is on disk — the directory is
+                  gone.
                 </p>
               {:else}
                 <p class="quiet">Landed with no files.</p>

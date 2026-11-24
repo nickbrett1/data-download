@@ -20,6 +20,11 @@ Nothing here writes, hashes on demand, or walks the whole share: it reads the
 files. A browser that hashed 13 GB because a phone opened a page would be a
 worse bug than a stale listing.
 
+A `failed` row is deliberately absent. Its bytes may well be on disk, but the
+verifier refused them (`quarantine`), and a page answering "what do I have?"
+must not count something the pipeline has already rejected. Those rows stay on
+the request book, where attempts -- not holdings -- are the subject.
+
 Read-only is a property of this module — every path goes through
 `resolve_under`, which refuses anything outside the root — and of the
 deployment (the share is mounted read-only where the runner does not need it).
@@ -33,12 +38,16 @@ from typing import Any
 
 from .registry import Registry
 
-# States worth browsing. A draft or a blocked request has no Job, so it has no
-# vendor, no dataset and no directory; showing it here would be a row that can
-# never have bytes.
-VISIBLE_STATES = frozenset(
-    {"approved", "running", "succeeded", "landed_with_errors", "failed"}
-)
+# States worth browsing: what is committed, and what is on its way.
+#
+# Two kinds of row are left out, for two different reasons. A `draft` or a
+# blocked request has no Job, so no vendor, no dataset and no directory --
+# showing it would be a row that can never have bytes. A `failed` row *can*
+# have bytes on disk, but the verifier refused them (`quarantine`): listing
+# them here would answer "what do I have?" with something the pipeline has
+# already decided is not trustworthy. This page is what landed; the request
+# book is where everything that was attempted stays visible.
+VISIBLE_STATES = frozenset({"approved", "running", "succeeded", "landed_with_errors"})
 
 # What the page calls a request whose plan type is no longer in the registry.
 NO_VENDOR = "(unknown vendor)"

@@ -184,6 +184,34 @@ def test_a_draft_is_not_on_the_datasets_page(settings, tmp_path):
     assert request_id  # the row exists; it is simply not a dataset
 
 
+def test_a_quarantined_landing_is_not_what_you_have(settings, tmp_path, wire):
+    """`failed` means the verifier refused the bytes; this page is holdings.
+
+    The row can have files on disk -- a quarantine does not delete them -- and
+    the page used to list them under a `failed` badge with "no landing is on
+    disk", which answers "what do I have?" with something the pipeline has
+    already rejected. The request book is where an attempt belongs.
+    """
+    datasets = tmp_path / "datasets"
+    with _client_with(settings, datasets) as client:
+        request_id = _file(client)
+        _run(_approve(settings, request_id))
+        # `short` ships a manifest narrower than the staged files: a
+        # contradiction, so PLAN_BODY's `quarantine` decides -> `failed`.
+        result = _run(_land(settings, datasets, request_id, wire, mode="short"))
+        assert result.state == "failed"
+        files = datasets / "databento" / "GLBX.MDP3" / request_id / "files"
+        assert sorted(p.name for p in files.iterdir())  # bytes really are there
+
+        body = client.get("/ui/datasets.json").json()
+        book = client.get("/ui/dashboard.json").json()
+
+    assert body["vendors"] == []
+    assert body["totals"]["requests"] == 0
+    listed = {row["id"]: row for row in book["rows"]}
+    assert listed[request_id]["state"] == "failed"
+
+
 def test_an_unconfigured_root_is_reported_rather_than_empty(settings):
     with _client_with(settings, None) as client:
         body = client.get("/ui/datasets.json").json()
