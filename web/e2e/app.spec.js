@@ -520,6 +520,33 @@ test.describe("plan types", () => {
     );
   });
 
+  test("a runtime with nothing unmatched grows no extra section", async ({
+    page,
+  }) => {
+    // The page must not reserve space for a case that does not apply: with one
+    // installed driver and it answering a type, the trailing section is absent
+    // entirely rather than rendered empty.
+    await mock(page, {
+      types: {
+        ...planTypes,
+        drivers: {
+          ...planTypes.drivers,
+          count: 1,
+          installed: planTypes.drivers.installed.filter(
+            (row) => row.answers.length > 0,
+          ),
+        },
+      },
+    });
+    await page.goto("/plan-types");
+
+    await expect(page.locator(".plan-type")).toHaveCount(2);
+    await expect(page.locator(".orphans")).toHaveCount(0);
+    expect(await page.locator("body").innerText()).not.toContain(
+      "drivers with no plan type",
+    );
+  });
+
   // The Svelte port kept the header count and dropped the per-field marker, so
   // the page said *how many* parameters were required but not *which*. The
   // count is not a substitute for the tag, so both are asserted -- inside the
