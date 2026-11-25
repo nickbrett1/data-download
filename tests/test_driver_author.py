@@ -208,3 +208,49 @@ def test_a_sweep_that_cannot_speak_docker_is_not_fatal(monkeypatch):
 
     monkeypatch.setattr(driver_author.subprocess, "run", no_docker)
     assert driver_author.sweep_credentials("openhands", "/projects", older_than=60) == 0
+
+
+def test_an_agent_that_pushed_and_then_failed_is_still_an_answer(tmp_path, monkeypatch, capsys):
+    # Seen in the wild: the model emitted `risk: 'LOW'` on a terminal call, the
+    # tool rejected it, and the run ended on a retryable tool error -- after the
+    # push. The branch is the evidence; the agent's exit code is not.
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setattr(driver_author, "sweep_credentials", lambda *a, **k: 0)
+    monkeypatch.setattr(driver_author, "write_credential", lambda *a, **k: None)
+    monkeypatch.setattr(driver_author, "remove_credential", lambda *a, **k: None)
+    shas = {"main": "a" * 40}
+    monkeypatch.setattr(
+        driver_author.github_api, "head_sha", lambda repo, ref, *, token: shas.get(ref, "c" * 40)
+    )
+    monkeypatch.setattr(
+        driver_author.github_api,
+        "ensure_pull_request",
+        lambda repo, *, head, base, title, body, token: {"number": 8, "created": True},
+    )
+    agent = _agent(
+        tmp_path,
+        "echo 'author-ref: conv-9'\necho 'openhands: the conversation ended error' >&2\nexit 1\n",
+    )
+    status = _run_main(monkeypatch, ["--repo", "o/r", "--base", "main", "--agent-cmd", agent])
+
+    assert status == 0
+    answer = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert answer["commit_sha"] == "c" * 40
+    assert answer["author_ref"] == "conv-9"
+
+
+def test_when_the_agent_failed_and_nothing_was_pushed_the_agents_reason_is_kept(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setattr(driver_author, "sweep_credentials", lambda *a, **k: 0)
+    monkeypatch.setattr(driver_author, "write_credential", lambda *a, **k: None)
+    monkeypatch.setattr(driver_author, "remove_credential", lambda *a, **k: None)
+    monkeypatch.setattr(
+        driver_author.github_api, "head_sha", lambda repo, ref, *, token: "a" * 40
+    )
+    agent = _agent(tmp_path, "echo 'openhands: REFUSED: budget exhausted' >&2\nexit 1\n")
+    status = _run_main(monkeypatch, ["--repo", "o/r", "--base", "main", "--agent-cmd", agent])
+
+    assert status == 1
+    assert "budget exhausted" in capsys.readouterr().err

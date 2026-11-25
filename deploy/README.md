@@ -410,6 +410,24 @@ OPENHANDS_MAX_ITERATIONS=200
 DATA_DOWNLOAD_OPENHANDS_URL=http://ryzen:3088
 ```
 
+Three things about the authoring conversation worth knowing before you read
+a log in anger:
+
+- **A tool-schema blip is not a failed job.** `deepseek-v4-flash` occasionally
+  adds a `risk` argument to a `terminal` call; the tool's model forbids unknown
+  fields, so the call is rejected with `extra_forbidden`. It is marked
+  `retryable: true`, the agent recovers on the next turn (observed: within 18s,
+  one occurrence in ~55 terminal calls), and the conversation still finishes.
+  Nothing in the agent profile can prevent it — the schema is baked into the
+  image. The harness therefore trusts the forge over the agent's exit code: if
+  the branch exists at a new sha, the run counts even when the agent reported
+  failure on its way out.
+- **`execution_status: idle` is not "done".** It is the at-rest state, and a
+  conversation starts there even when the run was requested in the same call.
+  Only `finished`, `error` and `stopped` end a wait.
+- **Attribution goes in `tags`, not `observability_metadata`.** The latter is
+  accepted and silently dropped.
+
 Two host facts this unit assumes, both learned the hard way:
 
 - **The store must be writable by the loop's user.** `…/data-download.db` is

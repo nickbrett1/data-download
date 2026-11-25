@@ -54,7 +54,13 @@ VENDOR_LINE = re.compile(r"^Write a driver for the vendor '?(?P<vendor>[^'.]+)'?
 
 
 class Refused(Exception):
-    """This job stops here, and a human is told why."""
+    """This job stops here, and a human is told why.
+
+    `output` carries the agent's stdout when there was one, so a run that failed
+    *after* naming its transcript still leaves the transcript id behind.
+    """
+
+    output: str = ""
 
 
 class Misconfigured(Refused):
@@ -237,7 +243,9 @@ def run_agent(cmd: str, prompt: str, *, timeout: float) -> str:
         print(done.stderr.rstrip(), file=sys.stderr)
     if done.returncode != 0:
         tail = (done.stderr or done.stdout or "").strip()[-800:]
-        raise Refused(f"the authoring agent exited {done.returncode}: {tail}")
+        refused = Refused(f"the authoring agent exited {done.returncode}: {tail}")
+        refused.output = done.stdout
+        raise refused
     return done.stdout
 
 
@@ -305,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"driver-author: vendor {vendor!r}, branch {branch}, workspace {workdir}", file=sys.stderr)
 
     author_ref = ""
+    failure: Refused | None = None
     try:
         if credential:
             stale = sweep_credentials(args.container, args.workdir_prefix, older_than=args.timeout)
@@ -328,9 +337,30 @@ def main(argv: list[str] | None = None) -> int:
             workdir=workdir,
             credential=credential,
         )
-        output = run_agent(args.agent_cmd, prompt, timeout=args.timeout)
+        try:
+            output = run_agent(args.agent_cmd, prompt, timeout=args.timeout)
+        except Misconfigured:
+            raise
+        except Refused as exc:
+            # The agent's own verdict is not the last word, the branch is. An
+            # agent can push and *then* die -- a tool-schema blip at the end, a
+            # timeout during its closing summary -- and the work is still real.
+            # So the failure is held, not raised, and the forge decides.
+            failure = exc
+            output = exc.output
         author_ref = author_ref_of(output)
-        answer = verify(args.repo, branch, args.base, token=token)
+        try:
+            answer = verify(args.repo, branch, args.base, token=token)
+        except Refused:
+            if failure is not None:
+                raise failure from None
+            raise
+        if failure is not None:
+            print(
+                f"driver-author: the agent reported failure ({failure}), but the forge has "
+                f"{answer['commit_sha']} on {branch}; trusting the forge",
+                file=sys.stderr,
+            )
     except Misconfigured as exc:
         print(f"driver-author: MISCONFIGURED: {exc}", file=sys.stderr)
         return 2
