@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import aiosqlite
 
@@ -640,10 +640,30 @@ class Store:
             except Exception:  # noqa: BLE001 - closing a broken connection
                 log.debug("closing a failed store connection", exc_info=True)
 
+    #: How long a close may wait for aiosqlite's worker thread.
+    #:
+    #: That thread reports every answer with
+    #: `future.get_loop().call_soon_threadsafe(…)`. A cancelled caller leaves a
+    #: query running whose future nobody wants, and if the loop has closed by the
+    #: time the thread reports, the call raises *inside the thread* and takes it
+    #: with it -- after which `close()` waits on a future nothing will ever
+    #: answer. Observed in CI as a build that hung for 35 minutes in one thread
+    #: with no timers. A bounded wait turns that into a logged warning instead of
+    #: a container that will not stop.
+    close_timeout: ClassVar[float] = 10.0
+
     async def close(self) -> None:
-        if self._conn is not None:
-            await self._conn.close()
-            self._conn = None
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        try:
+            await asyncio.wait_for(conn.close(), timeout=self.close_timeout)
+        except TimeoutError:
+            log.warning(
+                "the store connection did not close within %ss: its worker thread "
+                "stopped answering, most likely killed by a cancelled query",
+                self.close_timeout,
+            )
 
     @property
     def conn(self) -> aiosqlite.Connection:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -486,5 +487,56 @@ def test_the_worker_stops_without_waiting_for_a_conversation(tmp_path):
             return worker
 
         assert _run(go())._task is None
+    finally:
+        _run(store.close())
+
+
+def test_stopping_still_abandons_a_pass_that_outlives_the_grace(tmp_path):
+    """The grace period must not become a wait: a conversation outlives it."""
+    store = _store(tmp_path)
+    try:
+        def slow(row):
+            time.sleep(5)
+            return {"branch": "driver/x", "commit_sha": "a" * 40}
+
+        async def go():
+            worker = driver_build.DriverWorker(
+                store, _steps(author=slow), interval=0.01, grace=0.01
+            )
+            worker.start()
+            await asyncio.sleep(0.05)
+            started = time.monotonic()
+            await worker.stop()
+            return time.monotonic() - started
+
+        assert _run(go()) < 2.0
+    finally:
+        _run(store.close())
+
+
+def test_a_pass_that_is_ending_is_not_cancelled(tmp_path):
+    """The common case: the loop is between passes, so nothing is cut off.
+
+    Cancelling inside a store call is what kills aiosqlite's worker thread (see
+    `DriverWorker.stop`), so the grace period has to actually work.
+    """
+    store = _store(tmp_path)
+    try:
+        def author(row):
+            raise AssertionError("no job is queued, so no step should run")
+
+        async def go():
+            worker = driver_build.DriverWorker(
+                store, _steps(author=author), interval=0.01, grace=5.0
+            )
+            worker.start()
+            await asyncio.sleep(0.05)
+            started = time.monotonic()
+            await worker.stop()
+            return time.monotonic() - started, worker._task
+
+        elapsed, task = _run(go())
+        assert elapsed < 1.0
+        assert task is None
     finally:
         _run(store.close())

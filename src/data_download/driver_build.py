@@ -673,10 +673,19 @@ class DriverWorker:
     the idle poll that catches a job queued by something that could not nudge.
     """
 
-    def __init__(self, store: Store, steps: Steps, *, interval: float = 60.0) -> None:
+    def __init__(
+        self,
+        store: Store,
+        steps: Steps,
+        *,
+        interval: float = 60.0,
+        grace: float = 1.0,
+    ) -> None:
         self.store = store
         self.steps = steps
         self.interval = interval
+        #: How long a stopping pass is given to end on its own (see `stop`).
+        self._grace = grace
         self._nudge = asyncio.Event()
         self._stopping = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -714,16 +723,35 @@ class DriverWorker:
         self._task = asyncio.create_task(self.run_forever(), name="data-download-driver-jobs")
 
     async def stop(self) -> None:
-        """Cancelled, not awaited politely: a pass can be inside a conversation.
+        """Finish the pass if it is about to, and cancel it only if it is not.
 
         The job it was holding is `building` with no lease of its own, so the
         next pass picks it up from the same row -- the branch it already pushed
         is on the forge, and the gate is re-asked rather than re-authored.
+
+        The grace period before cancelling is not politeness. A pass spends most
+        of its life inside `asyncio.to_thread` (a conversation, a probe), which
+        a cancellation abandons harmlessly; but it also touches the store, whose
+        aiosqlite thread reports each answer to the awaiting future's loop. Cut
+        that await off mid-query and the thread reports to a future nobody wants
+        -- and if the loop closes first, the report raises inside the thread and
+        kills it, after which no query or close in that process ever finishes.
+        In practice a pass that is not inside a conversation ends in
+        microseconds, so the grace period means the cancel almost never fires.
         """
         self._stopping.set()
         self._nudge.set()
         task, self._task = self._task, None
         if task is None:
+            return
+        done, _ = await asyncio.wait({task}, timeout=self._grace)
+        if done:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 - shutdown must not raise
+                log.exception("driver worker: the last pass failed")
             return
         task.cancel()
         try:
