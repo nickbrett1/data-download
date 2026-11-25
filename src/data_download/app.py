@@ -34,6 +34,7 @@ from . import (
     bind,
     catalogue,
     datasets,
+    driver_build,
     driver_client,
     errors,
     match,
@@ -52,6 +53,7 @@ from .db import (
     payload_hash,
     utcnow,
 )
+from .driver_build import DriverWorker
 from .models import validate_intent, validate_plan
 from .registry import Registry, load_registry
 from .worker import Worker
@@ -967,6 +969,52 @@ def _start_worker(
     return worker
 
 
+def _start_driver_worker(
+    app: FastAPI, store: Store, registry: Registry, settings: Settings
+) -> DriverWorker | None:
+    """Start the driver-queue loop, or say which part is missing.
+
+    Every prerequisite is a named setting, so the log says *what to fix* rather
+    than queueing jobs into a loop that cannot finish one. The four are: somewhere
+    to install to (the runtime and its token), something to ask (the forge
+    token), something to ask it with (the agent server), and somewhere for the
+    agent's credential to land (a workspace this process can see).
+    """
+    if not settings.driver_jobs:
+        log.info("driver worker: DATA_DOWNLOAD_DRIVER_JOBS is off - driver jobs will wait")
+        return None
+    if not settings.driver_ready:
+        log.warning(
+            "driver worker: not started - DRIVER_RUNTIME_TOKEN is unset, so an "
+            "artefact could not be installed or probed"
+        )
+        return None
+    if not settings.github_token:
+        log.warning(
+            "driver worker: not started - DATA_DOWNLOAD_GITHUB_TOKEN is unset, so "
+            "the branch could not be gated, merged or installed"
+        )
+        return None
+    if not settings.openhands_url:
+        log.warning(
+            "driver worker: not started - DATA_DOWNLOAD_OPENHANDS_URL is unset, so "
+            "no driver could be authored"
+        )
+        return None
+    if not settings.openhands_projects_dir:
+        log.warning(
+            "driver worker: not started - DATA_DOWNLOAD_OPENHANDS_PROJECTS_DIR is "
+            "unset, so the push credential has nowhere to reach the agent from "
+            "this process (it has no docker socket)"
+        )
+        return None
+
+    steps = driver_build.steps_from_settings(settings, registry=registry)
+    worker = DriverWorker(store, steps, interval=settings.driver_jobs_interval)
+    worker.start()
+    return worker
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     _configure_logging(os.environ.get("LOG_LEVEL", "info"))
     settings = settings or load_settings()
@@ -986,6 +1034,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # deployment does not run, which is a state the page can report honestly
         # ("no worker has picked it up") rather than a lie about a loop.
         app.state.worker = None
+        # The driver queue: authoring, gating, probing, installing. `None` means
+        # this deployment does not work it, which the drivers page already
+        # reports as "no worker has picked this up".
+        app.state.driver_worker = None
         # Resolved once per process, not per request: a long-lived service must
         # not record two commits for one deployment (phase 3 order §5).
         app.state.code_ref = settings.code_ref
@@ -1012,6 +1064,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # pass has had its say: a row that binds during rematch should be
             # visible to the first pass, not raced by it.
             app.state.worker = _start_worker(app, store, registry, settings)
+            app.state.driver_worker = _start_driver_worker(app, store, registry, settings)
         except Exception as exc:  # noqa: BLE001 - the reason is reported, not raised
             # Up but broken is a real state: /healthz stays a liveness check that
             # does not touch the DB, so a store fault does not restart-loop the
@@ -1025,6 +1078,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # and its lease left to expire, which is the recovery path a crash
             # already takes. Stopping it afterwards would let it use a closed
             # connection on the way out.
+            if app.state.driver_worker is not None:
+                await app.state.driver_worker.stop()
             if app.state.worker is not None:
                 await app.state.worker.stop()
             if app.state.store is not None:
@@ -1667,6 +1722,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             worker = getattr(request.app.state, "worker", None)
             if worker is not None:
                 worker.wake()
+            # The same nudge for the driver queue: an approval can be the very
+            # moment a vendor turns out to have no driver, and the job it leaves
+            # behind is worth starting now rather than on the next idle beat.
+            jobs = getattr(request.app.state, "driver_worker", None)
+            if jobs is not None:
+                jobs.wake()
 
         return JSONResponse(
             status_code=200,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -63,24 +64,76 @@ def _artifact(root: Path, *, vendor="Databento", name="databento", version="1") 
     return source
 
 
-def test_install_is_atomic_and_refuses_to_overwrite(tmp_path):
+def _fake_runtime(monkeypatch, *, sha="", status=200, answer=None):
+    """A runtime that answers, and the request it was sent."""
+    seen: dict = {}
+
+    def request(host, port, method, path, *, token, body=None, timeout=30.0):
+        seen.update(host=host, port=port, method=method, path=path, token=token, body=body)
+        if answer is not None:
+            return status, answer
+        return status, {"name": "databento", "version": "1", "path": "/drivers/databento/1",
+                        "sha256": sha, "replaced": False}
+
+    monkeypatch.setattr(driver_build.runtime_http, "request", request)
+    return seen
+
+
+def test_the_tree_crosses_the_boundary_as_data_and_the_digest_comes_back(tmp_path, monkeypatch):
+    """The runtime owns the volume, so the app sends bytes and records its digest."""
     source = _artifact(tmp_path)
-    drivers = tmp_path / "drivers"
-    first = driver_build.install_tree(source, drivers)
-    assert (drivers / "databento" / "1" / "manifest.json").is_file()
-    assert first["artifact_sha256"]
-    # No staging directory survives: the rename is the only way in.
-    assert sorted(p.name for p in drivers.iterdir()) == ["databento"]
+    digest = driver_build.artifact_digest(source)
+    seen = _fake_runtime(monkeypatch, sha=digest)
 
-    with pytest.raises(driver_build.LoopRefused, match="already exists"):
-        driver_build.install_tree(source, drivers)
+    installed = driver_build.install_over_runtime(
+        source, url="http://data-download-drivers:8831", token="rt"
+    )
+
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/v1/drivers/install"
+    assert seen["token"] == "rt"
+    assert seen["body"]["name"] == "databento"
+    assert seen["body"]["version"] == "1"
+    # base64 of the bytes on disk, under their relative names.
+    import base64
+
+    assert base64.b64decode(seen["body"]["files"]["driver.py"]) == (
+        source / "driver.py"
+    ).read_bytes()
+    assert installed["artifact_sha256"] == digest
+    assert installed["path"] == "/drivers/databento/1"
+    # Nothing was written here: the local directory does not exist.
+    assert not (tmp_path / "drivers").exists()
 
 
-def test_install_refuses_a_tree_without_a_manifest(tmp_path):
+def test_install_refuses_a_tree_without_a_manifest(tmp_path, monkeypatch):
     source = tmp_path / "empty"
     source.mkdir()
+    seen = _fake_runtime(monkeypatch)
     with pytest.raises(driver_build.LoopRefused, match="manifest"):
-        driver_build.install_tree(source, tmp_path / "drivers")
+        driver_build.install_over_runtime(source, url="http://r:1", token="rt")
+    assert seen == {}, "a tree with no manifest must not reach the runtime"
+
+
+def test_a_refusal_from_the_runtime_keeps_its_code(tmp_path, monkeypatch):
+    source = _artifact(tmp_path)
+    _fake_runtime(
+        monkeypatch,
+        status=409,
+        answer={"error": {"code": "install_refused", "detail": "/drivers/databento/1 already exists"}},
+    )
+    with pytest.raises(driver_build.LoopRefused) as caught:
+        driver_build.install_over_runtime(source, url="http://r:1", token="rt")
+    assert "install_refused" in str(caught.value)
+    assert "already exists" in str(caught.value)
+
+
+def test_a_digest_the_tree_does_not_have_is_refused(tmp_path, monkeypatch):
+    """If what landed is not what was sent, no later replace could be trusted."""
+    source = _artifact(tmp_path)
+    _fake_runtime(monkeypatch, sha="e" * 64)
+    with pytest.raises(driver_build.LoopRefused, match="digest"):
+        driver_build.install_over_runtime(source, url="http://r:1", token="rt")
 
 
 def test_driver_in_tree_picks_the_artefact_for_the_vendor(tmp_path):
@@ -293,24 +346,26 @@ def test_a_stop_says_so_on_the_request_too(tmp_path):
         _run(store.close())
 
 
-def test_the_loop_may_replace_its_own_install_but_not_a_strangers(tmp_path):
-    """A shortfall retry installs the same name and version as the turn before."""
-    source = _artifact(tmp_path)
-    drivers = tmp_path / "drivers"
-    first = driver_build.install_tree(source, drivers)
+def test_a_retry_replaces_exactly_the_install_it_recorded(tmp_path, monkeypatch):
+    """A shortfall retry installs the same name and version as the turn before.
 
-    # A stranger's install: same path, digest this job never recorded.
-    with pytest.raises(driver_build.LoopRefused):
-        driver_build.install_tree(source, drivers)
-    # Its own: the digest it recorded last turn.
-    again = driver_build.install_tree(
-        source, drivers, replace_sha256=first["artifact_sha256"]
+    The digest is the permission: the runtime refuses to overwrite a version it
+    was not told about, and this is where the job's own record of its last
+    install is carried into that request.
+    """
+    source = _artifact(tmp_path)
+    digest = driver_build.artifact_digest(source)
+    seen = _fake_runtime(monkeypatch, sha=digest)
+
+    driver_build.install_over_runtime(
+        source, url="http://r:1", token="rt", replace_sha256=digest
     )
-    assert again["artifact_sha256"] == first["artifact_sha256"]
-    assert again["path"] == first["path"]
-    # And a different digest is not "its own" either.
-    with pytest.raises(driver_build.LoopRefused):
-        driver_build.install_tree(source, drivers, replace_sha256="e" * 64)
+    assert seen["body"]["replace_sha256"] == digest
+
+    driver_build.install_over_runtime(source, url="http://r:1", token="rt")
+    assert seen["body"]["replace_sha256"] is None, (
+        "a first install must not claim to replace anything"
+    )
 
 
 def test_a_file_outside_drivers_stops_the_merge(tmp_path):
@@ -388,3 +443,100 @@ def test_the_author_contract_is_a_json_line_and_a_nonzero_exit_is_a_stop(tmp_pat
     failing.chmod(0o755)
     with pytest.raises(driver_build.LoopRefused, match="exited 3"):
         driver_build._author_command(str(failing))({"vendor": "Databento"})
+
+
+# -- the worker --------------------------------------------------------------
+
+
+def test_the_driver_worker_drains_the_queue_then_reports_nothing_to_do(tmp_path):
+    """The host loop called `--once` every minute; this is that, in-process."""
+    store = _store(tmp_path)
+    try:
+        _job(store)
+        worker = driver_build.DriverWorker(store, _steps(), interval=0.01)
+        row = _run(worker.once())
+        assert row["state"] == "installed"
+        assert _run(worker.once()) is None
+    finally:
+        _run(store.close())
+
+
+def test_a_job_waiting_on_ci_is_a_state_the_loop_idles_on(tmp_path):
+    """A pending gate is not work: spinning on it would hammer the forge."""
+    store = _store(tmp_path)
+    try:
+        _job(store)
+        worker = driver_build.DriverWorker(
+            store, _steps(gate=lambda row: {"ok": False, "pending": True}), interval=0.01
+        )
+        row = _run(worker.once())
+        assert row["state"] == "gated"
+        assert row["state"] in driver_build.WAITING_STATES
+    finally:
+        _run(store.close())
+
+
+def test_the_worker_stops_without_waiting_for_a_conversation(tmp_path):
+    store = _store(tmp_path)
+    try:
+        async def go():
+            worker = driver_build.DriverWorker(store, _steps(), interval=0.01)
+            worker.start()
+            await asyncio.sleep(0.05)
+            await worker.stop()
+            return worker
+
+        assert _run(go())._task is None
+    finally:
+        _run(store.close())
+
+
+def test_stopping_still_abandons_a_pass_that_outlives_the_grace(tmp_path):
+    """The grace period must not become a wait: a conversation outlives it."""
+    store = _store(tmp_path)
+    try:
+        def slow(row):
+            time.sleep(5)
+            return {"branch": "driver/x", "commit_sha": "a" * 40}
+
+        async def go():
+            worker = driver_build.DriverWorker(
+                store, _steps(author=slow), interval=0.01, grace=0.01
+            )
+            worker.start()
+            await asyncio.sleep(0.05)
+            started = time.monotonic()
+            await worker.stop()
+            return time.monotonic() - started
+
+        assert _run(go()) < 2.0
+    finally:
+        _run(store.close())
+
+
+def test_a_pass_that_is_ending_is_not_cancelled(tmp_path):
+    """The common case: the loop is between passes, so nothing is cut off.
+
+    Cancelling inside a store call is what kills aiosqlite's worker thread (see
+    `DriverWorker.stop`), so the grace period has to actually work.
+    """
+    store = _store(tmp_path)
+    try:
+        def author(row):
+            raise AssertionError("no job is queued, so no step should run")
+
+        async def go():
+            worker = driver_build.DriverWorker(
+                store, _steps(author=author), interval=0.01, grace=5.0
+            )
+            worker.start()
+            await asyncio.sleep(0.05)
+            started = time.monotonic()
+            await worker.stop()
+            return time.monotonic() - started, worker._task
+
+        elapsed, task = _run(go())
+        assert elapsed < 1.0
+        assert task is None
+    finally:
+        _run(store.close())

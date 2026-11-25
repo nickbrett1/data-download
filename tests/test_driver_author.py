@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import stat
+import time
 from datetime import UTC
 
 import pytest
@@ -254,3 +257,145 @@ def test_when_the_agent_failed_and_nothing_was_pushed_the_agents_reason_is_kept(
 
     assert status == 1
     assert "budget exhausted" in capsys.readouterr().err
+
+
+# -- where the credential goes ------------------------------------------------
+
+
+def test_a_shared_workspace_writes_the_credential_at_the_path_the_agent_sees(tmp_path):
+    """The control plane mounts the agent's /projects, so the path is not
+    translated: what the prompt says is what this process writes."""
+    workspace = driver_author.SharedWorkspace(tmp_path)
+    target = tmp_path / "driver-loop" / "driver-loop-x" / "push-credential"
+    workspace.write(str(target), "tok")
+
+    assert target.read_text() == "tok"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    workspace.remove(str(target))
+    assert not target.exists()
+
+
+def test_the_credential_is_handed_to_the_agent_uid(tmp_path, monkeypatch):
+    """Root writes it, uid 10001 has to read it.
+
+    The app image declares no USER, so the file lands root-owned; the agent is
+    uid 10001 in another container and would get EACCES. The failure would not
+    be an error anywhere -- just an agent with no credential -- so the handover
+    is asserted, not assumed.
+    """
+    given: list[tuple[str, int, int]] = []
+    monkeypatch.setattr(driver_author.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        driver_author.os, "chown", lambda p, u, g: given.append((os.path.basename(p), u, g))
+    )
+
+    workspace = driver_author.SharedWorkspace(tmp_path, owner=(10001, 10001))
+    target = tmp_path / "driver-loop" / "run-1" / "push-credential"
+    workspace.write(str(target), "tok")
+
+    assert target.read_text() == "tok"
+    assert ("push-credential", 10001, 10001) in given
+    # The directories on the way must be traversable by that uid, which 0700
+    # (the mkdtemp default) is not.
+    assert stat.S_IMODE((tmp_path / "driver-loop").stat().st_mode) == 0o755
+    assert ("run-1", 10001, 10001) in given
+
+
+def test_nothing_is_chowned_when_the_agent_is_the_same_user(tmp_path, monkeypatch):
+    """A host run is already the right uid, and non-root cannot chown anyway."""
+    monkeypatch.setattr(driver_author.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(
+        driver_author.os, "chown", lambda *a: pytest.fail("chown must not be attempted")
+    )
+    target = tmp_path / "driver-loop" / "run-1" / "push-credential"
+    driver_author.SharedWorkspace(tmp_path, owner=(10001, 10001)).write(str(target), "tok")
+    assert target.read_text() == "tok"
+
+
+def test_a_shared_workspace_refuses_a_credential_outside_its_mount(tmp_path):
+    workspace = driver_author.SharedWorkspace(tmp_path / "projects")
+    with pytest.raises(driver_author.Misconfigured, match="not under"):
+        workspace.write("/projects/driver-loop/x/push-credential", "tok")
+
+
+def test_a_shared_workspace_sweeps_only_stale_credentials(tmp_path):
+    workspace = driver_author.SharedWorkspace(tmp_path)
+    stale = tmp_path / "driver-loop" / "old" / "push-credential"
+    live = tmp_path / "driver-loop" / "new" / "push-credential"
+    for path in (stale, live):
+        path.parent.mkdir(parents=True)
+        path.write_text("tok")
+    old = time.time() - 7200
+    os.utime(stale, (old, old))
+
+    assert workspace.sweep(str(tmp_path / "driver-loop"), older_than=1800) == 1
+    assert not stale.exists() and live.exists()
+
+
+def test_authoring_goes_through_a_conversation_when_there_is_no_command(tmp_path, monkeypatch):
+    """The app authors in-process: no subprocess, so the transcript id is the
+    agent's answer rather than a line printed on stdout."""
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    seen = {}
+
+    def converse(prompt, **kwargs):
+        seen.update(prompt=prompt, **kwargs)
+        return {"conversation": "conv-77", "status": "finished", "info": {}, "said": ""}
+
+    monkeypatch.setattr(driver_author.openhands_agent, "converse", converse)
+    monkeypatch.setattr(
+        driver_author.github_api,
+        "head_sha",
+        lambda repo, ref, *, token: "a" * 40 if ref == "main" else "b" * 40,
+    )
+    monkeypatch.setattr(
+        driver_author.github_api,
+        "ensure_pull_request",
+        lambda repo, *, head, base, title, body, token: {"number": 9, "created": True},
+    )
+    answer = driver_author.author(
+        "Write a driver for the vendor 'Zzz'.\n",
+        repo="o/r",
+        token="tok",
+        projects_dir=str(tmp_path),
+        workdir_prefix=str(tmp_path / "driver-loop"),
+        say=lambda line: None,
+    )
+
+    assert answer == {"branch": answer["branch"], "commit_sha": "b" * 40, "author_ref": "conv-77"}
+    assert answer["branch"].startswith("driver-loop/zzz-")
+    assert seen["url"]  # the agent server, not an empty string
+    assert "Zzz" in seen["prompt"]
+    # The credential was written for the run and taken away afterwards.
+    assert list(tmp_path.glob("driver-loop/*/push-credential")) == []
+
+
+def test_an_authoring_conversation_that_failed_still_names_the_transcript(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+
+    def converse(prompt, **kwargs):
+        raise driver_author.openhands_agent.AgentError("the conversation ended error")
+
+    error = driver_author.openhands_agent.AgentError("the conversation ended error")
+    error.conversation = "conv-99"
+    monkeypatch.setattr(driver_author.openhands_agent, "converse", lambda *a, **k: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(
+        driver_author.github_api,
+        "head_sha",
+        lambda repo, ref, *, token: "a" * 40 if ref == "main" else "b" * 40,
+    )
+    monkeypatch.setattr(
+        driver_author.github_api,
+        "ensure_pull_request",
+        lambda repo, *, head, base, title, body, token: {"number": 9, "created": True},
+    )
+    answer = driver_author.author(
+        "Write a driver for the vendor 'Zzz'.\n",
+        repo="o/r",
+        token="tok",
+        projects_dir=str(tmp_path),
+        workdir_prefix=str(tmp_path / "driver-loop"),
+        say=lambda line: None,
+    )
+    # The forge had the branch, so the run is an answer -- and the id is kept.
+    assert answer["author_ref"] == "conv-99"

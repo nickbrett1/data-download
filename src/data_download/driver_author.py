@@ -38,15 +38,23 @@ import re
 import shlex
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from . import github_api
+from . import github_api, openhands_agent
 
 DEFAULT_REPO = "nickbrett1/data-download-drivers"
 DEFAULT_BASE = "main"
 DEFAULT_TIMEOUT = 3600.0
 DEFAULT_WORKDIR = "/projects/driver-loop"
+DEFAULT_CONTAINER = "openhands"
+#: Where this process sees the agent's `/projects`, when it can see it at all.
+#: Empty means "no shared filesystem", and the credential goes in with `docker
+#: exec` -- the host-run deployment's way. In the control plane it is a mount.
+DEFAULT_PROJECTS_DIR = ""
 
 #: The ticket's first line, which names the vendor. Kept out of the prompt on
 #: purpose: an agent that has to parse its own instructions is a second parser.
@@ -132,6 +140,134 @@ def prompt_for(
         f"When the branch is pushed, your last message is one line: pushed {branch}",
     ]
     return "\n".join(lines)
+
+
+class Workspace:
+    """Where the push credential lives for the duration of one run.
+
+    Two implementations, because there are two ways a control plane can reach
+    the agent's files: a shared directory it mounts itself, or a container it
+    shells `docker exec` into. Everything above this is the same code, and the
+    difference is one setting (`OPENHANDS_PROJECTS_DIR`).
+    """
+
+    def write(self, path: str, value: str) -> None:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def remove(self, path: str) -> None:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def sweep(self, prefix: str, *, older_than: float) -> int:  # pragma: no cover
+        raise NotImplementedError
+
+
+class SharedWorkspace(Workspace):
+    """The agent's `/projects`, mounted into this process at the **same path**.
+
+    Same path on both sides is the invariant that makes this a file write
+    instead of a protocol: the prompt says `/projects/driver-loop/...`, the
+    agent sees exactly that, and so does this process. A deployment that mounts
+    the volume somewhere else is refused by name rather than handed a credential
+    the agent cannot read.
+    """
+
+    def __init__(self, root: Path, *, owner: tuple[int, int] | None = None) -> None:
+        self.root = Path(root)
+        # The app image declares no USER, so it writes as root; the agent is a
+        # different uid in a different container. A 0600 root-owned credential
+        # is therefore a credential the agent cannot read, and a 0700 root-owned
+        # directory is one it cannot enter -- the failure would arrive as a
+        # silently credential-less agent, not as an error. When this process is
+        # root and the deployment names the agent's uid, both are handed over.
+        # A host run is already the same user, so `None` changes nothing.
+        self.owner = owner if owner and os.geteuid() == 0 else None
+
+    def _claim(self, where: Path) -> None:
+        """Create `where` and any missing parents so the agent can traverse them."""
+        missing: list[Path] = []
+        probe = where
+        while not probe.exists() and probe != probe.parent:
+            missing.append(probe)
+            probe = probe.parent
+        for directory in reversed(missing):
+            directory.mkdir(exist_ok=True)
+            os.chmod(directory, 0o755)
+            if self.owner:
+                os.chown(directory, *self.owner)
+
+    def _under_root(self, path: str) -> Path:
+        target = Path(path)
+        try:
+            target.relative_to(self.root)
+        except ValueError:
+            raise Misconfigured(
+                f"the credential path {path} is not under {self.root}: mount the "
+                "agent's projects volume here at the path the agent sees"
+            ) from None
+        return target
+
+    def write(self, path: str, value: str) -> None:
+        target = self._under_root(path)
+        try:
+            self._claim(target.parent)
+            # 0600 from the moment it exists: `open(…, 0o600)` cannot race a
+            # default umask the way `write_text` followed by `chmod` can.
+            handle = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(handle, "w", encoding="utf-8") as file:
+                file.write(value)
+            if self.owner:
+                os.chown(target, *self.owner)
+        except OSError as exc:
+            raise Refused(f"cannot write the push credential to {path}: {exc}") from None
+
+    def remove(self, path: str) -> None:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def sweep(self, prefix: str, *, older_than: float = 0.0) -> int:
+        """The same age guard as the docker version: never touch a live run."""
+        where = Path(prefix)
+        if not where.is_dir():
+            return 0
+        cutoff = time.time() - max(60.0, older_than)
+        cleared = 0
+        for candidate in where.glob("*/push-credential"):
+            try:
+                if candidate.stat().st_mtime < cutoff:
+                    candidate.unlink()
+                    cleared += 1
+            except OSError:
+                continue
+        return cleared
+
+
+class ContainerWorkspace(Workspace):
+    """`docker exec` into the agent's container (a host-run deployment)."""
+
+    def __init__(self, container: str) -> None:
+        self.container = container
+
+    def write(self, path: str, value: str) -> None:
+        write_credential(self.container, path, value)
+
+    def remove(self, path: str) -> None:
+        remove_credential(self.container, path)
+
+    def sweep(self, prefix: str, *, older_than: float = 0.0) -> int:
+        return sweep_credentials(self.container, prefix, older_than=older_than)
+
+
+def workspace_for(
+    container: str = DEFAULT_CONTAINER,
+    projects_dir: str = "",
+    *,
+    owner: tuple[int, int] | None = None,
+) -> Workspace:
+    if projects_dir:
+        return SharedWorkspace(Path(projects_dir), owner=owner)
+    return ContainerWorkspace(container)
 
 
 def _container(container: str) -> list[str]:
@@ -277,68 +413,89 @@ def verify(repo: str, branch: str, base: str, *, token: str) -> dict[str, Any]:
     return {"commit_sha": head, "base_sha": base_sha}
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Author one driver from one ticket.")
-    parser.add_argument("--repo", default=(os.environ.get("DRIVERS_REPO") or DEFAULT_REPO))
-    parser.add_argument("--base", default=(os.environ.get("BASE_BRANCH") or DEFAULT_BASE))
-    parser.add_argument(
-        "--agent-cmd",
-        default=(os.environ.get("AUTHOR_AGENT_CMD") or "").strip()
-        or f"{sys.executable} -m data_download.openhands_agent",
-    )
-    parser.add_argument(
-        "--timeout", type=float, default=float(os.environ.get("AUTHOR_TIMEOUT") or DEFAULT_TIMEOUT)
-    )
-    parser.add_argument("--branch", default="", help="defaults to driver-loop/<vendor>-<stamp>")
-    parser.add_argument(
-        "--workdir-prefix",
-        default=(os.environ.get("OPENHANDS_WORKDIR") or DEFAULT_WORKDIR).strip(),
-    )
-    parser.add_argument(
-        "--container", default=(os.environ.get("OPENHANDS_CONTAINER") or "openhands").strip()
-    )
-    args = parser.parse_args(argv)
+def author(
+    ticket: str,
+    *,
+    repo: str = DEFAULT_REPO,
+    base: str = DEFAULT_BASE,
+    token: str = "",
+    timeout: float = DEFAULT_TIMEOUT,
+    workdir_prefix: str = DEFAULT_WORKDIR,
+    container: str = DEFAULT_CONTAINER,
+    projects_dir: str = DEFAULT_PROJECTS_DIR,
+    owner: tuple[int, int] | None = None,
+    agent_cmd: str = "",
+    branch: str = "",
+    url: str = "",
+    budget: float = openhands_agent.DEFAULT_BUDGET,
+    iterations: int = openhands_agent.DEFAULT_ITERATIONS,
+    now: datetime | None = None,
+    say: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """One ticket, one branch, one pull request. The whole harness as one call.
 
-    ticket = sys.stdin.read()
-    if not ticket.strip():
-        print("driver-author: REFUSED: no ticket on stdin", file=sys.stderr)
-        return 1
+    Answers `{"branch", "commit_sha"[,"author_ref"]}` -- the same dict the CLI
+    prints as one JSON line -- so the pipeline can hold it in-process instead of
+    spawning a process and parsing its stdout. The CLI is now a wrapper over
+    this, which is why the two cannot drift.
 
-    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    `agent_cmd` empty means "talk to the agent server directly" (see
+    `openhands_agent.converse`); set it to run an agent as a child process
+    instead. Either way the forge is what decides whether the work happened.
+    """
+    say = say or (lambda line: print(f"driver-author: {line}", file=sys.stderr))
+    url = (
+        url
+        or (os.environ.get("DATA_DOWNLOAD_OPENHANDS_URL") or "").strip()
+        or (os.environ.get("OPENHANDS_URL") or "").strip()
+        or openhands_agent.DEFAULT_URL
+    )
+
     vendor = vendor_of(ticket)
-    branch = args.branch or branch_for(vendor)
-    workdir = f"{args.workdir_prefix.rstrip('/')}/{slug(branch)}"
+    chosen = branch or branch_for(vendor, now=now)
+    # A directory per branch: two runs never share a workspace, and a branch
+    # that was never pushed leaves nothing behind that the next run can reuse.
+    workdir = f"{workdir_prefix.rstrip('/')}/{slug(chosen)}"
     credential = f"{workdir}/push-credential" if token else None
+    workspace = workspace_for(container, projects_dir, owner=owner)
 
-    print(f"driver-author: vendor {vendor!r}, branch {branch}, workspace {workdir}", file=sys.stderr)
+    say(f"vendor {vendor!r}, branch {chosen}, workspace {workdir}")
 
     author_ref = ""
     failure: Refused | None = None
     try:
         if credential:
-            stale = sweep_credentials(args.container, args.workdir_prefix, older_than=args.timeout)
+            stale = workspace.sweep(workdir_prefix, older_than=timeout)
             if stale:
-                print(
-                    f"driver-author: cleared {stale} credential(s) left by a killed run",
-                    file=sys.stderr,
-                )
-            write_credential(args.container, credential, token)
+                say(f"cleared {stale} credential(s) left by a killed run")
+            workspace.write(credential, token)
         else:
-            print(
-                "driver-author: no GITHUB_TOKEN; the agent is expected to push with "
-                "credentials it already has",
-                file=sys.stderr,
-            )
+            # An agent that carries its own git credentials needs no file from
+            # us. Rare, and it still has to survive `verify` against the forge.
+            say("no GITHUB_TOKEN; the agent is expected to push with credentials it already has")
         prompt = prompt_for(
             ticket,
-            repo=args.repo,
-            branch=branch,
-            base=args.base,
+            repo=repo,
+            branch=chosen,
+            base=base,
             workdir=workdir,
             credential=credential,
         )
         try:
-            output = run_agent(args.agent_cmd, prompt, timeout=args.timeout)
+            if agent_cmd:
+                author_ref = author_ref_of(run_agent(agent_cmd, prompt, timeout=timeout))
+            else:
+                answer = openhands_agent.converse(
+                    prompt,
+                    url=url,
+                    workdir=workdir,
+                    budget=budget,
+                    iterations=iterations,
+                    tags={"vendor": slug(vendor), "branch": slug(chosen)},
+                    timeout=timeout,
+                    say=say,
+                )
+                author_ref = str(answer["conversation"])
         except Misconfigured:
             raise
         except Refused as exc:
@@ -347,35 +504,36 @@ def main(argv: list[str] | None = None) -> int:
             # timeout during its closing summary -- and the work is still real.
             # So the failure is held, not raised, and the forge decides.
             failure = exc
-            output = exc.output
-        author_ref = author_ref_of(output)
+            author_ref = author_ref or author_ref_of(exc.output)
+        except openhands_agent.AgentConfig as exc:
+            raise Misconfigured(str(exc)) from None
+        except openhands_agent.AgentError as exc:
+            failure = Refused(str(exc))
+            author_ref = author_ref or exc.conversation
         try:
-            answer = verify(args.repo, branch, args.base, token=token)
+            answer = verify(repo, chosen, base, token=token)
         except Refused:
+            # `Misconfigured` is a `Refused`: a missing token is not more
+            # interesting than the agent's own reason for stopping.
             if failure is not None:
                 raise failure from None
             raise
         if failure is not None:
-            print(
-                f"driver-author: the agent reported failure ({failure}), but the forge has "
-                f"{answer['commit_sha']} on {branch}; trusting the forge",
-                file=sys.stderr,
+            say(
+                f"the agent reported failure ({failure}), but the forge has "
+                f"{answer['commit_sha']} on {chosen}; trusting the forge"
             )
-    except Misconfigured as exc:
-        print(f"driver-author: MISCONFIGURED: {exc}", file=sys.stderr)
-        return 2
-    except Refused as exc:
-        print(f"driver-author: REFUSED: {exc}", file=sys.stderr)
-        return 1
+    except (Misconfigured, Refused):
+        raise
     finally:
         if credential:
-            remove_credential(args.container, credential)
+            workspace.remove(credential)
 
     try:
         pull = github_api.ensure_pull_request(
-            args.repo,
-            head=branch,
-            base=args.base,
+            repo,
+            head=chosen,
+            base=base,
             title=f"driver: {vendor}",
             body=(
                 f"Authored by the driver loop for the vendor {vendor}.\n\n"
@@ -389,18 +547,71 @@ def main(argv: list[str] | None = None) -> int:
     except github_api.GithubError as exc:
         # The commit exists and is what the loop gates; a missing PR only stops
         # the *merge*, so this is a refusal with the reason rather than a crash.
-        print(f"driver-author: REFUSED: could not open a pull request: {exc}", file=sys.stderr)
-        return 1
-    print(
-        f"driver-author: {answer['commit_sha']} on {branch} "
-        f"(PR #{pull.get('number')}{'' if pull.get('created') else ', already open'})",
-        file=sys.stderr,
+        raise Refused(f"could not open a pull request: {exc}") from None
+    say(
+        f"{answer['commit_sha']} on {chosen} "
+        f"(PR #{pull.get('number')}{'' if pull.get('created') else ', already open'})"
     )
 
-    line: dict[str, Any] = {"branch": branch, "commit_sha": answer["commit_sha"]}
+    line: dict[str, Any] = {"branch": chosen, "commit_sha": answer["commit_sha"]}
     if author_ref:
         line["author_ref"] = author_ref
-    print(json.dumps(line))
+    return line
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Author one driver from one ticket.")
+    parser.add_argument("--repo", default=(os.environ.get("DRIVERS_REPO") or DEFAULT_REPO))
+    parser.add_argument("--base", default=(os.environ.get("BASE_BRANCH") or DEFAULT_BASE))
+    parser.add_argument(
+        "--agent-cmd",
+        default=(os.environ.get("AUTHOR_AGENT_CMD") or "").strip(),
+        help="run this command instead of talking to the agent server",
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=float(os.environ.get("AUTHOR_TIMEOUT") or DEFAULT_TIMEOUT)
+    )
+    parser.add_argument("--branch", default="", help="defaults to driver-loop/<vendor>-<stamp>")
+    parser.add_argument(
+        "--workdir-prefix",
+        default=(os.environ.get("OPENHANDS_WORKDIR") or DEFAULT_WORKDIR).strip(),
+    )
+    parser.add_argument(
+        "--container", default=(os.environ.get("OPENHANDS_CONTAINER") or DEFAULT_CONTAINER).strip()
+    )
+    parser.add_argument(
+        "--projects-dir",
+        default=(os.environ.get("OPENHANDS_PROJECTS_DIR") or DEFAULT_PROJECTS_DIR).strip(),
+        help="the agent's /projects as this process sees it; empty means docker exec",
+    )
+    args = parser.parse_args(argv)
+
+    ticket = sys.stdin.read()
+    if not ticket.strip():
+        print("driver-author: REFUSED: no ticket on stdin", file=sys.stderr)
+        return 1
+
+    try:
+        answer = author(
+            ticket,
+            repo=args.repo,
+            base=args.base,
+            token=(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip(),
+            timeout=args.timeout,
+            workdir_prefix=args.workdir_prefix,
+            container=args.container,
+            projects_dir=args.projects_dir,
+            agent_cmd=args.agent_cmd,
+            branch=args.branch,
+        )
+    except Misconfigured as exc:
+        print(f"driver-author: MISCONFIGURED: {exc}", file=sys.stderr)
+        return 2
+    except Refused as exc:
+        print(f"driver-author: REFUSED: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(answer))
     return 0
 
 

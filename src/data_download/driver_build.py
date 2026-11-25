@@ -12,12 +12,11 @@ The states are the phase order's, and each transition is a step that can refuse:
 
 Five properties worth stating, because each is a thing this is *not*:
 
-1. **It does not write the driver.** `author` is a callable and the default one
-   is an external command (`--author-cmd`): the ticket arrives on stdin as plain
-   text, the answer on stdout as `{"branch": ..., "commit_sha": ...}`. That is
-   the harness seam, and keeping it a process contract means the loop does not
-   acquire an opinion about which agent authored the code -- goose, an OpenHands
-   conversation, or a person are all one variable.
+1. **It does not write the driver.** `author` is a callable, and the default one
+   hands the ticket to an agent -- an OpenHands conversation in this deployment,
+   a command on stdin if `--author-cmd` names one. Either way what comes back is
+   a branch name and the sha the *forge* reports for it, so the pipeline never
+   acquires an opinion about which agent wrote the code.
 2. **It does not trust its own gate.** `gate` asks GitHub for the commit's check
    runs and refuses on anything not green. The probe after it is the part CI
    cannot give: a real vendor call.
@@ -27,21 +26,25 @@ Five properties worth stating, because each is a thing this is *not*:
 4. **It does not merge what it was not allowed to merge.** Every changed path
    must be under `drivers/` or `tests/fixtures/`; one file outside and the job
    stops for a human. That is checked before the merge, from GitHub's own list.
-5. **Installing is atomic.** Bytes are written to a temporary directory *inside*
-   the drivers volume and renamed into `drivers/<name>/<version>/`, so a
-   half-written artefact is never visible to the runtime's discovery.
+5. **It does not write the drivers volume.** That volume belongs to the
+   container that runs the code, and this app mounts it read-only. Installation
+   is a POST of the merged tree to the runtime (`install_over_runtime`), which
+   writes it atomically and refuses a version it did not install. The app keeps
+   the digest the runtime answered with, which is what lets a retry replace its
+   own previous attempt and nothing else.
 
-One deviation from the phase order, recorded rather than hidden: the probe runs
-**after** the install, because the runtime can only drive an artefact it can
-discover. The alternative -- a staging directory the runtime also lists -- was
-more machinery than the risk warrants: the window is one probe, the artefact is
-already behind a green CI gate, and a failing probe removes the directory.
+This is worked by `DriverWorker` on the app's event loop (the same shape as
+`worker.Worker`), or one job at a time from the command line with `--once`.
+The probe therefore runs after the install -- the runtime can only drive an
+artefact it can discover -- which costs nothing now that discovery re-globs on
+every request instead of being fixed at startup.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import hashlib
 import io
 import json
@@ -58,7 +61,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import driver_client, github_api, interpreter
+from . import driver_author, driver_client, github_api, interpreter, runtime_http
 from .config import find_plan_types_dir, load_settings
 from .db import Store
 from .registry import Registry, load_registry
@@ -119,23 +122,33 @@ def artifact_digest(directory: Path) -> str:
     return digest.hexdigest()
 
 
-def install_tree(
-    source: Path, drivers_dir: Path, *, replace_sha256: str | None = None
+def install_over_runtime(
+    source: Path,
+    *,
+    url: str | None,
+    token: str | None,
+    replace_sha256: str | None = None,
+    timeout: float = 120.0,
 ) -> dict[str, Any]:
     """`source` (a directory holding `manifest.json`) into the drivers volume.
 
-    Atomic by rename: the copy lands in a temporary directory *inside*
-    `drivers_dir` (same filesystem, so the rename cannot fall back to a copy)
-    and is renamed into `drivers/<name>/<version>/`. A version that already
-    exists is refused rather than overwritten -- a reinstall is a human's act,
-    and silently replacing one is how two artefacts claim one vendor.
+    The volume belongs to the **runtime**, not to this process: the container
+    that runs model-authored code is the container that owns the directory it
+    runs from, and this app's mount is read-only. So the tree crosses the
+    boundary as data -- `path -> base64` in one POST -- and the runtime does the
+    writing (`data-download-drivers`' `install.py`), including the atomic rename
+    and the refusal to overwrite an install it did not make.
 
-    The one exception is the loop replacing **its own** install: a probe that
-    came back `shortfall` sends the job round again, and the second turn's
-    artefact is the same name and version. `replace_sha256` is the digest this
-    job installed last time, so the loop may replace exactly what it put there
-    and nothing else -- a directory a human installed has a digest this job has
-    never recorded, and stays refused.
+    `replace_sha256` is the digest of the install this job put there last time.
+    A probe that came back `shortfall` sends the job round again and the second
+    turn's artefact is the same name and version; passing the digest the runtime
+    gave us then is how the loop may replace exactly its own work and nothing
+    else. A directory a person installed has a digest this job has never
+    recorded, and stays refused.
+
+    The digest the runtime answers with is checked against the tree that was
+    sent, so "installed" means the merged bytes, not the bytes some layer of
+    JSON encoding produced.
     """
     manifest_path = source / "manifest.json"
     if not manifest_path.is_file():
@@ -149,30 +162,59 @@ def install_tree(
     vendor = str(manifest.get("vendor") or "").strip()
     if not name or not version:
         raise LoopRefused("the manifest must name a driver and a version")
-    target = drivers_dir / name / version
-    if target.exists():
-        mine = bool(replace_sha256) and artifact_digest(target) == replace_sha256
-        if not mine:
-            raise LoopRefused(f"{target} already exists; refuse to overwrite an install")
-        log.info("replacing the loop's own install at %s", target)
-        shutil.rmtree(target)
-    drivers_dir.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".install-", dir=drivers_dir))
+
+    files = {
+        path.relative_to(source).as_posix(): base64.b64encode(path.read_bytes()).decode()
+        for path in sorted(p for p in source.rglob("*") if p.is_file())
+    }
+    if not files:
+        raise LoopRefused(f"{source} is empty")
+
+    host, port = driver_client._endpoint(url)
     try:
-        shutil.copytree(source, staging / "artifact")
-        (staging / "artifact" / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        status, answer = runtime_http.request(
+            host,
+            port,
+            "POST",
+            "/v1/drivers/install",
+            token=token or "",
+            body={
+                "name": name,
+                "version": version,
+                "vendor": vendor,
+                "files": files,
+                "replace_sha256": replace_sha256 or None,
+            },
+            timeout=timeout,
         )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(staging / "artifact", target)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
+    except runtime_http.RuntimeUnreachable as exc:
+        raise LoopRefused(f"the driver runtime could not be reached: {exc}") from None
+
+    if not 200 <= status < 300:
+        error = answer.get("error") if isinstance(answer, dict) else {}
+        code = (error or {}).get("code") or "unknown"
+        detail = (error or {}).get("detail") or ""
+        raise LoopRefused(
+            f"the runtime refused the install: {status} {code}"
+            + (f" ({detail})" if detail else "")
+        )
+
+    installed = str(answer.get("sha256") or "")
+    sent = artifact_digest(source)
+    if installed != sent:
+        # Not fatal to the runtime, fatal to trust: the artefact on disk is not
+        # the artefact that passed CI, and every later "replace my own install"
+        # would be judged against a digest this job never recorded.
+        raise LoopRefused(
+            f"the runtime installed digest {installed or '(none)'} but the tree "
+            f"sent has {sent}; refusing to record an install it cannot own"
+        )
     return {
         "driver": name,
         "version": version,
         "vendor": vendor,
-        "artifact_sha256": artifact_digest(target),
-        "path": str(target),
+        "artifact_sha256": installed,
+        "path": str(answer.get("path") or ""),
     }
 
 
@@ -363,9 +405,54 @@ def _author_command(cmd: str, *, cwd: Path | None = None) -> Callable[[dict[str,
     return author
 
 
-def default_steps(*, author_cmd: str, repo: str, drivers_dir: Path, settings: Any,
-                  registry: Registry, token: str, workdir: Path) -> Steps:
-    """The real loop, wired to GitHub and the running driver runtime."""
+def default_steps(
+    *,
+    repo: str,
+    settings: Any,
+    registry: Registry,
+    token: str,
+    workdir: Path,
+    base: str = "main",
+    author_cmd: str = "",
+    author_timeout: float = 3600.0,
+    author_budget: float = 2.0,
+    author_iterations: int = 200,
+) -> Steps:
+    """The real pipeline, wired to GitHub, the agent server and the runtime.
+
+    Every blocking call here is made from a worker thread (see `_step`), because
+    the queue is worked on the app's own event loop: an authoring conversation
+    can run for tens of minutes, and the web server must keep answering while it
+    does.
+    """
+
+    def author(row: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return driver_author.author(
+                _ticket(row),
+                repo=repo,
+                base=base,
+                token=token,
+                timeout=author_timeout,
+                workdir_prefix=str(
+                    settings.openhands_workdir or driver_author.DEFAULT_WORKDIR
+                ),
+                container=driver_author.DEFAULT_CONTAINER,
+                projects_dir=str(settings.openhands_projects_dir or ""),
+                owner=(settings.openhands_agent_uid, settings.openhands_agent_gid),
+                agent_cmd=author_cmd,
+                url=str(settings.openhands_url or ""),
+                budget=author_budget,
+                iterations=author_iterations,
+                say=lambda line: log.info("driver job %s: %s", row.get("id"), line),
+            )
+        except driver_author.Misconfigured as exc:
+            # Nothing to retry: the deployment is missing something. It still
+            # stops the job (there is no state for "the loop is broken"), but it
+            # reads as what it is rather than as a refused driver.
+            raise LoopRefused(f"misconfigured: {exc}") from None
+        except driver_author.Refused as exc:
+            raise LoopRefused(str(exc)) from None
 
     def gate(row: dict[str, Any]) -> dict[str, Any]:
         return github_api.gate(repo, str(row["commit_sha"]), token=token)
@@ -407,18 +494,52 @@ def default_steps(*, author_cmd: str, repo: str, drivers_dir: Path, settings: An
                 raise LoopRefused(
                     f"the merged tree has no driver declaring vendor {row['vendor']!r}"
                 )
-            return install_tree(
-                source, drivers_dir, replace_sha256=row.get("artifact_sha256")
+            return install_over_runtime(
+                source,
+                url=settings.driver_runtime_url,
+                token=settings.driver_runtime_token,
+                replace_sha256=row.get("artifact_sha256"),
             )
 
     return Steps(
-        author=_author_command(author_cmd),
+        author=author,
         gate=gate,
         changed=changed,
         probe=probe,
         merge=merge,
         install=install,
     )
+
+
+def steps_from_settings(
+    settings: Any, *, registry: Registry, workdir: Path | None = None
+) -> Steps:
+    """The pipeline for a deployment that has everything the settings name."""
+    if not settings.driver_ready:
+        raise LoopRefused("DRIVER_RUNTIME_TOKEN is unset, so nothing can be installed or probed")
+    if not settings.github_token:
+        raise LoopRefused("DATA_DOWNLOAD_GITHUB_TOKEN is unset, so the forge cannot be asked anything")
+    if not settings.openhands_url:
+        raise LoopRefused("DATA_DOWNLOAD_OPENHANDS_URL is unset, so no driver can be authored")
+    return default_steps(
+        repo=settings.driver_repo,
+        base=settings.driver_base,
+        settings=settings,
+        registry=registry,
+        token=settings.github_token,
+        workdir=workdir or Path(tempfile.gettempdir()),
+        author_timeout=settings.author_timeout,
+        author_budget=settings.author_budget,
+        author_iterations=settings.author_iterations,
+    )
+
+
+async def _step(step: Callable[[dict[str, Any]], Any], row: dict[str, Any]) -> Any:
+    """Run a step off the event loop. Every step here is network-bound blocking
+    code -- a vendor call, a forge call, a conversation that runs for minutes --
+    so awaiting it on the loop would stop the app serving pages for the
+    duration."""
+    return await asyncio.to_thread(step, row)
 
 
 async def run_once(
@@ -455,7 +576,7 @@ async def run_once(
         ) or row
     try:
         if not row.get("branch"):
-            authored = steps.author(row)
+            authored = await _step(steps.author, row)
             row = await store.driver_job_update(
                 row["id"],
                 branch=str(authored["branch"]),
@@ -465,7 +586,7 @@ async def run_once(
                 author_ref=str(authored.get("author_ref") or "") or None,
                 now=now,
             ) or row
-        gate = steps.gate(row)
+        gate = await _step(steps.gate, row)
         if not gate.get("ok"):
             if gate.get("pending"):
                 # Not yet. Leave it in `gated` and let the next pass look again.
@@ -477,7 +598,7 @@ async def run_once(
         row = await store.driver_job_update(row["id"], state="gated", now=now) or row
         outside = [
             path
-            for path in steps.changed(row)
+            for path in await _step(steps.changed, row)
             if not any(path.startswith(prefix) for prefix in ALLOWED_PREFIXES)
         ]
         if outside:
@@ -486,21 +607,21 @@ async def run_once(
             )
         # Installed before the probe: the runtime can only drive an artefact it
         # can discover (see this module's docstring).
-        installed = steps.install(row)
+        installed = await _step(steps.install, row)
         row = await store.driver_job_update(
             row["id"],
             artifact_sha256=str(installed.get("artifact_sha256") or ""),
             now=now,
         ) or row
         row = await store.driver_job_update(row["id"], state="probing", now=now) or row
-        verdict = steps.probe(row)
+        verdict = await _step(steps.probe, row)
         name = str(verdict.get("verdict") or "")
         await store.driver_job_update(
             row["id"], verdict_json=json.dumps(verdict), now=now
         )
         if name == "pass":
             row = await store.driver_job_update(row["id"], state="merging", now=now) or row
-            steps.merge(row)
+            await _step(steps.merge, row)
         elif name == "shortfall" and attempts < MAX_ATTEMPTS:
             # The driver is wrong in a way another turn can fix. Forget the
             # branch so the next attempt starts from a fresh one -- but keep
@@ -532,48 +653,169 @@ async def run_once(
         return row
 
 
+#: A job in one of these states has handed the work to something outside this
+#: process -- CI, or the next attempt -- so the loop waits rather than spins.
+WAITING_STATES = frozenset({"queued", "gated"})
+
+
+class DriverWorker:
+    """The driver queue, worked from the app's own event loop.
+
+    Same shape as `worker.Worker`, and for the same reasons: the queue is a
+    query on the store this process already has open, a pass is one job, and the
+    loop does not sleep while there is work. What a pass *does* is different --
+    author a conversation, wait on CI, probe a vendor, install a tree -- so
+    every step runs in a worker thread (`_step`) and nothing here blocks the
+    loop the web server is using.
+
+    It is nudged by an approval that finds no driver, so the first authoring
+    turn starts in milliseconds rather than on the next beat; the interval is
+    the idle poll that catches a job queued by something that could not nudge.
+    """
+
+    def __init__(
+        self,
+        store: Store,
+        steps: Steps,
+        *,
+        interval: float = 60.0,
+        grace: float = 1.0,
+    ) -> None:
+        self.store = store
+        self.steps = steps
+        self.interval = interval
+        #: How long a stopping pass is given to end on its own (see `stop`).
+        self._grace = grace
+        self._nudge = asyncio.Event()
+        self._stopping = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+
+    def wake(self) -> None:
+        """Somebody queued a job (or thinks they did). Never raises."""
+        self._nudge.set()
+
+    async def once(self) -> dict[str, Any] | None:
+        """One job, as far as it goes. Exceptions are the loop's, not a pass's."""
+        try:
+            return await run_once(self.store, self.steps)
+        except Exception:  # noqa: BLE001 - the loop outlives a bad job
+            log.exception("driver worker: pass failed")
+            return None
+
+    async def run_forever(self) -> None:
+        log.info("driver worker: watching for queued driver jobs (idle interval %ss)", self.interval)
+        while not self._stopping.is_set():
+            row = await self.once()
+            if row is not None and row.get("state") not in WAITING_STATES:
+                # Finished with this one: the next job may already be queued.
+                continue
+            self._nudge.clear()
+            try:
+                await asyncio.wait_for(self._nudge.wait(), timeout=self.interval)
+            except TimeoutError:
+                pass
+        log.info("driver worker: stopped")
+
+    def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        self._stopping.clear()
+        self._task = asyncio.create_task(self.run_forever(), name="data-download-driver-jobs")
+
+    async def stop(self) -> None:
+        """Finish the pass if it is about to, and cancel it only if it is not.
+
+        The job it was holding is `building` with no lease of its own, so the
+        next pass picks it up from the same row -- the branch it already pushed
+        is on the forge, and the gate is re-asked rather than re-authored.
+
+        The grace period before cancelling is not politeness. A pass spends most
+        of its life inside `asyncio.to_thread` (a conversation, a probe), which
+        a cancellation abandons harmlessly; but it also touches the store, whose
+        aiosqlite thread reports each answer to the awaiting future's loop. Cut
+        that await off mid-query and the thread reports to a future nobody wants
+        -- and if the loop closes first, the report raises inside the thread and
+        kills it, after which no query or close in that process ever finishes.
+        In practice a pass that is not inside a conversation ends in
+        microseconds, so the grace period means the cancel almost never fires.
+        """
+        self._stopping.set()
+        self._nudge.set()
+        task, self._task = self._task, None
+        if task is None:
+            return
+        done, _ = await asyncio.wait({task}, timeout=self._grace)
+        if done:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 - shutdown must not raise
+                log.exception("driver worker: the last pass failed")
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            log.exception("driver worker: failed on the way down")
+
+
 def main(argv: list[str] | None = None) -> int:
+    """One job from the command line, for a deployment without the worker.
+
+    `--once` takes one job and exits, which is what the old host loop called
+    every minute. It is kept because it is the readable way to run a job by hand
+    -- and because it is how the same state machine is exercised without an app.
+    """
     parser = argparse.ArgumentParser(prog="data_download.driver_build")
     parser.add_argument("--db", default=None)
     parser.add_argument("--once", action="store_true", help="take one job and exit")
     parser.add_argument("--job", default=None, help="a specific driver job id")
-    parser.add_argument("--author-cmd", default=os.environ.get("DRIVER_LOOP_AUTHOR_CMD", ""))
-    parser.add_argument("--repo", default=os.environ.get("DRIVER_LOOP_REPO", "nickbrett1/data-download-drivers"))
-    parser.add_argument("--drivers-dir", default=os.environ.get("DATA_DOWNLOAD_DRIVERS_DIR", "/drivers"))
+    parser.add_argument("--author-cmd", default=os.environ.get("AUTHOR_AGENT_CMD", ""))
+    parser.add_argument("--repo", default=os.environ.get("DATA_DOWNLOAD_DRIVER_REPO", ""))
+    parser.add_argument("--base", default=os.environ.get("DATA_DOWNLOAD_DRIVER_BASE", "main"))
+    parser.add_argument("--workdir", default=os.environ.get("DATA_DOWNLOAD_WORK_DIR", ""))
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    if not args.author_cmd:
+
+    settings = load_settings()
+    token = (os.environ.get("DRIVER_LOOP_GITHUB_TOKEN") or settings.github_token or "").strip()
+    if not token:
         print(
-            "no authoring harness: set DRIVER_LOOP_AUTHOR_CMD (a command that takes a "
-            "ticket on stdin and answers {\"branch\": ..., \"commit_sha\": ...})",
+            "no GitHub token: set DATA_DOWNLOAD_GITHUB_TOKEN (or GITHUB_TOKEN)",
             file=sys.stderr,
         )
         return 2
-    token = os.environ.get("DRIVER_LOOP_GITHUB_TOKEN") or ""
-    if not token:
-        print("no GitHub token: set DRIVER_LOOP_GITHUB_TOKEN", file=sys.stderr)
-        return 2
-    settings = load_settings()
     registry = load_registry(settings.plan_types_dir or find_plan_types_dir())
+    repo = args.repo or settings.driver_repo
+    workdir = Path(args.workdir) if args.workdir else Path(tempfile.gettempdir())
 
     async def go() -> int:
         store = Store(args.db or settings.db_path)
         await store.connect()
         try:
             steps = default_steps(
-                author_cmd=args.author_cmd,
-                repo=args.repo,
-                drivers_dir=Path(args.drivers_dir),
+                repo=repo,
+                base=args.base,
                 settings=settings,
                 registry=registry,
                 token=token,
-                workdir=Path(args.drivers_dir).parent,
+                workdir=workdir,
+                author_cmd=args.author_cmd,
+                author_timeout=settings.author_timeout,
+                author_budget=settings.author_budget,
+                author_iterations=settings.author_iterations,
             )
             done = await run_once(store, steps, job_id=args.job)
             if done is None:
                 print("nothing to do: no queued driver job")
                 return 0
-            print(f"{done['id']}: {done['state']}" + (f" -- {done['last_error']}" if done.get("last_error") else ""))
+            print(
+                f"{done['id']}: {done['state']}"
+                + (f" -- {done['last_error']}" if done.get("last_error") else "")
+            )
             return 0 if done["state"] == "installed" else 1
         finally:
             await store.close()

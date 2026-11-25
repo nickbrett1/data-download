@@ -332,86 +332,156 @@ generated Dockerfile, compose file and Homepage widget stay consistent:
 Regenerate with `overwrite: true` to apply these to an existing repo — existing
 app code is preserved; only generated infra files are updated.
 
-## 10. The driver loop (a missing driver gets built)
+## 10. The driver queue (a missing driver gets built)
 
 Phase 5.5. When an approved request's vendor has no installed driver, the runner
 does **not** fail the request: it leaves the row `approved`, notes
 `driver_state`, and enqueues one `driver_jobs` row for that vendor (the partial
 unique index means ten requests for one missing driver are one job). The driver
-loop works that queue:
+worker works that queue:
 
 ```
 queued -> building -> gated -> probing -> merging -> installing -> installed
               \-> needs_human        (a stop, never a retry loop)
 ```
 
-`driver_build` is **run-to-exit** — one job, walk it as far as it can, return.
-Nothing idles, so `scripts/driver-loop.sh` is the supervisor:
+### Three containers, and who owns what
+
+| container | owns |
+|---|---|
+| `data-download` (the control plane) | the store, **both** queues, the pages, the demand signal, the forge: gate, changed paths, merge, PR |
+| `data-download-drivers` | executes driver code, **owns and writes `/drivers`**, downloads data |
+| `openhands` | authors a driver in a conversation, on a branch, and pushes it |
+
+The rule behind that table is one sentence: **the process that runs the code
+owns the directory it runs from.** So the app's `/drivers` mount is read-only,
+and installation is a POST of the merged tree to the runtime
+(`POST /v1/drivers/install`, bearer token), which writes it atomically and picks
+it up on the next request because discovery re-globs on every request. The app
+never needs the volume writable, and the runtime never needs GitHub egress or a
+forge token.
+
+That also removed the host loop, which existed for two reasons that are both
+gone or inverted:
+
+- *The app image has no `git`/`gh`.* It does not need them: the agent does the
+  git, and the app asks the forge over HTTPS with `github_api`.
+- *The installer needed the drivers volume writable.* It no longer writes there.
+
+`driver_build` is still one job, walked as far as it can go, and still exits
+`--once` from the command line for a manual run. What changed is the thing that
+calls it: `driver_build.DriverWorker`, an asyncio task started by the app's
+lifespan next to the request `Worker`, with the same properties -- it never
+sleeps while there is work, it is nudged by an approval, and every step runs in
+a worker thread so an authoring conversation that lasts tens of minutes does not
+block the pages.
+
+### What the app needs
+
+All of this is on the **app** service. Environment, in `/srv/docker/data-download/.env`:
 
 ```
-while :; do python -m data_download.driver_build --once; sleep 60; done
-```
-
-### It runs on the host, not in the app container
-
-This is deliberate and it is a constraint, not a preference. Two facts decide it:
-
-- **The app image has no `git`, `gh` or `curl`.** The loop's authoring harness is
-  a process contract (a ticket on stdin, one JSON line on stdout) whose default
-  implementation asks an agent to work on a branch of the drivers repo and hands
-  back the sha GitHub reports for it. None of that can happen in the app image.
-- **The drivers volume is mounted read-only into the runtime.** The installer
-  needs the same host directory read-write, so the loop must be the one holding
-  the writable mount.
-
-On `ryzen` the host already has `goose`, `gh` and `git`, and — since phase 5.6 —
-a Docker socket and the OpenHands agent server on `127.0.0.1:3088`, which is
-what the default harness needs. `deploy/driver-loop.service` execs the
-**supervisor**
-(`scripts/driver-loop.sh`) rather than `driver_build --once`: a unit that ran the
-one-shot would look up once and never poll, and `Restart=on-failure` would never
-fire on a clean exit. Everything else is configuration, in
-`/srv/appdata/data-download-drivers/loop.env` (mode 0600, never committed):
-
-```
-DATA_DOWNLOAD_DB=/srv/appdata/data-download/data-download.db
-DATA_DOWNLOAD_DATASETS_DIR=/srv/datasets
-DATA_DOWNLOAD_PLAN_TYPES_DIR=/srv/appdata/data-download-drivers/loop/plan_types
-DATA_DOWNLOAD_DRIVER_RUNTIME_URL=http://127.0.0.1:8831
-DRIVER_RUNTIME_TOKEN=<the token in the drivers compose .env>
-DATA_DOWNLOAD_DRIVERS_DIR=/srv/appdata/data-download-drivers/drivers
-# The datasets root AS THE RUNTIME SEES IT (only the runtime writes there, and
-# it validates every path against its own mount). Default /datasets.
-DATA_DOWNLOAD_DRIVER_DATASETS_ROOT=/datasets
-DRIVER_LOOP_REPO=nickbrett1/data-download-drivers
-DRIVER_LOOP_GITHUB_TOKEN=<a token that can push a branch and open a PR>
-DRIVER_LOOP_AUTHOR_CMD=/srv/appdata/data-download-drivers/loop/driver-author.sh
-GITHUB_TOKEN=<same token, read by the harness>
-DRIVER_LOOP_INTERVAL=60
-# ryzen's `python3 -m venv` lacks ensurepip; `uv venv --seed` builds an
-# equivalent venv. Either way the supervisor must run the venv's interpreter:
-# a bare `python3` is the host's, with no package installed.
-PYTHON=/srv/appdata/data-download-drivers/loop-venv/bin/python
-# Quoted because `set -a; . ./loop.env` would otherwise read `goose run ...` as a
-# command with an environment prefix. systemd's EnvironmentFile accepts the
-# same form. `goose run -t` is v1.53's one-shot text flag.
-AUTHOR_AGENT_CMD="goose run --no-session -t"
-# Phase 5.6: the authoring agent is an OpenHands conversation on this host. The
-# default (`python -m data_download.openhands_agent`) needs only these two: the
-# server, and where an agent's workspace lives. The session key is read per job
-# with `docker exec` (uid 10001 owns it), never stored here -- a recreated
-# container generates a new one.
-OPENHANDS_URL=http://127.0.0.1:3088
-OPENHANDS_CONTAINER=openhands
-OPENHANDS_WORKDIR=/projects/driver-loop
-OPENHANDS_MAX_BUDGET=2.00
-OPENHANDS_MAX_ITERATIONS=200
-# So the app can turn a driver's `author_ref` into a link to its transcript.
+DATA_DOWNLOAD_GITHUB_TOKEN=<a token that can read checks and merge on the drivers repo>
+DATA_DOWNLOAD_DRIVER_REPO=nickbrett1/data-download-drivers
+DATA_DOWNLOAD_DRIVER_BASE=main
+DATA_DOWNLOAD_DRIVER_JOBS=on
+DATA_DOWNLOAD_DRIVER_JOBS_INTERVAL=60
 DATA_DOWNLOAD_OPENHANDS_URL=http://ryzen:3088
+DATA_DOWNLOAD_OPENHANDS_WORKDIR=/projects/driver-loop
+DATA_DOWNLOAD_AUTHOR_TIMEOUT=3600
+DATA_DOWNLOAD_AUTHOR_BUDGET=2.00
+DATA_DOWNLOAD_AUTHOR_ITERATIONS=200
 ```
 
-Three things about the authoring conversation worth knowing before you read
-a log in anger:
+Plus two mounts, because the app container has **no docker CLI and no docker
+socket** -- and should not have one:
+
+```yaml
+    volumes:
+      - /srv/docker/openhands/projects:/projects
+      - /srv/docker/openhands/data/agent-canvas/api-key.txt:/run/openhands/api-key.txt:ro
+    environment:
+      DATA_DOWNLOAD_OPENHANDS_PROJECTS_DIR: /projects
+      DATA_DOWNLOAD_OPENHANDS_KEY_FILE: /run/openhands/api-key.txt
+```
+
+- **The key file** is what the agent server generated on first boot. Mounting it
+  is how the control plane authenticates without `docker exec`; a recreated
+  container has a new key, and a mounted file follows it.
+- **`/projects`** is the agent's workspace, mounted here **at the same path the
+  agent sees it**. That is the whole credential handoff: the harness writes
+  `0600` `push-credential` into the branch's workspace directory before the
+  conversation starts and removes it afterwards (plus a stale sweep at the start
+  of every run, because `finally` does not run on SIGKILL). Same path on both
+  sides means the prompt's path is *the* path -- nothing is translated, and a
+  mount at a different path is refused by name.
+
+- **The uid matters, and it is the failure that looks like nothing.** This image
+  declares no `USER`, so it runs as root and writes the credential root-owned.
+  The agent runs as `uid 10001` in its own container: a `0600` root-owned file,
+  inside a `0700` root-owned directory, is a credential it cannot open and a
+  path it cannot even enter -- with no error anywhere, just an agent that
+  silently pushes nothing. So the workspace hands the file *and* the directories
+  leading to it to `DATA_DOWNLOAD_OPENHANDS_AGENT_UID:GID` (default
+  `10001:10001`) whenever this process is root. A host run is already the same
+  user and does nothing.
+
+On the OpenHands side, `/projects` must therefore be a **bind mount**, not the
+anonymous volume it is today:
+
+```yaml
+    volumes:
+      - /srv/docker/openhands/projects:/projects
+```
+
+Careful: `/projects` is not declared in the OpenHands compose at all -- it comes
+from the image's `VOLUME /projects` instruction, so Docker minted an
+**anonymous** volume (`docker inspect openhands` shows `"anonymous": ""`, no
+`com.docker.compose.volume` label) and has been re-attaching that same one
+across container recreations. Adding a bind changes the mount, and the volume's
+contents do not follow it. Convert in this order:
+
+```sh
+sudo mkdir -p /srv/docker/openhands/projects
+sudo chown 10001:10001 /srv/docker/openhands/projects
+docker run --rm -v 2019ba8c…:/from -v /srv/docker/openhands/projects:/to \
+  alpine sh -c 'cp -a /from/. /to/ && ls -A /to | wc -l'
+# then add the bind to the compose file and `docker compose up -d`
+```
+
+The app cannot see an anonymous volume, so leaving it as one means no authoring.
+
+### What the loop will not do
+
+- **It does not merge what it was not allowed to merge.** Every changed path in
+  the pushed commit must be under `drivers/` or `tests/fixtures/`, read from
+  GitHub's own diff. One file outside and the job stops for a human.
+- **It does not trust its own gate.** Green means every check run is complete and
+  in `success`/`neutral`/`skipped`; no check runs at all is *not* green.
+- **It does not overwrite an installed version it did not make.** The runtime
+  refuses a version that already exists unless the request carries the digest it
+  installed last time; a directory a person installed has a digest this job has
+  never recorded and stays refused.
+- **It does not probe for free.** The probe is the triggering request's own Job,
+  shrunk to one symbol and one day, priced *before* `submit` and refused if it
+  would exceed `PROBE_BUDGET_USD` ($1).
+
+### Watching it
+
+There is no unit and no log file: it is the app's own log.
+
+```
+docker logs -f data-download            # or journalctl -u data-download
+sqlite3 /srv/appdata/data-download/data-download.db \
+  "select id, vendor, state, attempts, last_error from driver_jobs order by created_at desc"
+```
+
+A row in `needs_human` is the loop saying it stopped; `last_error` names the step.
+Nothing retries it — clear or fix the cause and re-enqueue.
+
+The authoring conversation itself is worth reading in the canvas
+(`DATA_DOWNLOAD_OPENHANDS_URL`) by the `author_ref` on the driver page. Three
+things about it, all learned from real runs:
 
 - **A tool-schema blip is not a failed job.** `deepseek-v4-flash` occasionally
   adds a `risk` argument to a `terminal` call; the tool's model forbids unknown
@@ -427,57 +497,3 @@ a log in anger:
   Only `finished`, `error` and `stopped` end a wait.
 - **Attribution goes in `tags`, not `observability_metadata`.** The latter is
   accepted and silently dropped.
-
-Two host facts this unit assumes, both learned the hard way:
-
-- **The store must be writable by the loop's user.** `…/data-download.db` is
-  created by the app container, which runs as root, so on a fresh deployment it
-  is `root:root 0644` and a loop running as `nick` gets a read-only SQLite open
-  and fails on the schema apply (`attempt to write a readonly database`). Fix
-  once with `docker exec data-download chown 1000:1000 /data/data-download.db*`
-  (root in the container still writes) — and again if the DB is ever recreated.
-- **The supervisor needs the venv on `PATH`.** `scripts/driver-loop.sh` runs
-  `${PYTHON:-python3}`, which is why `PYTHON` is in the env file at all.
-- **Install the package with `-e`, or a deploy is not a deploy.** A plain
-  `pip install ./loop` copies the package into `site-packages`, so
-  `git reset --hard origin/main` updates the checkout while the loop keeps
-  running the old code — and the symptom is a loop that "ignores" a fix that is
-  plainly on disk. Install it editable once:
-
-  ```
-  /srv/appdata/data-download-drivers/loop-venv/bin/pip install -e /srv/appdata/data-download-drivers/loop
-  ```
-
-  after which updating is `git -C …/loop reset --hard origin/main` and a
-  restart.
-
-The unit is sandboxed to the two paths it legitimately writes
-(`ProtectSystem=strict` plus `ReadWritePaths` for the store and the drivers
-volume): an authored artefact can install into `drivers/` and nowhere else.
-
-### What the loop will not do
-
-- **It does not merge what it was not allowed to merge.** Every changed path in
-  the pushed commit must be under `drivers/` or `tests/fixtures/`, read from
-  GitHub's own diff. One file outside and the job stops for a human.
-- **It does not trust its own gate.** Green means every check run is complete and
-  in `success`/`neutral`/`skipped`; no check runs at all is *not* green.
-- **It does not overwrite an installed version.** `drivers/<name>/<version>/` is
-  installed by an atomic `rename` from a staging directory inside the same
-  volume, and an existing version is refused — replacing one silently is how two
-  artefacts end up claiming one vendor. A reinstall is a human's act: remove the
-  directory and let the queue notice.
-- **It does not probe for free.** The probe is the triggering request's own Job,
-  shrunk to one symbol and one day, priced *before* `submit` and refused if it
-  would exceed `PROBE_BUDGET_USD` ($1).
-
-### Watching it
-
-```
-journalctl -u driver-loop -f
-sqlite3 /srv/appdata/data-download/data-download.db \
-  "select id, vendor, state, attempts, last_error from driver_jobs order by created_at desc"
-```
-
-A row in `needs_human` is the loop saying it stopped; `last_error` names the step.
-Nothing retries it — clear or fix the cause and re-enqueue.

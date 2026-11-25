@@ -91,6 +91,44 @@ class Settings:
     # conversation id but cannot make it a link -- the id is still the thing that
     # finds the transcript, and inventing a URL from it would be a guess.
     openhands_url: str | None = None
+    #: The key file the agent server generated, as this process can see it
+    #: (a mount). `None` means `openhands_agent` falls back to `docker exec`,
+    #: which only a host-run deployment can do.
+    openhands_key_file: Path | None = None
+    #: The agent's `/projects`, mounted here at the same path it has in the
+    #: agent. This is how a push credential reaches the agent without a docker
+    #: socket: a file in a directory both processes can see.
+    openhands_projects_dir: Path | None = None
+    #: The workspace the agent is told to use, as the *agent* spells it. Only
+    #: the prompt and the credential's path depend on it, and both sides spell
+    #: it the same way (see `openhands_projects_dir`).
+    openhands_workdir: str | None = None
+    #: The uid:gid the agent runs as inside its own container (10001 for the
+    #: agent-canvas image). The app image declares no USER, so a credential it
+    #: writes is root-owned until it is handed over; a 0600 file the agent
+    #: cannot read is the quiet way authoring fails. Ignored unless this
+    #: process is root, and irrelevant to a host run.
+    openhands_agent_uid: int = 10001
+    openhands_agent_gid: int = 10001
+    # Phase 7: whether this process works the *driver* queue as well as the
+    # request queue. On by default, for the same reason `runner` is: a job
+    # queued and then nothing is the state the worker exists to remove. It is
+    # only actually started when every part is reachable, and the app says
+    # which one is missing rather than refusing the same sentence every minute.
+    driver_jobs: bool = True
+    #: Idle interval for the driver queue. A job that finished looping goes
+    #: straight on to the next; this is only the beat that catches a job queued
+    #: by an approval nobody nudged us about.
+    driver_jobs_interval: float = 60.0
+    driver_repo: str = "nickbrett1/data-download-drivers"
+    driver_base: str = "main"
+    #: The forge credential: gate, changed paths, merge, PR, and the tarball
+    #: that is installed. `None` means the driver queue cannot finish a job.
+    github_token: str | None = None
+    #: How long one authoring conversation may run, and what it may spend.
+    author_timeout: float = 3600.0
+    author_budget: float = 2.0
+    author_iterations: int = 200
 
     @property
     def driver_ready(self) -> bool:
@@ -222,6 +260,32 @@ def parse_switch(raw: str | None, *, default: bool = True) -> bool:
         return True
     log.warning("DATA_DOWNLOAD_RUNNER=%r is not a switch - leaving it %s", raw, "on" if default else "off")
     return default
+
+
+def _path(raw: str | None) -> Path | None:
+    """An optional path setting: unset or blank is `None`, never `Path('.')`.
+
+    `Path("")` is the current directory, which is a real place and the wrong
+    one: a blank mount setting must switch the behaviour off rather than point
+    it at whatever the working directory happens to be.
+    """
+    value = (raw or "").strip()
+    return Path(value) if value else None
+
+
+def _number(raw: str | None, default: float) -> float:
+    """An optional positive number. A typo keeps the default and says so."""
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        log.warning("%r is not a number - using %s", raw, default)
+        return default
+    if not math.isfinite(value) or value <= 0:
+        log.warning("%r is not a positive number - using %s", raw, default)
+        return default
+    return value
 
 
 def parse_interval(raw: str | None, *, default: float = 60.0) -> float:
@@ -395,6 +459,23 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         runner=runner,
         runner_interval=runner_interval,
         openhands_url=(env.get("DATA_DOWNLOAD_OPENHANDS_URL") or "").strip() or None,
+        openhands_key_file=_path(env.get("DATA_DOWNLOAD_OPENHANDS_KEY_FILE")),
+        openhands_projects_dir=_path(env.get("DATA_DOWNLOAD_OPENHANDS_PROJECTS_DIR")),
+        openhands_workdir=(env.get("DATA_DOWNLOAD_OPENHANDS_WORKDIR") or "").strip() or None,
+        openhands_agent_uid=int(_number(env.get("DATA_DOWNLOAD_OPENHANDS_AGENT_UID"), 10001)),
+        openhands_agent_gid=int(_number(env.get("DATA_DOWNLOAD_OPENHANDS_AGENT_GID"), 10001)),
+        driver_jobs=parse_switch(env.get("DATA_DOWNLOAD_DRIVER_JOBS")),
+        driver_jobs_interval=parse_interval(
+            env.get("DATA_DOWNLOAD_DRIVER_JOBS_INTERVAL"), default=60.0
+        ),
+        driver_repo=(env.get("DATA_DOWNLOAD_DRIVER_REPO") or "").strip()
+        or "nickbrett1/data-download-drivers",
+        driver_base=(env.get("DATA_DOWNLOAD_DRIVER_BASE") or "").strip() or "main",
+        github_token=(env.get("DATA_DOWNLOAD_GITHUB_TOKEN") or env.get("GITHUB_TOKEN") or "").strip()
+        or None,
+        author_timeout=_number(env.get("DATA_DOWNLOAD_AUTHOR_TIMEOUT"), 3600.0),
+        author_budget=_number(env.get("DATA_DOWNLOAD_AUTHOR_BUDGET"), 2.0),
+        author_iterations=int(_number(env.get("DATA_DOWNLOAD_AUTHOR_ITERATIONS"), 200)),
     )
 
 

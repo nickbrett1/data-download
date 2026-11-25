@@ -247,3 +247,51 @@ def test_a_failure_with_no_event_still_says_the_status():
     kind, sentence = openhands_agent.ends_badly("stopped", {})
     assert kind == "refused"
     assert "stopped" in sentence
+
+
+def test_the_key_can_come_from_a_mounted_file_instead_of_docker(tmp_path, monkeypatch):
+    """The control plane has no docker socket, so the key arrives as a mount."""
+    where = tmp_path / "api-key.txt"
+    where.write_text("k" * 64, encoding="utf-8")
+
+    def refuse(*args, **kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("docker exec must not be used when the file is there")
+
+    monkeypatch.setattr(openhands_agent.subprocess, "run", refuse)
+    assert openhands_agent.session_key(key_file=str(where)) == "k" * 64
+
+    # An unset file path falls back to the container, which is what the refusal
+    # above proves was not called yet.
+    monkeypatch.setattr(
+        openhands_agent.subprocess,
+        "run",
+        lambda *a, **k: type("Done", (), {"returncode": 0, "stdout": "c" * 64, "stderr": ""})(),
+    )
+    monkeypatch.delenv("OPENHANDS_KEY_FILE", raising=False)
+    assert openhands_agent.session_key() == "c" * 64
+
+
+def test_a_missing_key_file_is_a_broken_deployment(tmp_path):
+    with pytest.raises(openhands_agent.AgentConfig, match="OPENHANDS_KEY_FILE"):
+        openhands_agent.session_key(key_file=str(tmp_path / "absent"))
+
+
+def test_converse_reports_the_transcript_even_when_it_refused(monkeypatch, tmp_path):
+    """A failed run is still worth reading, so the id travels with the exception."""
+    monkeypatch.setattr(openhands_agent, "session_key", lambda **k: "key")
+    monkeypatch.setattr(openhands_agent, "active_profile", lambda **k: "prof")
+    monkeypatch.setattr(openhands_agent, "start", lambda *a, **k: {"id": "conv-42"})
+    monkeypatch.setattr(
+        openhands_agent,
+        "wait",
+        lambda *a, **k: {"execution_status": "error", "stats": {}},
+    )
+    monkeypatch.setattr(openhands_agent, "final_response", lambda *a, **k: "")
+    monkeypatch.setattr(
+        openhands_agent,
+        "failure",
+        lambda *a, **k: {"code": "LLMAuthenticationError", "detail": "expired"},
+    )
+    with pytest.raises(openhands_agent.AgentConfig) as caught:
+        openhands_agent.converse("ticket", key="key")
+    assert caught.value.conversation == "conv-42"
