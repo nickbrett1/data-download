@@ -348,6 +348,10 @@ def _builds_by_vendor(jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             "attempts": int(job.get("attempts") or 0),
             "branch": str(job.get("branch") or ""),
             "commit": str(job.get("commit_sha") or ""),
+            # The transcript, when the authoring agent keeps one. An id rather
+            # than a URL: which host serves the canvas is the deployment's fact
+            # (`settings.openhands_url`), and a stored URL would rot when it moves.
+            "author_ref": str(job.get("author_ref") or ""),
             "error": str(job.get("last_error") or ""),
             "created_at": str(job.get("created_at") or ""),
             "updated_at": str(job.get("updated_at") or ""),
@@ -1956,6 +1960,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "known": artifacts is not None,
                 "detail": detail,
                 "count": len(artifacts or []),
+                # Where to read an authoring transcript, if this deployment has
+                # a canvas. The build carries the conversation *id*; turning it
+                # into a link is the view's job, from this one setting.
+                "openhands_url": settings.openhands_url or "",
                 # The browse list: every artefact, joined to the types it can
                 # answer. Separate from `types[].implementations` because an
                 # artefact may answer no type at all, and a reader browsing

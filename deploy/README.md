@@ -358,14 +358,16 @@ This is deliberate and it is a constraint, not a preference. Two facts decide it
 
 - **The app image has no `git`, `gh` or `curl`.** The loop's authoring harness is
   a process contract (a ticket on stdin, one JSON line on stdout) whose default
-  implementation clones the drivers repo, runs an agent in it, pushes a branch
-  and opens a pull request. None of that can happen in the app image.
+  implementation asks an agent to work on a branch of the drivers repo and hands
+  back the sha GitHub reports for it. None of that can happen in the app image.
 - **The drivers volume is mounted read-only into the runtime.** The installer
   needs the same host directory read-write, so the loop must be the one holding
   the writable mount.
 
-On `ryzen` the host already has `goose`, `gh` and `git`, which is exactly what
-the harness needs. `deploy/driver-loop.service` execs the **supervisor**
+On `ryzen` the host already has `goose`, `gh` and `git`, and — since phase 5.6 —
+a Docker socket and the OpenHands agent server on `127.0.0.1:3088`, which is
+what the default harness needs. `deploy/driver-loop.service` execs the
+**supervisor**
 (`scripts/driver-loop.sh`) rather than `driver_build --once`: a unit that ran the
 one-shot would look up once and never poll, and `Restart=on-failure` would never
 fire on a clean exit. Everything else is configuration, in
@@ -394,6 +396,18 @@ PYTHON=/srv/appdata/data-download-drivers/loop-venv/bin/python
 # command with an environment prefix. systemd's EnvironmentFile accepts the
 # same form. `goose run -t` is v1.53's one-shot text flag.
 AUTHOR_AGENT_CMD="goose run --no-session -t"
+# Phase 5.6: the authoring agent is an OpenHands conversation on this host. The
+# default (`python -m data_download.openhands_agent`) needs only these two: the
+# server, and where an agent's workspace lives. The session key is read per job
+# with `docker exec` (uid 10001 owns it), never stored here -- a recreated
+# container generates a new one.
+OPENHANDS_URL=http://127.0.0.1:3088
+OPENHANDS_CONTAINER=openhands
+OPENHANDS_WORKDIR=/projects/driver-loop
+OPENHANDS_MAX_BUDGET=2.00
+OPENHANDS_MAX_ITERATIONS=200
+# So the app can turn a driver's `author_ref` into a link to its transcript.
+DATA_DOWNLOAD_OPENHANDS_URL=http://ryzen:3088
 ```
 
 Two host facts this unit assumes, both learned the hard way:

@@ -86,6 +86,11 @@ class Settings:
     # that ran something loops again at once, so this is the idle poll, not the
     # latency of a newly approved row.
     runner_interval: float = 60.0
+    # Phase 5.5: where the canvas UI that holds an authoring transcript is
+    # served, if this deployment has one. `None` means the driver page shows the
+    # conversation id but cannot make it a link -- the id is still the thing that
+    # finds the transcript, and inventing a URL from it would be a guess.
+    openhands_url: str | None = None
 
     @property
     def driver_ready(self) -> bool:
@@ -389,6 +394,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         driver_datasets_root=driver_datasets_root,
         runner=runner,
         runner_interval=runner_interval,
+        openhands_url=(env.get("DATA_DOWNLOAD_OPENHANDS_URL") or "").strip() or None,
     )
 
 

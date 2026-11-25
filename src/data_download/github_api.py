@@ -133,6 +133,52 @@ def gate(repo: str, sha: str, *, token: str) -> dict:
     return {"ok": True, "detail": f"{counted} green"}
 
 
+def head_sha(repo: str, ref: str, *, token: str) -> str:
+    """What a branch points at **now**, per the forge.
+
+    Since the authoring agent pushes its own branch, this is the only honest
+    source for the sha the loop gates: a local `rev-parse` would be a statement
+    about a checkout, and the loop no longer keeps one. A branch that does not
+    exist is a refusal here rather than an empty string, because "the agent
+    pushed nothing" must stop the job with that sentence.
+    """
+    quoted = urllib.parse.quote(ref, safe="")
+    try:
+        answer = _call("GET", f"/repos/{repo}/git/ref/heads/{quoted}", token=token)
+    except GithubError as exc:
+        raise GithubError(f"the forge has no branch {ref!r} on {repo}: {exc}") from None
+    sha = str(((answer or {}).get("object") or {}).get("sha") or "")
+    if not sha:
+        raise GithubError(f"the forge answered for branch {ref!r} without a sha")
+    return sha
+
+
+def ensure_pull_request(
+    repo: str, *, head: str, base: str, title: str, body: str, token: str
+) -> dict:
+    """Open the PR for `head`, or answer with the one that is already there.
+
+    The harness opens it, not the agent: `merge` finds a PR *by head branch*, so
+    the mapping from branch to review artefact stays the harness's fact. Idempotent
+    because a re-run of a job whose branch already has a PR must not fail on that.
+    """
+    owner = repo.split("/", 1)[0]
+    listed = _call(
+        "GET",
+        f"/repos/{repo}/pulls?state=open&head={urllib.parse.quote(f'{owner}:{head}')}",
+        token=token,
+    )
+    if isinstance(listed, list) and listed:
+        return {"number": listed[0].get("number"), "created": False}
+    answer = _call(
+        "POST",
+        f"/repos/{repo}/pulls",
+        token=token,
+        body={"title": title, "head": head, "base": base, "body": body},
+    ) or {}
+    return {"number": answer.get("number"), "created": True}
+
+
 def changed_paths(repo: str, sha: str, *, token: str) -> list[str]:
     """Every file the commit touched, from GitHub's own diff."""
     answer = _call("GET", f"/repos/{repo}/commits/{sha}", token=token)

@@ -354,6 +354,7 @@ CREATE TABLE IF NOT EXISTS driver_jobs (
   commit_sha       TEXT,
   artifact_sha256  TEXT,
   verdict_json     TEXT,                -- probe verdict, reviewer findings
+  author_ref       TEXT,                -- the authoring conversation, if any
   last_error       TEXT,
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,

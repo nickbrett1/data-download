@@ -151,8 +151,35 @@ def test_a_green_branch_installs(tmp_path):
         assert done["commit_sha"] == "a" * 40
         assert done["artifact_sha256"] == "d" * 64
         assert done["attempts"] == 1
+        # A harness that keeps no transcript leaves no reference behind rather
+        # than inventing one.
+        assert done["author_ref"] is None
         assert _run(store.driver_jobs_open()) == 0
         assert job["state"] == "queued"  # the row we read was the *before* copy
+    finally:
+        _run(store.close())
+
+
+def test_the_authoring_transcript_is_kept_when_the_harness_names_one(tmp_path):
+    """The page can link the conversation that wrote a driver, but the job keeps
+    the *id*: which host serves the canvas is the deployment's fact, and a stored
+    URL would rot the day it moved."""
+    store = _store(tmp_path)
+    try:
+        _job(store)
+        done = _run(
+            driver_build.run_once(
+                store,
+                _steps(
+                    author=lambda row: {
+                        "branch": "driver-loop/databento-1",
+                        "commit_sha": "a" * 40,
+                        "author_ref": "conv-9",
+                    }
+                ),
+            )
+        )
+        assert done["author_ref"] == "conv-9"
     finally:
         _run(store.close())
 
