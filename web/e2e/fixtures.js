@@ -440,6 +440,9 @@ export const requestDetail = {
       ts: "2026-11-13T09:01:00Z",
       actor_kind: "submitter",
       event: "submitted",
+      // The sentence beside the machine name, built by the read-model so the
+      // view never guesses what a payload means.
+      summary: "filed as an intent",
       detail: { body_kind: "intent", blocked_reason: "awaiting_plan" },
     },
   ],
@@ -503,6 +506,7 @@ export const draftDetail = {
       ts: "2026-11-15T23:42:33Z",
       actor_kind: "submitter",
       event: "submitted",
+      summary: "filed as a plan",
       detail: { body_kind: "plan", plan_type: "market_data_window" },
     },
   ],

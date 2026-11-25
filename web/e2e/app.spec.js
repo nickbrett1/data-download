@@ -1159,9 +1159,13 @@ test.describe("naming a request, and opening it", () => {
     );
     await expect(page.locator(".meta-grid")).toContainText("req_0a7c9d33");
 
-    // The append-only trail, which no list view has room for.
+    // The append-only trail, which no list view has room for. It reads as
+    // sentences now: the stored name (`submitted`) is on the line's `title`,
+    // because a page that prints machine names is a page that says nothing.
     await expect(page.locator(".events li")).toHaveCount(1);
-    await expect(page.locator(".events li")).toContainText("submitted");
+    await expect(page.locator(".events li")).toContainText(
+      "filed as an intent",
+    );
 
     // The `filed` date, and no age beside it: an age is a clock the reader has
     // to subtract from, which is the same fact said twice.
@@ -1315,15 +1319,64 @@ test.describe("naming a request, and opening it", () => {
 
     const rows = page.locator(".events li");
     await expect(rows).toHaveCount(2);
-    // `submitted` followed by `submitter` was the same word twice. No identity
-    // is recorded, so there is no third column to print.
-    await expect(rows.nth(0).locator(".what")).toHaveText("submitted");
+    // `submitted` followed by `submitter` was the same word twice, and the
+    // page now says what happened rather than repeating the store's name.
+    await expect(rows.nth(0).locator(".what")).toHaveText("filed as a plan");
     await expect(rows.nth(0).locator(".who")).toHaveCount(0);
     // An approval is worth a name, and the name is the login the tailnet
     // asserted -- not the word "human".
     await expect(rows.nth(1).locator(".who")).toHaveText("nick@example.com");
   });
 
+  // The complaint this answers: a request that waited on a driver printed the
+  // word "driver_state" once a minute, so the trail read as noise and the
+  // moment something actually moved was invisible.
+  test("a run of identical events is one line, and a change is its own", async ({
+    page,
+  }) => {
+    const stop = (id, ts) => ({
+      id,
+      ts,
+      actor_kind: "system",
+      event: "driver_state",
+      summary: "driver needs_human (Databento) — the agent never pushed",
+      detail: { driver_state: "needs_human", vendor: "Databento" },
+    });
+    await mock(page, {
+      detail: {
+        ...draftDetail,
+        events: [
+          draftDetail.events[0],
+          stop(2, "2026-11-25T19:17:58Z"),
+          stop(3, "2026-11-25T19:18:58Z"),
+          stop(4, "2026-11-25T19:19:58Z"),
+          {
+            ...stop(5, "2026-11-25T19:20:58Z"),
+            summary: "driver needs_human (Databento) — a bill",
+          },
+        ],
+      },
+    });
+    await page.goto("/requests/req_draft01");
+
+    const rows = page.locator(".events li");
+    // Three identical stops are one line; the different reason is not folded
+    // into them, because a change of reason is the interesting part.
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0).locator(".what")).toHaveText("filed as a plan");
+    await expect(rows.nth(1).locator(".what")).toHaveText(
+      "driver needs_human (Databento) — the agent never pushed",
+    );
+    await expect(rows.nth(1).locator(".who")).toHaveText("×3");
+    await expect(rows.nth(1).locator(".who")).toHaveAttribute(
+      "title",
+      "last at 2026-11-25T19:19:58Z",
+    );
+    await expect(rows.nth(2).locator(".what")).toContainText("a bill");
+    await expect(rows.nth(2).locator(".who")).toHaveCount(0);
+    // The store's own name is still reachable, for grepping.
+    await expect(rows.nth(1)).toHaveAttribute("title", "driver_state");
+  });
   test("the detail page is a page: a reload and a back link both work", async ({
     page,
   }) => {

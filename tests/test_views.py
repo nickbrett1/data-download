@@ -1132,3 +1132,79 @@ def test_a_build_says_when_it_finished(client, db_path, monkeypatch):
     assert build["state"] == "installed"
     assert build["updated_at"] == "2026-11-25T20:08:40Z"
     assert build["commit"] == "b" * 40
+
+
+def _add_event(path: Path, request_id: str, event: str, detail: dict, ts: str = "2026-11-25T00:00:00Z") -> None:
+    """Append a trail row the way the store would, without the app."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "INSERT INTO events (request_id, ts, actor_kind, event, detail_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (request_id, ts, "system", event, json.dumps(detail, sort_keys=True)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_every_event_says_what_happened_not_just_its_name(client, db_path):
+    """The trail is read by a person, so each line is a sentence.
+
+    The page drew the stored machine name and nothing else, which is how a
+    request that waited on a driver rendered as twenty lines of the word
+    `driver_state`: true, unreadable, and indistinguishable from a fault. The
+    read-model now hands the page a `summary` beside the name -- beside, not
+    instead, because grepping the trail for `driver_state` is still a thing an
+    operator does.
+    """
+    filed = client.post("/v1/requests", json=INTENT_BODY, headers=auth()).json()
+    request_id = filed["request_id"]
+    _add_event(
+        db_path,
+        request_id,
+        "driver_state",
+        {
+            "driver_state": "needs_human",
+            "vendor": "Databento",
+            "driver_job": "drv_1",
+            "error": "the agent never pushed",
+        },
+    )
+
+    events = _detail(client, request_id).json()["events"]
+    summaries = [e["summary"] for e in events]
+    # The name is still there, next to the words.
+    assert [e["event"] for e in events] == ["submitted", "driver_state"]
+    assert summaries[0] == "filed as an intent"
+    assert summaries[-1].startswith("driver needs_human (Databento)")
+    assert "the agent never pushed" in summaries[-1]
+
+
+def test_an_unknown_event_is_shown_under_its_own_name(client, db_path):
+    """A summary invented for an event nobody described is worse than none."""
+    filed = client.post("/v1/requests", json=INTENT_BODY, headers=auth()).json()
+    _add_event(db_path, filed["request_id"], "invented", {})
+    summaries = [e["summary"] for e in _detail(client, filed["request_id"]).json()["events"]]
+    assert summaries[-1] == "invented"
+
+
+def test_a_run_of_identical_events_reads_as_one_line(client, db_path):
+    """Twenty identical stops collapse; two separate waits do not.
+
+    The page's own rule: *consecutive* identical events become one line with a
+    count, because a request that waited on a driver wrote one per pass and the
+    moment the state actually moved was buried among them. The collapse is the
+    view's -- the store is append-only and stays the record -- so what this pins
+    is the payload being identical, which is what lets a view group it.
+    """
+    filed = client.post("/v1/requests", json=INTENT_BODY, headers=auth()).json()
+    request_id = filed["request_id"]
+    stop = {"driver_state": "needs_human", "vendor": "Databento", "error": "a bill"}
+    for minute in ("01", "02", "03"):
+        _add_event(db_path, request_id, "driver_state", stop, ts=f"2026-11-25T19:{minute}:00Z")
+
+    events = _detail(client, request_id).json()["events"]
+    repeats = [e for e in events if e["event"] == "driver_state"]
+    assert len(repeats) == 3
+    assert len({e["summary"] for e in repeats}) == 1, "identical work must group"

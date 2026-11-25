@@ -22,6 +22,7 @@ Four rules, each with a test that would fail if it were dropped:
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -296,17 +297,37 @@ def test_a_job_that_stopped_for_a_human_is_not_queued_a_second_time(
                 driver_url=wire.url,
                 driver_token=wire.token,
             )
-            return first, second, await store.driver_job_list()
+            # A third pass, because the loop asks once a minute and the page
+            # must not gain a line a minute: the state did not move.
+            third = await tick(
+                store,
+                datasets_dir=tmp_path / "datasets",
+                driver_url=wire.url,
+                driver_token=wire.token,
+            )
+            return first, second, third, await store.driver_job_list(), await store.events_for(
+                request_id
+            )
         finally:
             await store.close()
 
-    first, second, jobs = _run(go())
+    first, second, third, jobs, events = _run(go())
     assert [r.refused for r in first] == ["driver_missing"]
     assert len(jobs) == 1, "a stopped job must not be replaced by a new one"
     assert second[0].settled is False
     assert "stopped for a human" in second[0].errors["detail"]
     assert "the agent never pushed" in second[0].errors["detail"]
     assert _state(settings.db_path, request_id)["driver_state"] == "needs_human"
+    # One line for the stop, not one per pass. `building` then `needs_human`;
+    # the third pass repeats the second and writes nothing.
+    states = [
+        e for e in events if e["event"] == "driver_state"
+    ]
+    assert [json.loads(e["detail_json"])["driver_state"] for e in states] == [
+        "building",
+        "needs_human",
+    ], "a pass that finds the same stop has nothing to add"
+    assert third[0].settled is False
 
 
 def test_a_row_waiting_for_a_driver_does_not_spin_the_loop(
