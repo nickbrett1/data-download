@@ -2032,10 +2032,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "known": artifacts is not None,
                 "detail": detail,
                 "count": len(artifacts or []),
-                # Where to read an authoring transcript, if this deployment has
-                # a canvas. The build carries the conversation *id*; turning it
-                # into a link is the view's job, from this one setting.
-                "openhands_url": settings.openhands_url or "",
+                # Where to read an authoring transcript, if a person's browser
+                # can reach this deployment's canvas. The build carries the
+                # conversation *id*; turning it into a link is the view's job.
+                # Not `openhands_url`: that is the address this process calls
+                # the API on, and in a container it is a container name -- a
+                # link built from it resolves here and nowhere else, which is
+                # how it shipped once.
+                "canvas_url": settings.openhands_canvas_url or "",
                 # The driver repository, so a row can link to the code that
                 # answers it. The forge host is assumed rather than configured:
                 # every other write here goes through `github_api`, which knows
