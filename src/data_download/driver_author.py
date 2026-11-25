@@ -171,8 +171,29 @@ class SharedWorkspace(Workspace):
     the agent cannot read.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, owner: tuple[int, int] | None = None) -> None:
         self.root = Path(root)
+        # The app image declares no USER, so it writes as root; the agent is a
+        # different uid in a different container. A 0600 root-owned credential
+        # is therefore a credential the agent cannot read, and a 0700 root-owned
+        # directory is one it cannot enter -- the failure would arrive as a
+        # silently credential-less agent, not as an error. When this process is
+        # root and the deployment names the agent's uid, both are handed over.
+        # A host run is already the same user, so `None` changes nothing.
+        self.owner = owner if owner and os.geteuid() == 0 else None
+
+    def _claim(self, where: Path) -> None:
+        """Create `where` and any missing parents so the agent can traverse them."""
+        missing: list[Path] = []
+        probe = where
+        while not probe.exists() and probe != probe.parent:
+            missing.append(probe)
+            probe = probe.parent
+        for directory in reversed(missing):
+            directory.mkdir(exist_ok=True)
+            os.chmod(directory, 0o755)
+            if self.owner:
+                os.chown(directory, *self.owner)
 
     def _under_root(self, path: str) -> Path:
         target = Path(path)
@@ -188,12 +209,14 @@ class SharedWorkspace(Workspace):
     def write(self, path: str, value: str) -> None:
         target = self._under_root(path)
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
+            self._claim(target.parent)
             # 0600 from the moment it exists: `open(…, 0o600)` cannot race a
             # default umask the way `write_text` followed by `chmod` can.
             handle = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(handle, "w", encoding="utf-8") as file:
                 file.write(value)
+            if self.owner:
+                os.chown(target, *self.owner)
         except OSError as exc:
             raise Refused(f"cannot write the push credential to {path}: {exc}") from None
 
@@ -236,9 +259,14 @@ class ContainerWorkspace(Workspace):
         return sweep_credentials(self.container, prefix, older_than=older_than)
 
 
-def workspace_for(container: str = DEFAULT_CONTAINER, projects_dir: str = "") -> Workspace:
+def workspace_for(
+    container: str = DEFAULT_CONTAINER,
+    projects_dir: str = "",
+    *,
+    owner: tuple[int, int] | None = None,
+) -> Workspace:
     if projects_dir:
-        return SharedWorkspace(Path(projects_dir))
+        return SharedWorkspace(Path(projects_dir), owner=owner)
     return ContainerWorkspace(container)
 
 
@@ -395,6 +423,7 @@ def author(
     workdir_prefix: str = DEFAULT_WORKDIR,
     container: str = DEFAULT_CONTAINER,
     projects_dir: str = DEFAULT_PROJECTS_DIR,
+    owner: tuple[int, int] | None = None,
     agent_cmd: str = "",
     branch: str = "",
     url: str = "",
@@ -428,7 +457,7 @@ def author(
     # that was never pushed leaves nothing behind that the next run can reuse.
     workdir = f"{workdir_prefix.rstrip('/')}/{slug(chosen)}"
     credential = f"{workdir}/push-credential" if token else None
-    workspace = workspace_for(container, projects_dir)
+    workspace = workspace_for(container, projects_dir, owner=owner)
 
     say(f"vendor {vendor!r}, branch {chosen}, workspace {workdir}")
 

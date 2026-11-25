@@ -103,6 +103,13 @@ class Settings:
     #: the prompt and the credential's path depend on it, and both sides spell
     #: it the same way (see `openhands_projects_dir`).
     openhands_workdir: str | None = None
+    #: The uid:gid the agent runs as inside its own container (10001 for the
+    #: agent-canvas image). The app image declares no USER, so a credential it
+    #: writes is root-owned until it is handed over; a 0600 file the agent
+    #: cannot read is the quiet way authoring fails. Ignored unless this
+    #: process is root, and irrelevant to a host run.
+    openhands_agent_uid: int = 10001
+    openhands_agent_gid: int = 10001
     # Phase 7: whether this process works the *driver* queue as well as the
     # request queue. On by default, for the same reason `runner` is: a job
     # queued and then nothing is the state the worker exists to remove. It is
@@ -455,6 +462,8 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         openhands_key_file=_path(env.get("DATA_DOWNLOAD_OPENHANDS_KEY_FILE")),
         openhands_projects_dir=_path(env.get("DATA_DOWNLOAD_OPENHANDS_PROJECTS_DIR")),
         openhands_workdir=(env.get("DATA_DOWNLOAD_OPENHANDS_WORKDIR") or "").strip() or None,
+        openhands_agent_uid=int(_number(env.get("DATA_DOWNLOAD_OPENHANDS_AGENT_UID"), 10001)),
+        openhands_agent_gid=int(_number(env.get("DATA_DOWNLOAD_OPENHANDS_AGENT_GID"), 10001)),
         driver_jobs=parse_switch(env.get("DATA_DOWNLOAD_DRIVER_JOBS")),
         driver_jobs_interval=parse_interval(
             env.get("DATA_DOWNLOAD_DRIVER_JOBS_INTERVAL"), default=60.0

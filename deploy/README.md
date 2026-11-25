@@ -416,15 +416,40 @@ socket** -- and should not have one:
   sides means the prompt's path is *the* path -- nothing is translated, and a
   mount at a different path is refused by name.
 
+- **The uid matters, and it is the failure that looks like nothing.** This image
+  declares no `USER`, so it runs as root and writes the credential root-owned.
+  The agent runs as `uid 10001` in its own container: a `0600` root-owned file,
+  inside a `0700` root-owned directory, is a credential it cannot open and a
+  path it cannot even enter -- with no error anywhere, just an agent that
+  silently pushes nothing. So the workspace hands the file *and* the directories
+  leading to it to `DATA_DOWNLOAD_OPENHANDS_AGENT_UID:GID` (default
+  `10001:10001`) whenever this process is root. A host run is already the same
+  user and does nothing.
+
 On the OpenHands side, `/projects` must therefore be a **bind mount**, not the
-named volume it used to be:
+anonymous volume it is today:
 
 ```yaml
     volumes:
       - /srv/docker/openhands/projects:/projects
 ```
 
-The app cannot see a named volume, so leaving it as one means no authoring.
+Careful: `/projects` is not declared in the OpenHands compose at all -- it comes
+from the image's `VOLUME /projects` instruction, so Docker minted an
+**anonymous** volume (`docker inspect openhands` shows `"anonymous": ""`, no
+`com.docker.compose.volume` label) and has been re-attaching that same one
+across container recreations. Adding a bind changes the mount, and the volume's
+contents do not follow it. Convert in this order:
+
+```sh
+sudo mkdir -p /srv/docker/openhands/projects
+sudo chown 10001:10001 /srv/docker/openhands/projects
+docker run --rm -v 2019ba8c…:/from -v /srv/docker/openhands/projects:/to \
+  alpine sh -c 'cp -a /from/. /to/ && ls -A /to | wc -l'
+# then add the bind to the compose file and `docker compose up -d`
+```
+
+The app cannot see an anonymous volume, so leaving it as one means no authoring.
 
 ### What the loop will not do
 

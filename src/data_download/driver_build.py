@@ -439,6 +439,7 @@ def default_steps(
                 ),
                 container=driver_author.DEFAULT_CONTAINER,
                 projects_dir=str(settings.openhands_projects_dir or ""),
+                owner=(settings.openhands_agent_uid, settings.openhands_agent_gid),
                 agent_cmd=author_cmd,
                 url=str(settings.openhands_url or ""),
                 budget=author_budget,

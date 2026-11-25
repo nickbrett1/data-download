@@ -275,6 +275,43 @@ def test_a_shared_workspace_writes_the_credential_at_the_path_the_agent_sees(tmp
     assert not target.exists()
 
 
+def test_the_credential_is_handed_to_the_agent_uid(tmp_path, monkeypatch):
+    """Root writes it, uid 10001 has to read it.
+
+    The app image declares no USER, so the file lands root-owned; the agent is
+    uid 10001 in another container and would get EACCES. The failure would not
+    be an error anywhere -- just an agent with no credential -- so the handover
+    is asserted, not assumed.
+    """
+    given: list[tuple[str, int, int]] = []
+    monkeypatch.setattr(driver_author.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        driver_author.os, "chown", lambda p, u, g: given.append((os.path.basename(p), u, g))
+    )
+
+    workspace = driver_author.SharedWorkspace(tmp_path, owner=(10001, 10001))
+    target = tmp_path / "driver-loop" / "run-1" / "push-credential"
+    workspace.write(str(target), "tok")
+
+    assert target.read_text() == "tok"
+    assert ("push-credential", 10001, 10001) in given
+    # The directories on the way must be traversable by that uid, which 0700
+    # (the mkdtemp default) is not.
+    assert stat.S_IMODE((tmp_path / "driver-loop").stat().st_mode) == 0o755
+    assert ("run-1", 10001, 10001) in given
+
+
+def test_nothing_is_chowned_when_the_agent_is_the_same_user(tmp_path, monkeypatch):
+    """A host run is already the right uid, and non-root cannot chown anyway."""
+    monkeypatch.setattr(driver_author.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(
+        driver_author.os, "chown", lambda *a: pytest.fail("chown must not be attempted")
+    )
+    target = tmp_path / "driver-loop" / "run-1" / "push-credential"
+    driver_author.SharedWorkspace(tmp_path, owner=(10001, 10001)).write(str(target), "tok")
+    assert target.read_text() == "tok"
+
+
 def test_a_shared_workspace_refuses_a_credential_outside_its_mount(tmp_path):
     workspace = driver_author.SharedWorkspace(tmp_path / "projects")
     with pytest.raises(driver_author.Misconfigured, match="not under"):
