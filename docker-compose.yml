@@ -45,10 +45,16 @@ services:
       # guessing), which is the right default for a host that has not decided
       # where its data lives.
       DATA_DOWNLOAD_DATASETS_DIR: ${DATA_DOWNLOAD_DATASETS_DIR:-/datasets}
-      # Phase 5.5: where a driver's authoring transcript is readable, so the
-      # plan-types page can link one. Unset means the conversation id is shown
-      # and not turned into a link -- the id is still what finds it.
+      # Phase 5.5: the agent API this process calls, e.g. http://openhands:8000.
+      # This is a *container name*: it resolves for the app and for nobody else.
       DATA_DOWNLOAD_OPENHANDS_URL: ${DATA_DOWNLOAD_OPENHANDS_URL:-}
+      # Where a person's browser opens that canvas, e.g.
+      # http://192.168.1.69:3088/canvas -- a LAN address and the canvas *root*.
+      # Separate from the line above because the two really are different
+      # addresses, and publishing the first as the second gives every reader a
+      # link to a host their browser has never heard of. Unset means the page
+      # shows the conversation id and does not pretend it is a link.
+      DATA_DOWNLOAD_OPENHANDS_CANVAS_URL: ${DATA_DOWNLOAD_OPENHANDS_CANVAS_URL:-}
       # The driver runtime: the container that runs driver code and owns the
       # drivers volume. Unset means nothing can be installed, probed or run.
       DATA_DOWNLOAD_DRIVER_RUNTIME_URL: ${DATA_DOWNLOAD_DRIVER_RUNTIME_URL:-}

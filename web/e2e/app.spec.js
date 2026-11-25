@@ -590,8 +590,13 @@ test.describe("plan types", () => {
       "href",
       "https://github.com/nickbrett1/data-download-drivers/tree/9f28f7583a9b233802aa6d32df4b4dc6a563b1c7/drivers/databento/1",
     );
-    await expect(first.locator(".driver-detail")).toContainText(
-      "built 24 Nov 16:37",
+    const panel = first.locator(".driver-detail");
+    await expect(panel).not.toContainText("24 Nov");
+    // The line is named for the *build* now that the date lives on the row:
+    // "built: installed" read as a contradiction when the date was not beside
+    // it.
+    await expect(panel.locator("dt").filter({ hasText: "build" })).toHaveCount(
+      1,
     );
 
     const detail = await first.locator(".driver-detail").innerText();
@@ -683,7 +688,7 @@ test.describe("plan types", () => {
     // The provenance is the one thing in the panel that has an origin: a
     // driver was written, and the branch and commit are where to read it.
     const detail = page.locator(".plan-type").first().locator(".driver-detail");
-    await expect(detail).toContainText("built");
+    await expect(detail).toContainText("build");
     await expect(detail).toContainText("installed");
     await expect(detail).toContainText("attempt 1");
     await expect(detail).toContainText(

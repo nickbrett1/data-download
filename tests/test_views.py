@@ -518,11 +518,11 @@ def test_a_build_carries_the_transcript_that_wrote_it(client, db_path, monkeypat
     assert build["author_ref"] == "conv-9"
     # Without a configured canvas the id is still the fact; the view must not
     # invent a link from it.
-    assert body["drivers"]["openhands_url"] == ""
+    assert body["drivers"]["canvas_url"] == ""
 
 
 def test_the_canvas_url_comes_from_the_deployment(settings, monkeypatch):
-    """The deployment names its canvas; the store never does."""
+    """The deployment names the canvas a *browser* opens, and the store never does."""
     import dataclasses
 
     from fastapi.testclient import TestClient
@@ -531,11 +531,42 @@ def test_the_canvas_url_comes_from_the_deployment(settings, monkeypatch):
 
     monkeypatch.setattr(app_module, "_driver_artifacts", lambda _settings: ([], ""))
     app = app_module.create_app(
-        dataclasses.replace(settings, openhands_url="http://canvas.local:3088")
+        dataclasses.replace(
+            settings, openhands_canvas_url="http://canvas.local:3088/canvas"
+        )
     )
     with TestClient(app, client=("127.0.0.1", 51234)) as page:
         body = page.get("/ui/plan-types.json").json()
-    assert body["drivers"]["openhands_url"] == "http://canvas.local:3088"
+    assert body["drivers"]["canvas_url"] == "http://canvas.local:3088/canvas"
+
+
+def test_the_payload_never_carries_the_api_address_as_a_canvas(settings, monkeypatch):
+    """The bug this setting exists to prevent, asserted at the boundary.
+
+    `openhands_url` is where this process calls the agent API, which in a
+    container is a container name. It shipped to the page as if it were a
+    person's canvas once, and the link worked for the app and 404'd for
+    everyone reading it, so the payload is now the browser-facing fact alone.
+    """
+    import dataclasses
+
+    from fastapi.testclient import TestClient
+
+    from data_download import app as app_module
+
+    monkeypatch.setattr(app_module, "_driver_artifacts", lambda _settings: ([], ""))
+    app = app_module.create_app(
+        dataclasses.replace(
+            settings,
+            openhands_url="http://openhands:8000",
+            openhands_canvas_url=None,
+        )
+    )
+    with TestClient(app, client=("127.0.0.1", 51234)) as page:
+        drivers = page.get("/ui/plan-types.json").json()["drivers"]
+    assert drivers["canvas_url"] == ""
+    assert "openhands_url" not in drivers
+    assert "openhands:8000" not in str(drivers)
 
 
 def test_the_view_models_ask_for_no_credential(client, db_path):

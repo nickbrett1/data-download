@@ -211,9 +211,12 @@ export const planTypes = {
     known: true,
     detail: "",
     count: 2,
-    // Where a transcript is readable, when this deployment has a canvas. Empty
-    // would mean the id is shown but is not a link.
-    openhands_url: "http://canvas.local:3088",
+    // Where a transcript is readable, when a *browser* can reach this
+    // deployment's canvas: the canvas root, not the API address the app calls
+    // (`http://openhands:8000` resolves only inside the app's own network, and
+    // a link built from it is dead in the reader's browser). Empty would mean
+    // the id is shown but is not a link.
+    canvas_url: "http://canvas.local:3088/canvas",
     // The driver repository and its base branch: a row links to the code, so
     // the payload says where the code is rather than the view guessing a host.
     repo: "nickbrett1/data-download-drivers",

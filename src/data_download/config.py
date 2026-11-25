@@ -91,6 +91,16 @@ class Settings:
     # conversation id but cannot make it a link -- the id is still the thing that
     # finds the transcript, and inventing a URL from it would be a guess.
     openhands_url: str | None = None
+    #: Where a person's *browser* opens that canvas, if it is reachable from one.
+    #: Deliberately not `openhands_url`: that is the address this process calls
+    #: the API on, which in any containerised deployment is a container name
+    #: (`http://openhands:8000`) that resolves for the app and for nobody else.
+    #: A link built from it looks right in the payload and fails on the reader's
+    #: machine -- which is how it shipped once. This is the canvas *root*, so
+    #: `.../canvas`. `None` means the page shows the conversation id as text
+    #: rather than a link: a link to a host the reader cannot reach is worse
+    #: than no link, because it looks like the transcript is gone.
+    openhands_canvas_url: str | None = None
     #: The key file the agent server generated, as this process can see it
     #: (a mount). `None` means `openhands_agent` falls back to `docker exec`,
     #: which only a host-run deployment can do.
@@ -459,6 +469,8 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         runner=runner,
         runner_interval=runner_interval,
         openhands_url=(env.get("DATA_DOWNLOAD_OPENHANDS_URL") or "").strip() or None,
+        openhands_canvas_url=(env.get("DATA_DOWNLOAD_OPENHANDS_CANVAS_URL") or "").strip()
+        or None,
         openhands_key_file=_path(env.get("DATA_DOWNLOAD_OPENHANDS_KEY_FILE")),
         openhands_projects_dir=_path(env.get("DATA_DOWNLOAD_OPENHANDS_PROJECTS_DIR")),
         openhands_workdir=(env.get("DATA_DOWNLOAD_OPENHANDS_WORKDIR") or "").strip() or None,

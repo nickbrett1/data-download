@@ -152,12 +152,14 @@
       : "";
   }
 
-  // The authoring transcript, as a link only when the deployment named where
-  // its canvas lives: the store keeps the conversation *id*, so a URL built
-  // from a guess would be a link to a 404.
+  // The authoring transcript, as a link only when the deployment named where a
+  // *browser* opens its canvas: the store keeps the conversation *id*, so a
+  // URL built from a guess would be a link to a 404. The payload carries the
+  // canvas root, not the API address -- `http://openhands:8000` resolves
+  // inside the app's network and nowhere else.
   function transcript(ref) {
-    const base = (data?.drivers?.openhands_url ?? "").replace(/\/+$/, "");
-    return base && ref ? `${base}/canvas/conversations/${ref}` : "";
+    const canvas = (data?.drivers?.canvas_url ?? "").replace(/\/+$/, "");
+    return canvas && ref ? `${canvas}/conversations/${ref}` : "";
   }
 
   function openDriverFor(type) {
@@ -318,10 +320,14 @@
                          is one, because a hand-installed artefact has no such
                          story. -->
                     {#if impl.build}
-                      <dt>built</dt>
+                      <!-- When is the row's own micro, not repeated here: the
+                           date answers "is this the one that was just built?",
+                           which is asked while scanning, and saying it twice
+                           in one card is noise. This line is the *what*: what
+                           state the build reached, how many attempts, on which
+                           branch, and where to read it. -->
+                      <dt>build</dt>
                       <dd>
-                        {#if builtWhen(impl)}<strong>{builtWhen(impl)}</strong> ·
-                        {/if}
                         {impl.build.state}
                         {#if impl.build.attempts}
                           · attempt{impl.build.attempts === 1 ? "" : "s"}
