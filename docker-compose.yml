@@ -49,6 +49,25 @@ services:
       # plan-types page can link one. Unset means the conversation id is shown
       # and not turned into a link -- the id is still what finds it.
       DATA_DOWNLOAD_OPENHANDS_URL: ${DATA_DOWNLOAD_OPENHANDS_URL:-}
+      # The driver runtime: the container that runs driver code and owns the
+      # drivers volume. Unset means nothing can be installed, probed or run.
+      DATA_DOWNLOAD_DRIVER_RUNTIME_URL: ${DATA_DOWNLOAD_DRIVER_RUNTIME_URL:-}
+      DRIVER_RUNTIME_TOKEN: ${DRIVER_RUNTIME_TOKEN:-}
+      # Phase 7: the driver queue. The forge token is what gates, merges and
+      # fetches the tree that is installed; the agent server is what writes it.
+      DATA_DOWNLOAD_GITHUB_TOKEN: ${DATA_DOWNLOAD_GITHUB_TOKEN:-}
+      DATA_DOWNLOAD_DRIVER_REPO: ${DATA_DOWNLOAD_DRIVER_REPO:-nickbrett1/data-download-drivers}
+      DATA_DOWNLOAD_DRIVER_BASE: ${DATA_DOWNLOAD_DRIVER_BASE:-main}
+      DATA_DOWNLOAD_DRIVER_JOBS: ${DATA_DOWNLOAD_DRIVER_JOBS:-on}
+      DATA_DOWNLOAD_DRIVER_JOBS_INTERVAL: ${DATA_DOWNLOAD_DRIVER_JOBS_INTERVAL:-60}
+      # The agent's workspace and the key it generated, both mounted below. The
+      # app has no docker socket, so a shared path is the only way in.
+      DATA_DOWNLOAD_OPENHANDS_PROJECTS_DIR: ${DATA_DOWNLOAD_OPENHANDS_PROJECTS_DIR:-/projects}
+      DATA_DOWNLOAD_OPENHANDS_KEY_FILE: ${DATA_DOWNLOAD_OPENHANDS_KEY_FILE:-/run/openhands/api-key.txt}
+      DATA_DOWNLOAD_OPENHANDS_WORKDIR: ${DATA_DOWNLOAD_OPENHANDS_WORKDIR:-/projects/driver-loop}
+      DATA_DOWNLOAD_AUTHOR_TIMEOUT: ${DATA_DOWNLOAD_AUTHOR_TIMEOUT:-3600}
+      DATA_DOWNLOAD_AUTHOR_BUDGET: ${DATA_DOWNLOAD_AUTHOR_BUDGET:-2.00}
+      DATA_DOWNLOAD_AUTHOR_ITERATIONS: ${DATA_DOWNLOAD_AUTHOR_ITERATIONS:-200}
     volumes:
       # The datasets root, one folder per requested dataset. Host-side path is
       # a share, not the container's layer: a bind mount is the only way these
@@ -57,6 +76,12 @@ services:
       # data_download.runner --next` runs one request in this same container,
       # so the runner sees the store and the datasets root together.
       - ${DATA_DOWNLOAD_DATASETS_HOST_DIR:-/srv/datasets}:/datasets
+      # The agent's workspace, at the SAME path it has inside the agent: the
+      # harness writes a push credential into it and the prompt names it, so a
+      # different path here would be a credential the agent cannot read. The
+      # app does not read the drivers volume -- the runtime owns that.
+      - ${OPENHANDS_PROJECTS_HOST_DIR:-/srv/docker/openhands/projects}:/projects
+      - ${OPENHANDS_KEY_HOST_FILE:-/srv/docker/openhands/data/agent-canvas/api-key.txt}:/run/openhands/api-key.txt:ro
     labels:
       - "homepage.group=Services"
       - "homepage.name=data-download"
