@@ -442,6 +442,10 @@ def default_steps(
                 owner=(settings.openhands_agent_uid, settings.openhands_agent_gid),
                 agent_cmd=author_cmd,
                 url=str(settings.openhands_url or ""),
+                # The session key by path, because this container has no docker
+                # CLI and no socket to ask (see `driver_author.author`). Unset,
+                # the agent server answers 401 and the job says so.
+                key_file=str(settings.openhands_key_file or ""),
                 budget=author_budget,
                 iterations=author_iterations,
                 say=lambda line: log.info("driver job %s: %s", row.get("id"), line),
@@ -521,6 +525,16 @@ def steps_from_settings(
         raise LoopRefused("DATA_DOWNLOAD_GITHUB_TOKEN is unset, so the forge cannot be asked anything")
     if not settings.openhands_url:
         raise LoopRefused("DATA_DOWNLOAD_OPENHANDS_URL is unset, so no driver can be authored")
+    key_file = str(settings.openhands_key_file or "")
+    if key_file and not Path(key_file).is_file():
+        # Checked at start-up rather than at the first ticket: a mount that did
+        # not land is a deployment fault, and discovering it forty minutes into
+        # an authoring attempt costs the job and the spend. A `Path` here is
+        # this process's view, which is the only one that matters.
+        raise LoopRefused(
+            f"DATA_DOWNLOAD_OPENHANDS_KEY_FILE ({key_file}) is not a file this "
+            "container can read, so the agent server cannot be asked anything"
+        )
     return default_steps(
         repo=settings.driver_repo,
         base=settings.driver_base,

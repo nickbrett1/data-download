@@ -540,3 +540,73 @@ def test_a_pass_that_is_ending_is_not_cancelled(tmp_path):
         assert task is None
     finally:
         _run(store.close())
+
+
+def test_the_settings_name_the_key_file_the_authoring_step_hands_over(tmp_path, monkeypatch):
+    """`DATA_DOWNLOAD_OPENHANDS_KEY_FILE` is only load-bearing if it is passed.
+
+    It was set on the deployment and read by nobody: `author` called `converse`
+    without it, `converse` fell back to `docker exec`, and the app container has
+    no docker. The setting is now threaded through the authoring closure, which
+    is the only place that knows both the settings and the call.
+    """
+    from types import SimpleNamespace
+
+    seen = {}
+    monkeypatch.setattr(
+        driver_build.driver_author,
+        "author",
+        lambda ticket, **kwargs: seen.update(kwargs)
+        or {"branch": "driver/x", "commit_sha": "a" * 40},
+    )
+    settings = SimpleNamespace(
+        openhands_key_file=Path("/run/openhands/api-key.txt"),
+        openhands_workdir="/projects/driver-loop",
+        openhands_projects_dir="/projects",
+        openhands_url="http://openhands:8000",
+        openhands_agent_uid=10001,
+        openhands_agent_gid=10001,
+        driver_runtime_url="http://drivers:8831",
+        driver_runtime_token="t",
+        datasets_dir=tmp_path / "datasets",
+    )
+    steps = driver_build.default_steps(
+        repo="o/r",
+        settings=settings,
+        registry=None,
+        token="tok",
+        workdir=tmp_path,
+    )
+
+    assert steps.author({"id": "drv_1", "vendor": "Databento"})["branch"] == "driver/x"
+    assert seen["key_file"] == "/run/openhands/api-key.txt"
+    assert seen["url"] == "http://openhands:8000"
+
+
+def test_a_key_file_that_is_not_there_stops_the_worker_at_start_up(tmp_path):
+    """The mount that did not land is found at boot, not at the first ticket."""
+    from types import SimpleNamespace
+
+    given = SimpleNamespace(
+        driver_ready=True,
+        driver_runtime_token="t",
+        github_token="tok",
+        openhands_url="http://openhands:8000",
+        openhands_key_file=tmp_path / "not-mounted" / "api-key.txt",
+    )
+    with pytest.raises(driver_build.LoopRefused, match="is not a file this container can read"):
+        driver_build.steps_from_settings(given, registry=None, workdir=tmp_path)
+
+    given.openhands_key_file = tmp_path / "api-key.txt"
+    given.openhands_key_file.write_text("k")
+    given.driver_repo = "o/r"
+    given.driver_base = "main"
+    given.openhands_workdir = "/projects/driver-loop"
+    given.openhands_projects_dir = "/projects"
+    given.openhands_agent_uid = 10001
+    given.openhands_agent_gid = 10001
+    given.author_timeout = 60.0
+    given.author_budget = 1.0
+    given.author_iterations = 10
+    given.driver_runtime_url = "http://drivers:8831"
+    assert driver_build.steps_from_settings(given, registry=None, workdir=tmp_path)

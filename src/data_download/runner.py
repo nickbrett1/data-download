@@ -379,6 +379,41 @@ async def _queue_for_missing_driver(
     if driver_client.driver_for(vendor, artifacts=entries) is not None:
         return None
 
+    # A job that stopped for a human stays stopped. `needs_human` is excluded
+    # from the open-jobs unique index (so a *new* request may file a new job),
+    # which means the index alone would mint one job per pass for a request
+    # that keeps being re-approved -- the failure arrived at the docker CLI
+    # check, before any spend, but a driver that is merely wrong fails after
+    # the authoring conversation, and repeating that once a minute is not a
+    # retry, it is a bill. The stop is the row's, not this pass's: the request
+    # stays `approved` and the page says why.
+    latest = await store.driver_job_latest(vendor)
+    if latest is not None and latest.get("state") == "needs_human":
+        await store.note_driver_state(
+            request_id,
+            "needs_human",
+            detail={
+                "vendor": vendor,
+                "driver_job": latest.get("id"),
+                "error": latest.get("last_error"),
+            },
+        )
+        return RunResult(
+            request_id=request_id,
+            state=str(row.get("state")),
+            verdict=None,
+            disposition=None,
+            owner="",
+            errors={
+                "error": "driver_missing",
+                "detail": f"the last driver build for {vendor!r} stopped for a "
+                f"human: {latest.get('last_error') or 'no reason recorded'}",
+            },
+            settled=False,
+            steps=("driver_missing",),
+            refused="driver_missing",
+        )
+
     job = await store.driver_job_enqueue(
         vendor=vendor,
         plan_types=[row["plan_type"]] if row.get("plan_type") else [],
