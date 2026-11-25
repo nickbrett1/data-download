@@ -376,10 +376,15 @@ def test_renew_extends_only_the_holders_lease(client, settings):
     _run(_call(settings.db_path, "claim", request_id, "mine", lease_seconds=60))
     before = _state(settings.db_path, request_id)["lease_until"]
 
+    # Read the clock either side of the call: `renew` takes `now` from `utcnow`
+    # itself, and comparing against a clock read *after* the call fails whenever
+    # the second ticks in between. The bounds are exact when it does not.
+    started = utcnow()
     assert _run(_call(settings.db_path, "renew", request_id, "mine", lease_seconds=3600))
+    finished = utcnow()
     after = _state(settings.db_path, request_id)["lease_until"]
     assert after > before
-    assert after == shift_seconds(utcnow(), 3600)
+    assert shift_seconds(started, 3600) <= after <= shift_seconds(finished, 3600)
 
     # Anybody else is not the holder, and a heartbeat from them must not move
     # the clock -- that is the reclaim working.
