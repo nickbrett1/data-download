@@ -182,3 +182,29 @@ def test_a_missing_agent_command_is_misconfigured(monkeypatch, capsys):
     status = _run_main(monkeypatch, ["--repo", "o/r", "--agent-cmd", "  "])
     assert status == 2
     assert "MISCONFIGURED" in capsys.readouterr().err
+
+
+def test_a_credential_left_by_a_killed_run_is_cleared_but_not_a_live_one(monkeypatch):
+    # `finally` does not run on SIGKILL, so the file survives the process. The
+    # guard is age: a file younger than the authoring timeout might belong to a
+    # job still in flight, so the sweep must not touch it.
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return type("Done", (), {"returncode": 0, "stdout": "2\n", "stderr": ""})()
+
+    monkeypatch.setattr(driver_author.subprocess, "run", fake_run)
+    removed = driver_author.sweep_credentials("openhands", "/projects/driver-loop/", older_than=1800)
+
+    assert removed == 2
+    assert "-mmin" in " ".join(seen["argv"])
+    assert seen["argv"][-1] == "30"  # 1800s, in minutes, never 0
+
+
+def test_a_sweep_that_cannot_speak_docker_is_not_fatal(monkeypatch):
+    def no_docker(argv, **kwargs):
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr(driver_author.subprocess, "run", no_docker)
+    assert driver_author.sweep_credentials("openhands", "/projects", older_than=60) == 0

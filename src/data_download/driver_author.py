@@ -173,6 +173,42 @@ def remove_credential(container: str, path: str) -> None:
         pass
 
 
+def sweep_credentials(container: str, prefix: str, *, older_than: float = 0.0) -> int:
+    """Delete credentials a previous run could not, because it was killed.
+
+    `finally` does not run on SIGKILL, so the cleanup above is a promise the
+    process can break. Every run therefore starts by clearing the debris of the
+    last one.
+
+    The age guard is what keeps that from reaching into a live run: a file
+    younger than the authoring timeout may still belong to a job in flight, so
+    only stale ones go. In the loop, which runs one job at a time, that means
+    the file is cleared by the run after next rather than never.
+    """
+    where = prefix.rstrip("/") or "/"
+    minutes = max(1, int(older_than / 60))
+    script = (
+        'find "$1" -maxdepth 2 -name push-credential -mmin +"$2" '
+        "-print -delete 2>/dev/null | wc -l"
+    )
+    try:
+        done = subprocess.run(  # noqa: S603 - docker exec, an operator's own host
+            [*_container(container), "sh", "-c", script, "sh", where, str(minutes)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    if done.returncode != 0:
+        return 0
+    try:
+        return int((done.stdout or "0").strip() or 0)
+    except ValueError:
+        return 0
+
+
 def run_agent(cmd: str, prompt: str, *, timeout: float) -> str:
     """Run the authoring agent, and answer with its stdout.
 
@@ -271,6 +307,12 @@ def main(argv: list[str] | None = None) -> int:
     author_ref = ""
     try:
         if credential:
+            stale = sweep_credentials(args.container, args.workdir_prefix, older_than=args.timeout)
+            if stale:
+                print(
+                    f"driver-author: cleared {stale} credential(s) left by a killed run",
+                    file=sys.stderr,
+                )
             write_credential(args.container, credential, token)
         else:
             print(

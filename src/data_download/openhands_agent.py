@@ -194,18 +194,33 @@ def wait(
 
 
 def summarise(info: dict) -> str:
-    """The spend line, out of the stats the server keeps per conversation."""
+    """The spend line, out of the stats the server keeps per conversation.
+
+    The shape is the server's, not ours, and it is easy to guess wrong: usage
+    is keyed by *label* (`default`, `condenser`), the money is a flat
+    `accumulated_cost` on each entry, and the counts live one level down in
+    `accumulated_token_usage`. The counts in there are not all disjoint --
+    `cache_read_tokens` is a subset of `prompt_tokens`, and `reasoning_tokens`
+    a subset of `completion_tokens` -- so adding every `*_tokens` key would
+    count the same tokens twice. Prompt plus completion is the honest total;
+    `context_window` and `per_turn_token` are sizes, not spend.
+    """
     usage = ((info.get("stats") or {}).get("usage_to_metrics") or {})
+    if not isinstance(usage, dict) or not usage:
+        return "no cost recorded"
     cost = 0.0
     tokens = 0
-    for entry in usage.values() if isinstance(usage, dict) else []:
+    for entry in usage.values():
         if not isinstance(entry, dict):
             continue
-        cost += float(entry.get("cost") or 0.0)
-        counts = entry.get("tokens") or {}
+        cost += float(entry.get("accumulated_cost") or 0.0)
+        counts = entry.get("accumulated_token_usage") or {}
         if isinstance(counts, dict):
-            tokens += sum(int(value or 0) for value in counts.values())
-    if not usage:
+            for name in ("prompt_tokens", "completion_tokens"):
+                value = counts.get(name)
+                if isinstance(value, (int, float)):
+                    tokens += int(value)
+    if not cost and not tokens:
         return "no cost recorded"
     return f"${cost:.4f}, {tokens} tokens"
 

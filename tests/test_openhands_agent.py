@@ -47,21 +47,59 @@ def test_waiting_past_the_ceiling_is_a_refusal_that_names_the_state(monkeypatch)
 
 
 def test_the_spend_line_comes_out_of_the_per_llm_stats():
+    # Verbatim from GET /api/conversations/{id} after a real run: usage is
+    # keyed by label, money is `accumulated_cost`, counts are nested. The first
+    # version of this test guessed `cost`/`tokens` and so passed while the real
+    # line printed "$0.0000, 0 tokens".
     info = {
         "stats": {
             "usage_to_metrics": {
-                "deepseek": {"cost": 0.25, "tokens": {"prompt_tokens": 100, "completion_tokens": 20}},
-                "condenser": {"cost": 0.05, "tokens": {"prompt_tokens": 10}},
+                "default": {
+                    "model_name": "openai/deepseek-v4-flash",
+                    "accumulated_cost": 0.04319775600000001,
+                    "max_budget_per_task": None,
+                    "accumulated_token_usage": {
+                        "model": "openai/deepseek-v4-flash",
+                        "prompt_tokens": 3_642_482,
+                        "completion_tokens": 38_170,
+                        "cache_read_tokens": 3_578_752,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": 16_176,
+                        "context_window": 1_000_000,
+                        "per_turn_token": 99_306,
+                        "response_id": "",
+                    },
+                    "costs": [],
+                    "response_latencies": [],
+                    "token_usages": [],
+                },
+                "condenser": {
+                    "model_name": "openai/deepseek-v4-flash",
+                    "accumulated_cost": 0.0,
+                    "accumulated_token_usage": {
+                        "model": "openai/deepseek-v4-flash",
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "context_window": 0,
+                        "response_id": "",
+                    },
+                },
             }
         }
     }
     line = openhands_agent.summarise(info)
-    assert "$0.3000" in line
-    assert "130 tokens" in line
+    assert "$0.0432" in line
+    # Prompt plus completion: the cache and reasoning counts are subsets of
+    # those two, so adding every *_tokens key would double-count. Nor is the
+    # context window spend.
+    assert "3680652 tokens" in line
 
 
 def test_no_stats_is_said_rather_than_shown_as_zero():
     assert openhands_agent.summarise({}) == "no cost recorded"
+    # A server that reports the conversation without any usage is not a free
+    # conversation; it is a missing number, and saying "$0.0000" would lie.
+    assert openhands_agent.summarise({"stats": {"usage_to_metrics": {"m": {"accumulated_cost": 0.0}}}}) == "no cost recorded"
 
 
 def test_the_transcript_lives_under_the_canvas_base_path():
