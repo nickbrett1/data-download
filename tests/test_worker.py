@@ -33,7 +33,7 @@ from conftest import CODE_REF, PLAN_BODY, REPO_ROOT, TOKENS, auth, seed, served
 from data_download.app import create_app
 from data_download.config import Settings, parse_interval, parse_switch
 from data_download.db import ClaimRefused, Store, shift_seconds, utcnow
-from data_download.worker import Worker, tick
+from data_download.worker import Worker, made_progress, tick
 from fake_runtime import FakeRuntime
 
 
@@ -222,6 +222,80 @@ def test_a_pass_that_cannot_land_anything_leaves_the_row_approved(
     row = _state(settings.db_path, request_id)
     assert row["state"] == "approved"
     assert row["owner"] is None
+
+
+def test_a_row_waiting_for_a_driver_is_queued_and_left_where_it_is(
+    client, settings, wire, tmp_path
+):
+    """No driver for the vendor: a job for the authoring loop, not an attempt.
+
+    The row stays `approved` so it runs the moment the driver lands, and
+    `run_one` says `settled=False` to make that legible -- the pass did not
+    settle anything, which is what the loop reads to decide whether to spin.
+    """
+    wire.drivers = {}  # the runtime is up, and has nothing for Databento
+    request_id = _approved(client, settings)
+
+    store = Store(settings.db_path)
+    _run(store.connect())
+
+    async def pass_once():
+        try:
+            return await tick(
+                store,
+                datasets_dir=tmp_path / "datasets",
+                driver_url=wire.url,
+                driver_token=wire.token,
+            )
+        finally:
+            await store.close()
+
+    results = _run(pass_once())
+    assert [r.refused for r in results] == ["driver_missing"]
+    assert results[0].settled is False
+    assert made_progress(results) is False
+    row = _state(settings.db_path, request_id)
+    assert row["state"] == "approved"
+    assert row["owner"] is None
+    assert _run(_call(settings.db_path, "driver_jobs_open")) == 1
+
+
+def test_a_row_waiting_for_a_driver_does_not_spin_the_loop(
+    client, settings, wire, tmp_path
+):
+    """The loop sleeps while a driver is being written (§8.1's idle beat).
+
+    With the row left `approved` and a result that settles nothing, a loop that
+    treats "the pass returned something" as work re-runs the same row at full
+    speed -- measured at ~640 passes a second on the deployed container, for as
+    long as authoring takes. The idle interval is what it must fall back to.
+    """
+    wire.drivers = {}
+    _approved(client, settings)
+    driver_reads = lambda: sum(  # noqa: E731 - a counter, not a function
+        1 for method, path in wire.requests if (method, path) == ("GET", "/v1/drivers")
+    )
+
+    store = Store(settings.db_path)
+    _run(store.connect())
+
+    async def go():
+        worker = Worker(
+            store,
+            datasets_dir=tmp_path / "datasets",
+            driver_url=wire.url,
+            driver_token=wire.token,
+            interval=30.0,
+        )
+        worker.start()
+        await asyncio.sleep(0.5)
+        await worker.stop()
+        return driver_reads()
+
+    reads = _run(go())
+    # One pass, and then the loop waits on its nudge/timeout rather than
+    # asking again. Anything near the pass rate of a spin would be hundreds.
+    assert reads <= 2, f"the loop asked {reads} times in half a second"
 
 
 # -- the lease ------------------------------------------------------------
