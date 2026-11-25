@@ -416,4 +416,29 @@
   .detail.bad {
     color: var(--bad);
   }
+
+  /* Below 600px the block stacks a row with `flex-wrap`, and a wrapped line is
+     packed greedily: where a cell lands depends on how wide the text before it
+     happens to be. Two rows of the same shape then look different -- #15's
+     window sat on the second line while #12's and #14's sat top right, because
+     one quote is `$1.94` and the others are `<$0.01`. A two-column grid gives
+     every row the same three lines: what it is, then window | state, then
+     quote | filed. The padding and gap stay the block's own.
+
+     The override is here, in the consumer, because the block is a vendored copy
+     and an edit to it is drift CI has to fail on (scripts/check-nb-blocks.mjs).
+     The wrapping itself wants fixing upstream, where it is every table's bug
+     rather than this page's. */
+  @media (max-width: 600px) {
+    :global(.tbl-row:has(.req)) {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: baseline;
+    }
+
+    /* The subject is a line of its own; the other four pair up underneath it. */
+    :global(.tbl-row:has(.req) > :first-child) {
+      grid-column: 1 / -1;
+    }
+  }
 </style>
