@@ -506,20 +506,51 @@ test.describe("the request book", () => {
     expect(errors).toEqual([]);
   });
 
-  test("on a phone the header row goes and each record wraps", async ({
+  test("on a phone the header row goes and every record keeps the same shape", async ({
     page,
   }) => {
     await mock(page);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
     await expect(page.locator(".tbl-head")).toBeHidden();
+
     // Six columns on a phone is a scrollbar or a truncated id; the record wraps
-    // instead, and stays a record.
-    const display = await page
-      .locator(".tbl-row")
-      .first()
-      .evaluate((el) => getComputedStyle(el).flexWrap);
-    expect(display).toBe("wrap");
+    // instead, and stays a record. What it must also do is wrap the *same way*
+    // every time: the block stacks a row with `flex-wrap`, which packs each
+    // line greedily, so where a cell lands depends on how wide the text before
+    // it happens to be -- two rows of one shape looked different because one
+    // quote read `$1.94` and another `<$0.01`. The page lays its rows out on a
+    // two-column grid instead: the subject, then window | state, then
+    // quote | filed.
+    const shapes = await page.locator(".tbl-row").evaluateAll((rows) =>
+      rows.map((row) => {
+        const top = row.getBoundingClientRect().top;
+        const line = (selector) =>
+          Math.round(
+            row.querySelector(selector).getBoundingClientRect().top - top,
+          );
+        return {
+          subject: line(".req"),
+          window: line(".window"),
+          state: line(".state"),
+          quote: line(".quote"),
+          filed: line(".filed"),
+        };
+      }),
+    );
+
+    const [first, ...rest] = shapes;
+    for (const shape of rest) {
+      expect(Math.abs(shape.window - first.window)).toBeLessThanOrEqual(2);
+      expect(Math.abs(shape.subject - first.subject)).toBeLessThanOrEqual(2);
+    }
+    // ...and within a row, the pairs share a line, under the subject.
+    for (const shape of shapes) {
+      expect(Math.abs(shape.window - shape.state)).toBeLessThanOrEqual(3);
+      expect(Math.abs(shape.quote - shape.filed)).toBeLessThanOrEqual(2);
+      expect(shape.window - shape.subject).toBeGreaterThan(10);
+      expect(shape.quote - shape.window).toBeGreaterThan(10);
+    }
   });
 });
 
