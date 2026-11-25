@@ -368,6 +368,13 @@ gone or inverted:
   git, and the app asks the forge over HTTPS with `github_api`.
 - *The installer needed the drivers volume writable.* It no longer writes there.
 
+The other half of that rule is on the drivers side: its own `/drivers` mount
+must be **read-write**, because it is the thing that writes there. A composed
+`:ro` mount refuses every install with `install_refused`, and the symptom is
+nothing more dramatic than a merged driver that never appears in
+`GET /v1/drivers`. The reason lives beside the mount in that repository's
+`docker-compose.yml`, and in its deployment runbook.
+
 `driver_build` is still one job, walked as far as it can go, and still exits
 `--once` from the command line for a manual run. What changed is the thing that
 calls it: `driver_build.DriverWorker`, an asyncio task started by the app's
@@ -386,12 +393,20 @@ DATA_DOWNLOAD_DRIVER_REPO=nickbrett1/data-download-drivers
 DATA_DOWNLOAD_DRIVER_BASE=main
 DATA_DOWNLOAD_DRIVER_JOBS=on
 DATA_DOWNLOAD_DRIVER_JOBS_INTERVAL=60
-DATA_DOWNLOAD_OPENHANDS_URL=http://ryzen:3088
+DATA_DOWNLOAD_OPENHANDS_URL=http://openhands:8000
 DATA_DOWNLOAD_OPENHANDS_WORKDIR=/projects/driver-loop
 DATA_DOWNLOAD_AUTHOR_TIMEOUT=3600
 DATA_DOWNLOAD_AUTHOR_BUDGET=2.00
 DATA_DOWNLOAD_AUTHOR_ITERATIONS=200
 ```
+
+**The URL is a container name on the agent server's own port, and both halves
+of that matter.** The canvas publishes `8000/tcp` on the host as `3088`, so
+`http://openhands:3088` can never work from another container -- it fails with
+`ECONNREFUSED`, which reads like the agent being down. `openhands:8000` works
+because both containers are on `ai_proxy`. `http://ryzen:3088` (the host
+publish, through the LAN or the tailnet) also works, but only as long as that
+name resolves; it is the fallback, not the deployment.
 
 Plus two mounts, because the app container has **no docker CLI and no docker
 socket** -- and should not have one:
@@ -450,6 +465,31 @@ docker run --rm -v 2019ba8c…:/from -v /srv/docker/openhands/projects:/to \
 ```
 
 The app cannot see an anonymous volume, so leaving it as one means no authoring.
+
+Verified on ryzen 2026-11-25: the volume held three entries, all three were
+copied, `/projects` now reports `"Type":"bind"` with source
+`/srv/docker/openhands/projects`, and the agent's API key survived the
+recreation because it lives in the `./data` bind rather than the volume.
+
+**Two ownership facts that the deployment depends on, both load-bearing:**
+
+- the key file is `0600 10001:10001` inside a `0700` directory, so only a
+  **root** reader gets it -- which the app is, currently. Give that image a
+  `USER` and this mount stops working.
+- `/projects/driver-loop` is `0700` because it was made by the agent. It works
+  only because the app is root; a non-root app could not read the job
+  directories at all. If the app is ever dropped to a uid, that tree needs a
+  group both containers share.
+
+### The deployed compose drifts from this repository's, deliberately
+
+`/srv/docker/data-download/compose.yaml` is not a copy of `docker-compose.yml`
+and must not be synced wholesale. On 2026-11-25 it differed in six ways that
+matter: the Homepage tile (`Data & Markets`, `mdi-database-arrow-down`,
+weight 150 -- all owner-set), the `data-download-internal` network declaration,
+`mem_limit`/`mem_swap_limit`, `name:`, the `x-logging` anchor, and the header
+comments. Only the `app` service's `environment:` and `volumes:` are meant to
+track this repository; everything else is local.
 
 ### What the loop will not do
 
