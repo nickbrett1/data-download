@@ -193,6 +193,70 @@ def wait(
         time.sleep(poll)
 
 
+#: `error` is one bucket for several different problems -- a starved run, a dead
+#: credential, an exhausted vendor balance. The only place they are told apart
+#: is this event, so a refusal has to go and read it.
+ERROR_KIND = "ConversationErrorEvent"
+
+#: Error codes that mean "this ticket did not fit the limits we set", as opposed
+#: to "this deployment cannot author anything right now". The first is a job a
+#: human decides about; the second is not worth spending another job on.
+_STARVED = ("MaxIterationsReached", "MaxBudgetReached")
+
+
+def _event_list(answer: Any) -> list[dict]:
+    """The events from `/events/search`, whatever shape the server wraps them in."""
+    if isinstance(answer, list):
+        return [event for event in answer if isinstance(event, dict)]
+    if not isinstance(answer, dict):
+        return []
+    for key in ("items", "events", "data", "results"):
+        found = answer.get(key)
+        if isinstance(found, list):
+            return [event for event in found if isinstance(event, dict)]
+    return []
+
+
+def failure(conversation_id: str, *, url: str, key: str) -> dict[str, Any]:
+    """Why the server stopped this conversation, in its own words.
+
+    Returns the last `ConversationErrorEvent` as `{code, detail, user_action,
+    retryable}`, or `{}` when there is none. Spending one extra call only on a
+    conversation that already failed keeps the happy path at four calls.
+    """
+    answer = _call(
+        "GET", f"/api/conversations/{conversation_id}/events/search?limit=100", url=url, key=key
+    )
+    for event in reversed(_event_list(answer)):
+        if event.get("kind") != ERROR_KIND:
+            continue
+        classification = event.get("classification") or {}
+        return {
+            "code": str(event.get("code") or ""),
+            "detail": str(event.get("detail") or ""),
+            "user_action": str(classification.get("user_action") or ""),
+            "retryable": bool(classification.get("retryable")),
+        }
+    return {}
+
+
+def ends_badly(status: str, why: dict[str, Any]) -> tuple[str, str]:
+    """Turn a failed conversation into the sentence a human reads, and a class.
+
+    The distinction that matters operationally: a run starved of iterations or
+    budget is a ticket that did not fit, and the loop should stop and say so. A
+    dead API key or an empty vendor balance is a broken deployment, and every
+    further job would fail the same way -- so it must not be reported as "this
+    driver was refused".
+    """
+    code = str(why.get("code") or "")
+    detail = str(why.get("detail") or "")
+    said = f"{code}: {detail}" if code and detail else (code or detail)
+    if code in _STARVED or not code:
+        return ("refused", f"the conversation ended {status}" + (f" ({said})" if said else ""))
+    return ("misconfigured", f"the conversation ended {status} ({said}); the agent server needs attention")
+
+
 def summarise(info: dict) -> str:
     """The spend line, out of the stats the server keeps per conversation.
 
@@ -317,7 +381,11 @@ def main(argv: list[str] | None = None) -> int:
         if said:
             print(f"openhands: it said: {said[:2000]}", file=sys.stderr)
         if status != FINISHED:
-            raise AgentError(f"the conversation ended {status or 'without a status'}")
+            why = failure(conversation, url=args.url, key=key) if status == "error" else {}
+            kind, sentence = ends_badly(status or "without a status", why)
+            if kind == "misconfigured":
+                raise AgentConfig(sentence)
+            raise AgentError(sentence)
     except AgentConfig as exc:
         print(f"openhands: MISCONFIGURED: {exc}", file=sys.stderr)
         return 2

@@ -190,3 +190,60 @@ def test_a_full_server_is_a_wait_not_a_broken_job(monkeypatch):
         openhands_agent._call("GET", "/health", url="http://x", key="k")
     assert not isinstance(caught.value, openhands_agent.AgentConfig)
     assert "capacity" in str(caught.value)
+
+
+def _event(code, detail, user_action, retryable=False):
+    return {
+        "kind": "ConversationErrorEvent",
+        "source": "environment",
+        "code": code,
+        "detail": detail,
+        "classification": {
+            "kind": "quota",
+            "retryable": retryable,
+            "user_action": user_action,
+        },
+    }
+
+
+def test_the_error_event_is_found_whichever_way_the_list_is_wrapped(monkeypatch):
+    event = _event("MaxBudgetReached", "reached maximum budget limit ($0.0040)", "settings")
+    for answer in ({"items": [{"kind": "MessageEvent"}, event]}, {"events": [event]}, [event]):
+        monkeypatch.setattr(openhands_agent, "_call", lambda *_a, _answer=answer, **_k: _answer)
+        why = openhands_agent.failure("c", url="u", key="k")
+        assert why["code"] == "MaxBudgetReached"
+        assert why["user_action"] == "settings"
+        assert why["retryable"] is False
+
+
+def test_a_starved_run_is_a_refusal_that_names_the_reason():
+    # Verbatim from a real conversation starved of iterations.
+    why = {
+        "code": "MaxIterationsReached",
+        "detail": "Agent reached maximum iterations limit (2).",
+        "user_action": "none",
+    }
+    kind, sentence = openhands_agent.ends_badly("error", why)
+    assert kind == "refused"
+    assert "MaxIterationsReached" in sentence
+    assert "iterations limit (2)" in sentence
+
+
+def test_a_dead_credential_is_a_broken_deployment_not_a_refused_driver():
+    # `error` is one bucket for several problems. Reporting a dead key as
+    # "this driver was refused" would send a human to look at the wrong thing,
+    # and would burn a job on every subsequent ticket.
+    why = {
+        "code": "LLMAuthenticationError",
+        "detail": "Your LLM API key appears to be invalid or has expired.",
+        "user_action": "settings",
+    }
+    kind, sentence = openhands_agent.ends_badly("error", why)
+    assert kind == "misconfigured"
+    assert "LLMAuthenticationError" in sentence
+
+
+def test_a_failure_with_no_event_still_says_the_status():
+    kind, sentence = openhands_agent.ends_badly("stopped", {})
+    assert kind == "refused"
+    assert "stopped" in sentence
