@@ -365,9 +365,52 @@ def test_authoring_goes_through_a_conversation_when_there_is_no_command(tmp_path
     assert answer == {"branch": answer["branch"], "commit_sha": "b" * 40, "author_ref": "conv-77"}
     assert answer["branch"].startswith("driver-loop/zzz-")
     assert seen["url"]  # the agent server, not an empty string
+    # No key file named here, so `converse` keeps its own fallback -- an
+    # operator's host can `docker exec` the agent server, an app container
+    # cannot. A deployment names the file (the next test).
+    assert seen["key_file"] == ""
     assert "Zzz" in seen["prompt"]
     # The credential was written for the run and taken away afterwards.
     assert list(tmp_path.glob("driver-loop/*/push-credential")) == []
+
+
+def test_the_session_key_is_named_by_path_not_fetched_with_docker(tmp_path, monkeypatch):
+    """The app container has no docker CLI and no socket, by design.
+
+    Without a key file `converse` shells out to `docker exec openhands cat
+    <key>`, which in the deployed container is `[Errno 2] No such file or
+    directory: 'docker'` -- and that arrived as a `needs_human` driver job, not
+    as a 401. So the path the app can read has to be passed all the way down.
+    """
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    seen = {}
+
+    def converse(prompt, **kwargs):
+        seen.update(prompt=prompt, **kwargs)
+        return {"conversation": "conv-88", "status": "finished", "info": {}, "said": ""}
+
+    monkeypatch.setattr(driver_author.openhands_agent, "converse", converse)
+    monkeypatch.setattr(
+        driver_author.github_api,
+        "head_sha",
+        lambda repo, ref, *, token: "a" * 40 if ref == "main" else "b" * 40,
+    )
+    monkeypatch.setattr(
+        driver_author.github_api,
+        "ensure_pull_request",
+        lambda repo, *, head, base, title, body, token: {"number": 9, "created": True},
+    )
+    driver_author.author(
+        "Write a driver for the vendor 'Zzz'.\n",
+        repo="o/r",
+        token="tok",
+        projects_dir=str(tmp_path),
+        workdir_prefix=str(tmp_path / "driver-loop"),
+        key_file="/run/openhands/api-key.txt",
+        say=lambda line: None,
+    )
+
+    assert seen["key_file"] == "/run/openhands/api-key.txt"
 
 
 def test_an_authoring_conversation_that_failed_still_names_the_transcript(tmp_path, monkeypatch):

@@ -427,6 +427,7 @@ def author(
     agent_cmd: str = "",
     branch: str = "",
     url: str = "",
+    key_file: str = "",
     budget: float = openhands_agent.DEFAULT_BUDGET,
     iterations: int = openhands_agent.DEFAULT_ITERATIONS,
     now: datetime | None = None,
@@ -442,6 +443,13 @@ def author(
     `agent_cmd` empty means "talk to the agent server directly" (see
     `openhands_agent.converse`); set it to run an agent as a child process
     instead. Either way the forge is what decides whether the work happened.
+
+    `key_file` is the agent server's session key, as a path *this* process can
+    read. It has to be passed in rather than discovered: without it
+    `converse` falls back to `docker exec <container> cat <key>`, and the app
+    container has neither a docker CLI nor a socket -- which is the whole point
+    of it. That fallback is right for an operator's host and wrong here, so a
+    deployment names the file.
     """
     say = say or (lambda line: print(f"driver-author: {line}", file=sys.stderr))
     url = (
@@ -488,6 +496,7 @@ def author(
                 answer = openhands_agent.converse(
                     prompt,
                     url=url,
+                    key_file=key_file,
                     workdir=workdir,
                     budget=budget,
                     iterations=iterations,
