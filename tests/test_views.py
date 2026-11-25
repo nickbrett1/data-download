@@ -1208,3 +1208,69 @@ def test_a_run_of_identical_events_reads_as_one_line(client, db_path):
     repeats = [e for e in events if e["event"] == "driver_state"]
     assert len(repeats) == 3
     assert len({e["summary"] for e in repeats}) == 1, "identical work must group"
+
+
+def test_a_failed_event_whose_errors_are_a_mapping_still_renders(client, db_path):
+    """`errors` is a list on one path and a mapping on another, and both are live.
+
+    The page 500'd for nine of fifteen requests on the deployment because the
+    summary indexed `errors[0]` while the row held a mapping (`KeyError: 0`).
+    Every request is readable whatever shape its trail was written in -- a
+    read-model that can be taken down by its own history is worse than one that
+    says less.
+    """
+    filed = client.post("/v1/requests", json=INTENT_BODY, headers=auth()).json()
+    request_id = filed["request_id"]
+    _add_event(
+        db_path,
+        request_id,
+        "failed",
+        {"owner": "runner", "state": "failed", "errors": {"error": "driver_refused"}},
+    )
+    _add_event(
+        db_path,
+        request_id,
+        "landed",
+        {"owner": "runner", "state": "succeeded", "errors": [], "landed_sha256": "a" * 64},
+    )
+    _add_event(db_path, request_id, "released", ["not", "a", "mapping"])
+
+    response = _detail(client, request_id)
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert events[1]["summary"] == "failed — driver_refused"
+    assert events[2]["summary"].startswith("landed aaaaaaaaaaaa")
+    # A detail that is not a mapping at all is treated as empty: the line says
+    # what the event is, and that no reason was readable, rather than 500ing.
+    assert events[3]["summary"] == "released — no reason recorded"
+
+
+def test_a_summary_that_throws_costs_the_sentence_not_the_page(client, db_path, monkeypatch, caplog):
+    """The prose is a convenience; the trail is the record.
+
+    An unanticipated event shape returned 500 for the whole request page once.
+    The fix for that one shape is beside this, but the guard that matters is
+    this one: whatever `_event_summary` does, the page renders and the row is
+    still there -- under its own name, with a log line so the shape is not
+    quietly forgotten.
+    """
+    from data_download import app as app_module
+
+    filed = client.post("/v1/requests", json=INTENT_BODY, headers=auth()).json()
+    request_id = filed["request_id"]
+    _add_event(db_path, request_id, "explosive", {"anything": 1})
+
+    def boom(event, detail):
+        if event == "explosive":
+            raise KeyError(0)
+        return f"a sentence for {event}"
+
+    monkeypatch.setattr(app_module, "_event_summary", boom)
+    with caplog.at_level("WARNING", logger="data_download.app"):
+        response = _detail(client, request_id)
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert events[-1]["event"] == "explosive"
+    assert events[-1]["summary"] == "explosive"
+    assert any("no summary" in record.message for record in caplog.records)
