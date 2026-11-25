@@ -891,6 +891,27 @@ def _failure_of(raw: Any) -> dict[str, str] | None:
     return {"code": str(code), "detail": text}
 
 
+def _first_error_code(errors: Any) -> str:
+    """The first error code out of `errors`, in whatever shape it was stored.
+
+    A list is the runner's own shape; a mapping is what a refusal records, and
+    both are in the live trail. Indexing the second as if it were the first
+    raised `KeyError: 0` and took down nine of fifteen request pages on the
+    deployment -- a read-model helper must survive the shapes the store really
+    contains, not the one its writer meant.
+    """
+    if isinstance(errors, dict):
+        errors = [errors]
+    if not isinstance(errors, (list, tuple)):
+        return ""
+    for item in errors:
+        if isinstance(item, dict):
+            found = item.get("error") or item.get("code")
+            if found:
+                return str(found)
+    return ""
+
+
 def _event_summary(event: str, detail: dict[str, Any] | None) -> str:
     """What this event *is*, in words, for the one page that reads the trail.
 
@@ -901,7 +922,10 @@ def _event_summary(event: str, detail: dict[str, Any] | None) -> str:
     rather than a sentence invented for it, because a wrong summary is worse
     than a terse one.
     """
-    d = detail or {}
+    # A helper reachable from a request page must not be able to 500 that page:
+    # `detail` is JSON from an append-only table, and an older writer's shape is
+    # not something this function gets to assume away.
+    d = detail if isinstance(detail, dict) else {}
     note = str(d.get("note") or "").strip()
 
     def with_note(text: str) -> str:
@@ -932,10 +956,7 @@ def _event_summary(event: str, detail: dict[str, Any] | None) -> str:
         size = f" {sha[:12]}" if sha else ""
         if event == "landed":
             return f"landed{size}"
-        problems = d.get("errors") or []
-        first = problems[0] if problems else {}
-        code = first.get("error") or first.get("code") if isinstance(first, dict) else None
-        return f"failed — {code or d.get('state') or 'unrecorded'}"
+        return f"failed — {_first_error_code(d.get('errors')) or d.get('state') or 'unrecorded'}"
     if event == "driver_state":
         value = d.get("driver_state")
         if not value:
@@ -947,6 +968,36 @@ def _event_summary(event: str, detail: dict[str, Any] | None) -> str:
         why = str(d.get("stopped") or d.get("error") or "").strip()
         return f"driver {value}{where}" + (f" — {why[:160]}" if why else "")
     return event
+
+
+def _event_for_page(row: Any) -> dict[str, Any]:
+    """One trail row, with the sentence beside the name.
+
+    The summary is a convenience and the row is the record, so a summary that
+    throws -- a shape nobody anticipated, a key that is not a string -- must
+    cost the sentence and never the page. That is not hypothetical: an
+    `errors` that is a mapping rather than a list returned 500 for nine of
+    fifteen requests on the deployment, because the prose was computed for
+    every event inside the response. The fallback is the event's own name,
+    and it logs, so a shape worth teaching the summary about is still visible.
+    """
+    detail = json.loads(row["detail_json"]) if row["detail_json"] else None
+    try:
+        summary = _event_summary(row["event"], detail)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        log.warning("event %s: no summary (%s)", row["event"], exc)
+        summary = row["event"]
+    return {
+        "id": row["id"],
+        "ts": row["ts"],
+        "actor_kind": row["actor_kind"],
+        "event": row["event"],
+        "detail": detail,
+        # The word for it, next to the name for it. The page draws `summary`;
+        # `event` stays so a reader can still grep the trail for the machine
+        # name.
+        "summary": summary,
+    }
 
 
 def _book_row(
@@ -1994,22 +2045,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "landed_sha256": row["landed_sha256"],
                 "errors": json.loads(row["errors_json"]) if row["errors_json"] else [],
             },
-            "events": [
-                {
-                    "id": e["id"],
-                    "ts": e["ts"],
-                    "actor_kind": e["actor_kind"],
-                    "event": e["event"],
-                    "detail": json.loads(e["detail_json"]) if e["detail_json"] else None,
-                    # The word for it, next to the name for it. The page draws
-                    # `summary`; `event` stays so a reader can still grep the
-                    # trail for the machine name.
-                    "summary": _event_summary(
-                        e["event"], json.loads(e["detail_json"]) if e["detail_json"] else None
-                    ),
-                }
-                for e in events
-            ],
+            "events": [_event_for_page(e) for e in events],
         }
 
     @app.get("/ui/datasets.json")
