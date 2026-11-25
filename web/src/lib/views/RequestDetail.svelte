@@ -257,6 +257,40 @@
     return event.detail?.[field] ?? "";
   }
 
+  // The trail, as lines a person can read. Two transformations, both the
+  // page's: the store's machine name becomes the sentence beside it (built by
+  // the read-model, so the view never guesses what a payload means), and
+  // *consecutive identical* events become one line with a count. Non-adjacent
+  // repeats stay separate, because "waiting, then something else, then waiting
+  // again" is a different story from one long wait.
+  const trail = $derived.by(() => {
+    const out = [];
+    for (const event of data?.events ?? []) {
+      const summary = event.summary || event.event;
+      // What makes two events *the same line*: what happened and what it said.
+      // The row's own key cannot double as that, because it carries the id --
+      // which is unique per event and so would never group anything.
+      const group = `${event.event}\u0000${summary}`;
+      const last = out.at(-1);
+      if (last && last.group === group) {
+        last.count += 1;
+        last.last = event.ts;
+        continue;
+      }
+      out.push({
+        key: `${group}\u0000${event.id}`,
+        group,
+        name: event.event,
+        ts: event.ts,
+        last: event.ts,
+        count: 1,
+        summary,
+        who: who(event),
+      });
+    }
+    return out;
+  });
+
   const rawBody = $derived.by(() => {
     if (!data) return "";
     const body =
@@ -496,13 +530,22 @@
 
       <section class="block">
         <p class="micro">events</p>
+        <!-- Reads as a story, not a dump. Each line is the *word* for what
+             happened (the store's name for it stays in `title`), and identical
+             consecutive events collapse into one line with a count: a request
+             that waited on a driver used to print the same event twenty times,
+             which made a real trail look like a fault. -->
         <ol class="events">
-          {#each data.events as event (event.id)}
-            <li>
-              <span class="when">{event.ts}</span>
-              <span class="what">{event.event}</span>
-              {#if who(event)}
-                <span class="who">{who(event)}</span>
+          {#each trail as item (item.key)}
+            <li title={item.name}>
+              <span class="when">{filed(item.ts)}</span>
+              <span class="what">{item.summary}</span>
+              {#if item.count > 1}
+                <span class="who" title="last at {item.last}"
+                  >×{item.count}</span
+                >
+              {:else if item.who}
+                <span class="who">{item.who}</span>
               {/if}
             </li>
           {/each}

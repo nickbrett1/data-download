@@ -1721,11 +1721,30 @@ class Store:
         while a driver is being written, and moving it to a pseudo-state would
         make every query that asks "what is waiting on me" need to know about
         the loop.
+
+        **A state that has not changed is not news and writes no event**, the
+        same rule `approve` follows for a second approval. The caller is a loop
+        that asks once a pass, so without this a request waiting on a driver
+        that stopped for a human accumulated one `driver_state` event a minute
+        for as long as it waited -- twenty lines of the same word, which is
+        indistinguishable from a bug and buries the moment the state actually
+        moved. `updated_at` is left alone for the same reason: it is the row's
+        last real change, not the last time somebody looked at it.
         """
         ts = now or utcnow()
+        payload = {"driver_state": value, **(detail or {})}
         async with self._write_lock:
             await self.conn.execute("BEGIN IMMEDIATE")
             try:
+                async with self.conn.execute(
+                    "SELECT detail_json FROM events WHERE request_id = ? "
+                    "AND event = 'driver_state' ORDER BY ts DESC, id DESC LIMIT 1",
+                    (request_id,),
+                ) as cur:
+                    last = await cur.fetchone()
+                if last is not None and last["detail_json"] == canonical_json(payload):
+                    await self.conn.execute("ROLLBACK")
+                    return
                 await self.conn.execute(
                     "UPDATE requests SET driver_state = ?, updated_at = ? WHERE id = ?",
                     (value, ts, request_id),
@@ -1735,7 +1754,7 @@ class Store:
                     ts,
                     "system",
                     "driver_state",
-                    {"driver_state": value, **(detail or {})},
+                    payload,
                 )
                 await self.conn.execute("COMMIT")
             except Exception:

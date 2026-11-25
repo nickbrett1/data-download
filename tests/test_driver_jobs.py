@@ -131,3 +131,49 @@ def test_the_datasets_page_counts_open_driver_jobs(client, settings):
         assert body["totals"]["driver_jobs_open"] == 1
     finally:
         _run(store.close())
+
+
+def test_a_driver_state_that_did_not_change_writes_no_second_event(tmp_path):
+    """The loop asks once a pass; the trail must not answer once a pass.
+
+    A request waiting on a driver that stopped for a human had `note_driver_state`
+    called on every pass -- so the page drew twenty identical `driver_state`
+    lines, one a minute, and the moment the state actually moved was buried
+    among them. The store's own rule for a repeated approval ("one approval is
+    one row or the audit trail is not an audit trail") applies here: an
+    unchanged state writes nothing, and does not move `updated_at` either,
+    which is the row's last real change rather than the last time it was looked
+    at.
+    """
+    store = _store(tmp_path)
+    try:
+        seed(tmp_path / "queue.db", [{"id": "req_waiting", "state": "approved"}])
+        detail = {"vendor": "Databento", "error": "the agent never pushed"}
+
+        _run(store.note_driver_state("req_waiting", "needs_human", detail=detail))
+        first = _run(store.events_for("req_waiting"))
+        stamped = _run(store.get_request("req_waiting"))["updated_at"]
+
+        # Three more passes over the same row, same answer, later clock.
+        for _ in range(3):
+            _run(
+                store.note_driver_state(
+                    "req_waiting", "needs_human", detail=detail, now="2026-11-25T23:59:59Z"
+                )
+            )
+
+        assert len(_run(store.events_for("req_waiting"))) == 1
+        assert len(first) == 1
+        assert _run(store.get_request("req_waiting"))["updated_at"] == stamped
+
+        # A *different* reason is news, even at the same state: the stop moved.
+        _run(
+            store.note_driver_state(
+                "req_waiting", "needs_human", detail={"vendor": "Databento", "error": "a bill"}
+            )
+        )
+        events = _run(store.events_for("req_waiting"))
+        assert len(events) == 2
+        assert json.loads(events[-1]["detail_json"])["error"] == "a bill"
+    finally:
+        _run(store.close())

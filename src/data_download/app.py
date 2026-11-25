@@ -891,6 +891,64 @@ def _failure_of(raw: Any) -> dict[str, str] | None:
     return {"code": str(code), "detail": text}
 
 
+def _event_summary(event: str, detail: dict[str, Any] | None) -> str:
+    """What this event *is*, in words, for the one page that reads the trail.
+
+    The stored `event` is a machine name and its detail is a payload; neither
+    says what happened. Left raw, a request that waited on a driver rendered as
+    twenty lines of the word "driver_state" -- true, unreadable, and the reason
+    a reader concludes the trail is noise. An unknown kind still shows its name
+    rather than a sentence invented for it, because a wrong summary is worse
+    than a terse one.
+    """
+    d = detail or {}
+    note = str(d.get("note") or "").strip()
+
+    def with_note(text: str) -> str:
+        return f"{text} — {note}" if note else text
+
+    if event == "submitted":
+        kind = d.get("body_kind") or "plan"
+        back = f" (retry of {d['retried_from']})" if d.get("retried_from") else ""
+        return f"filed as {'an intent' if kind == 'intent' else 'a plan'}{back}"
+    if event == "approved":
+        return with_note(f"approved by {d.get('actor') or 'someone'}")
+    if event == "cancelled":
+        was = d.get("was")
+        why = " (nothing could have run it)" if d.get("unbindable") else ""
+        return with_note(f"cancelled from {was or 'an earlier state'}{why}")
+    if event in ("archived", "restored"):
+        return with_note(f"{event} by {d.get('actor') or 'someone'}")
+    if event == "escalated":
+        return with_note(f"a new plan asked for (was {d.get('match_verdict') or 'unmatched'})")
+    if event == "rematched":
+        return f"verdict {d.get('from_verdict') or '—'} → {d.get('to_verdict') or '—'}"
+    if event == "claimed":
+        return f"claimed by {str(d.get('owner') or '').split('@')[0] or 'a runner'}"
+    if event == "released":
+        return f"released — {d.get('reason') or 'no reason recorded'}"
+    if event in ("landed", "failed"):
+        sha = str(d.get("landed_sha256") or "")
+        size = f" {sha[:12]}" if sha else ""
+        if event == "landed":
+            return f"landed{size}"
+        problems = d.get("errors") or []
+        first = problems[0] if problems else {}
+        code = first.get("error") or first.get("code") if isinstance(first, dict) else None
+        return f"failed — {code or d.get('state') or 'unrecorded'}"
+    if event == "driver_state":
+        value = d.get("driver_state")
+        if not value:
+            return "driver state cleared — the code this needed is ready"
+        vendor = d.get("vendor")
+        where = f" ({vendor})" if vendor else ""
+        # The stop reason is the whole point of the event: `stopped` from the
+        # driver loop, `error` from the request runner's own check.
+        why = str(d.get("stopped") or d.get("error") or "").strip()
+        return f"driver {value}{where}" + (f" — {why[:160]}" if why else "")
+    return event
+
+
 def _book_row(
     row: dict[str, Any],
     registry: Registry,
@@ -1943,6 +2001,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "actor_kind": e["actor_kind"],
                     "event": e["event"],
                     "detail": json.loads(e["detail_json"]) if e["detail_json"] else None,
+                    # The word for it, next to the name for it. The page draws
+                    # `summary`; `event` stays so a reader can still grep the
+                    # trail for the machine name.
+                    "summary": _event_summary(
+                        e["event"], json.loads(e["detail_json"]) if e["detail_json"] else None
+                    ),
                 }
                 for e in events
             ],
