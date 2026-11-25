@@ -549,8 +549,11 @@ test.describe("plan types", () => {
     await expect(first.locator(".driver-row")).toHaveCount(1);
     await expect(first.locator(".vendor")).toHaveText(["Databento"]);
     await expect(first.locator(".impl-on")).toHaveText(["databento v1"]);
+    // Codes *and* when the driver was built: the count says how much the
+    // driver claims to answer, the date says whether it is the one that was
+    // just built. `filed` renders it in the reader's own timezone.
     await expect(first.locator(".driver-line .micro")).toHaveText([
-      "3 dataset codes",
+      "3 dataset codes · built 24 Nov 16:37",
     ]);
     // Nothing is drawn beside the heading but the version: a status there
     // reads as an attribute of the name, which is how "market_data_window v1
@@ -576,6 +579,21 @@ test.describe("plan types", () => {
     // artefact restated -- its name and version are the row's pill, the
     // protocol number can only ever read 1 (a mismatch refuses discovery) and
     // an install date said when a file was copied, not what the driver does.
+    // Where the code is: the artefact's directory in the driver repo, pinned
+    // to the commit that was installed. A version number in the pill says
+    // which artefact is running and nothing about where to read it.
+    const code = first
+      .locator(".driver-detail a.ref")
+      .filter({ hasText: "drivers/databento/1/" });
+    await expect(code).toHaveText("drivers/databento/1/");
+    await expect(code).toHaveAttribute(
+      "href",
+      "https://github.com/nickbrett1/data-download-drivers/tree/9f28f7583a9b233802aa6d32df4b4dc6a563b1c7/drivers/databento/1",
+    );
+    await expect(first.locator(".driver-detail")).toContainText(
+      "built 24 Nov 16:37",
+    );
+
     const detail = await first.locator(".driver-detail").innerText();
     expect(detail).not.toMatch(/protocol/);
     expect(detail).not.toContain("databento v1");
@@ -676,7 +694,11 @@ test.describe("plan types", () => {
     // The transcript is the other half of that provenance: the branch says what
     // was written, the conversation says who wrote it and what it cost. Linked
     // only because this deployment names its canvas.
-    const transcript = detail.locator("a.ref");
+    // By name: the detail also links to the code, so `a.ref` alone now
+    // matches two links.
+    const transcript = detail
+      .locator("a.ref")
+      .filter({ hasText: "transcript" });
     await expect(transcript).toHaveText("transcript");
     await expect(transcript).toHaveAttribute(
       "href",
