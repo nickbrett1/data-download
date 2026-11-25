@@ -39,9 +39,21 @@ GLBX = {
     "fetched_at": "2026-11-23T03:00:00Z",
 }
 
+# The day the fixture was fetched, pinned rather than read from the clock.
+# `entry` decides "now" by comparing the range end with the day of the fetch, so
+# a fixture that lets `entry` default to `datetime.now` stops saying "now" the
+# moment its range end is two days old. That is not a bug in the code -- it is
+# what the code is for -- but an unpinned fixture ages into a red build, which
+# is how this test failed on 2026-11-25 for a change that never touched it.
+FETCHED = "2026-11-23T03:00:00Z"
+
+
+def _entry(answer=None):
+    return catalogue.entry("Databento", GLBX if answer is None else answer, fetched_at=FETCHED)
+
 
 def test_a_driver_answer_becomes_days_and_a_name():
-    answer = catalogue.entry("Databento", GLBX, fetched_at="2026-11-23T03:00:00Z")
+    answer = _entry()
     assert answer["described"] is True
     assert answer["label"] == "CME Globex MDP 3.0"
     assert answer["available_from"] == "2010-06-06"
@@ -73,7 +85,7 @@ def test_a_row_round_trips_without_inventing_a_description(settings):
         store = Store(str(settings.db_path))
         await store.connect()
         try:
-            answer = catalogue.entry("Databento", GLBX)
+            answer = _entry()
             await store.catalogue_put(catalogue.row_of(answer))
             rows = await store.catalogue_get([("Databento", "GLBX.MDP3")])
             assert len(rows) == 1
@@ -214,7 +226,7 @@ def _seed_glbx(db_path, state="approved", request_id="seed_glbx"):
 
 def test_the_book_row_names_the_dataset(client, settings):
     request_id = _seed_glbx(settings.db_path)
-    _run(_put_catalogue(settings.db_path, catalogue.entry("Databento", GLBX)))
+    _run(_put_catalogue(settings.db_path, _entry()))
 
     book = client.get("/ui/dashboard.json").json()
     row = next(r for r in book["rows"] if r["id"] == request_id)
@@ -229,7 +241,7 @@ def test_the_book_row_names_the_dataset(client, settings):
 
 def test_the_datasets_page_heads_each_group_with_the_name(client, settings, tmp_path):
     _seed_glbx(settings.db_path, state="running")
-    _run(_put_catalogue(settings.db_path, catalogue.entry("Databento", GLBX)))
+    _run(_put_catalogue(settings.db_path, _entry()))
 
     # The page needs a root to look at; the group is built from the row either
     # way, and the description is the part under test.
@@ -343,7 +355,7 @@ def test_a_cold_stale_or_undescribed_cache_never_refuses():
 
 
 def test_submit_refuses_a_schema_the_catalogue_does_not_carry(client, settings):
-    _run(_put_catalogue(settings.db_path, catalogue.entry("Databento", GLBX_ANSWER)))
+    _run(_put_catalogue(settings.db_path, _entry(GLBX_ANSWER)))
     body = dict(PLAN_BODY, params=dict(PLAN_BODY["params"], schema="mbo"))
 
     refused = client.post("/v1/requests", json=body, headers=auth())
@@ -357,7 +369,7 @@ def test_submit_refuses_a_schema_the_catalogue_does_not_carry(client, settings):
 
 
 def test_submit_refuses_a_window_before_the_data_starts(client, settings):
-    _run(_put_catalogue(settings.db_path, catalogue.entry("Databento", GLBX_ANSWER)))
+    _run(_put_catalogue(settings.db_path, _entry(GLBX_ANSWER)))
     body = dict(PLAN_BODY, params=dict(PLAN_BODY["params"], start="2009-01-01"))
 
     refused = client.post("/v1/requests", json=body, headers=auth())
