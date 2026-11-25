@@ -389,11 +389,22 @@ def _implementations(
                 # back.
                 "build": (builds or {}).get(_norm(seller)),
                 # A driver is an artefact with a version, so the page can say
-                # *which* implementation. Nothing else about the artefact: the
-                # protocol is checked (and refused) on discovery, so it cannot
-                # differ here, and the install time is a clock, not an ordering.
+                # *which* implementation -- and where the code for it lives in
+                # the driver repo. `path` is that repository's own layout
+                # (`drivers/<name>/<version>/`, the directory the manifest is
+                # validated against at install), stated here so the page does
+                # not have to guess it, and so a change of layout is one place.
+                # Nothing else about the artefact: the protocol is checked (and
+                # refused) on discovery, so it cannot differ here, and the
+                # install time is a placeholder midnight, not an ordering.
                 "driver": (
-                    {"name": found.driver, "version": found.version} if found else None
+                    {
+                        "name": found.driver,
+                        "version": found.version,
+                        "path": f"drivers/{found.driver}/{found.version}",
+                    }
+                    if found
+                    else None
                 ),
                 "installed": found is not None,
             }
@@ -2025,6 +2036,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # a canvas. The build carries the conversation *id*; turning it
                 # into a link is the view's job, from this one setting.
                 "openhands_url": settings.openhands_url or "",
+                # The driver repository, so a row can link to the code that
+                # answers it. The forge host is assumed rather than configured:
+                # every other write here goes through `github_api`, which knows
+                # only github.com, so a second setting would be a lie about
+                # what the deployment supports. The base branch is real (the
+                # pipeline merges into it) and is the fallback ref when a build
+                # recorded no commit.
+                "repo": settings.driver_repo or "",
+                "base": settings.driver_base or "",
                 # The browse list: every artefact, joined to the types it can
                 # answer. Separate from `types[].implementations` because an
                 # artefact may answer no type at all, and a reader browsing

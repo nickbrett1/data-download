@@ -381,9 +381,15 @@ def test_an_installed_driver_is_shown_as_the_implementation(client, monkeypatch)
     assert body["drivers"]["count"] == 1
     row = body["types"][0]["implementations"][0]
     assert row["vendor"] == "Databento"
-    # Name and version only: the protocol cannot differ here (discovery
-    # refuses on mismatch) and the install time is not the page's question.
-    assert row["driver"] == {"name": "databento", "version": "1"}
+    # Name, version and where the code lives: the protocol cannot differ here
+    # (discovery refuses on mismatch) and the install time is not the page's
+    # question. `path` is the driver repo's own layout, so the row can link to
+    # the code without the view inventing a directory scheme.
+    assert row["driver"] == {
+        "name": "databento",
+        "version": "1",
+        "path": "drivers/databento/1",
+    }
     assert row["installed"] is True
     assert body["types"][0]["installed_count"] == 1
     # The browse list the page filters: every artefact, and the types its
@@ -1044,3 +1050,54 @@ def test_the_runners_own_shape_becomes_a_code_and_a_sentence(client, db_path):
         "code": "verify_shortfall",
         "detail": "(+1 more on the row)",
     }
+
+
+def test_a_driver_row_names_the_repo_its_code_is_in(client, monkeypatch):
+    """The page links to the code, so it needs the repo and the base branch.
+
+    Both are the deployment's facts, and both are settings that already existed
+    for the pipeline. A view that guessed `github.com/nickbrett1/...` would be
+    right for exactly one deployment and silently wrong for the next.
+    """
+    body = client.get("/ui/plan-types.json").json()
+    assert body["drivers"]["repo"] == "nickbrett1/data-download-drivers"
+    assert body["drivers"]["base"] == "main"
+
+
+def test_a_build_says_when_it_finished(client, db_path, monkeypatch):
+    """`built 25 Nov 20:08` needs a timestamp, and the job row is the only one.
+
+    The manifest's `installed_at` is a date-only placeholder, so "when was this
+    driver built" has to come from the job that built it: `updated_at` is the
+    moment the loop last moved the row, which for an `installed` job is the
+    install itself.
+    """
+    from data_download import app as app_module
+
+    monkeypatch.setattr(app_module, "_driver_artifacts", lambda _settings: ([], ""))
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO driver_jobs (id, vendor, state, attempts, branch, "
+            "commit_sha, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "drv_3",
+                "Databento",
+                "installed",
+                1,
+                "driver-loop/databento-1",
+                "b" * 40,
+                "2026-11-25T19:48:36Z",
+                "2026-11-25T20:08:40Z",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    build = client.get("/ui/plan-types.json").json()["types"][0]["implementations"][0][
+        "build"
+    ]
+    assert build["state"] == "installed"
+    assert build["updated_at"] == "2026-11-25T20:08:40Z"
+    assert build["commit"] == "b" * 40

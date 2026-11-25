@@ -33,6 +33,7 @@
   import DataTable from "$lib/components/nb/DataTable.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import { getView } from "$lib/api";
+  import { filed } from "$lib/format";
 
   let data = $state(null);
   let failure = $state("");
@@ -111,6 +112,44 @@
         : "stopped";
     }
     return "";
+  }
+
+  // When the driver that is installed was built. The artefact's own
+  // `installed_at` is a date-only placeholder, so this comes from the job that
+  // built it: `updated_at` on an `installed` row is the install itself. A row
+  // with no build (an artefact put there by hand) has no answer, and says
+  // nothing rather than "unknown".
+  function builtWhen(impl) {
+    const stamp = impl.build?.updated_at || impl.build?.created_at;
+    return impl.driver && stamp ? filed(stamp) : "";
+  }
+
+  // The micro on a row that has a driver: how much it claims to answer, and
+  // when that code was built. Both, not one instead of the other -- the count
+  // says what the driver covers, the date says whether it is the one that was
+  // just built, which the pill's version number alone cannot answer while
+  // scanning. One string rather than two template nodes, because Svelte trims
+  // the whitespace between `{#if}` blocks and the row would otherwise read
+  // "codes· built ...".
+  function coverageNote(impl) {
+    const count = impl.datasets.length;
+    const codes = `${count} dataset ${count === 1 ? "code" : "codes"}`;
+    const built = builtWhen(impl);
+    return built ? `${codes} · built ${built}` : codes;
+  }
+
+  // Where the code for an installed driver is. Three deployment facts, kept in
+  // the payload rather than typed here: the repository, its base branch (the
+  // ref to fall back on when a build recorded no commit) and the artefact's
+  // path inside it. No build, no commit, no link -- the page must not invent a
+  // ref, and a hand-installed artefact genuinely has no commit to point at.
+  function codeHref(impl) {
+    const repo = data?.drivers?.repo ?? "";
+    const path = impl.driver?.path ?? "";
+    const ref = impl.build?.commit || data?.drivers?.base || "";
+    return repo && path && ref
+      ? `https://github.com/${repo}/tree/${ref}/${path}`
+      : "";
   }
 
   // The authoring transcript, as a link only when the deployment named where
@@ -219,10 +258,9 @@
                       >{buildNote(impl)}</span
                     >
                   {:else}
-                    <span class="micro"
-                      >{impl.datasets.length} dataset
-                      {impl.datasets.length === 1 ? "code" : "codes"}</span
-                    >
+                    <!-- Codes first, then when the code was written: see
+                         `coverageNote`. -->
+                    <span class="micro">{coverageNote(impl)}</span>
                   {/if}
                   {#if impl.driver}
                     <span class="chev" aria-hidden="true"
@@ -233,9 +271,8 @@
                 {#if open}
                   <!-- The match as a rule rather than as prose: this vendor,
                        and one of these dataset codes. Nothing else: the name
-                       and version are already the row's pill, protocol can
-                       only be 1 here (a mismatch refuses discovery outright),
-                       and the install date is a clock, not an ordering. -->
+                       and version are already the row's pill, and protocol can
+                       only be 1 here (a mismatch refuses discovery outright). -->
                   <dl class="driver-detail">
                     <dt>matches</dt>
                     <dd>
@@ -249,15 +286,42 @@
                         · any dataset
                       {/if}
                     </dd>
+                    <!-- Where the code is. A version number is not a
+                         destination: `databento v2` in the pill says which
+                         artefact is running and nothing about where to read
+                         it, so the row links to the directory in the driver
+                         repo, pinned to the commit that was installed. -->
+                    <dt>code</dt>
+                    <dd>
+                      {#if codeHref(impl)}
+                        <a
+                          class="ref"
+                          href={codeHref(impl)}
+                          target="_blank"
+                          rel="noreferrer">{impl.driver.path}/</a
+                        >
+                        {#if impl.build?.commit}
+                          at <code>{impl.build.commit.slice(0, 7)}</code>
+                        {:else}
+                          on <code>{data.drivers.base || "main"}</code>
+                        {/if}
+                      {:else}
+                        <span class="muted"
+                          >no repository recorded for this artefact</span
+                        >
+                      {/if}
+                    </dd>
                     <!-- The authoring request behind this row. It is the one
                          thing on the page that has an *origin*: a driver is not
-                         a fact of nature, it was written, and the branch and
-                         commit are where that work can be read. Shown only when
-                         there is one, because a hand-installed artefact has no
-                         such story. -->
+                         a fact of nature, it was written, and when, by whom and
+                         on what branch are what say so. Shown only when there
+                         is one, because a hand-installed artefact has no such
+                         story. -->
                     {#if impl.build}
                       <dt>built</dt>
                       <dd>
+                        {#if builtWhen(impl)}<strong>{builtWhen(impl)}</strong> ·
+                        {/if}
                         {impl.build.state}
                         {#if impl.build.attempts}
                           · attempt{impl.build.attempts === 1 ? "" : "s"}

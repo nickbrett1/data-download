@@ -214,6 +214,10 @@ export const planTypes = {
     // Where a transcript is readable, when this deployment has a canvas. Empty
     // would mean the id is shown but is not a link.
     openhands_url: "http://canvas.local:3088",
+    // The driver repository and its base branch: a row links to the code, so
+    // the payload says where the code is rather than the view guessing a host.
+    repo: "nickbrett1/data-download-drivers",
+    base: "main",
     // The browse list: every artefact, joined to the types it answers. `stub`
     // answers nothing, which is a state the page has to draw rather than hide.
     installed: [
@@ -245,7 +249,13 @@ export const planTypes = {
         {
           vendor: "Databento",
           datasets: ["*.ITCH", "*.MDP3", "EQUS.*"],
-          driver: { name: "databento", version: "1" },
+          driver: {
+            name: "databento",
+            version: "1",
+            // The artefact's directory in the driver repo, which is where a
+            // reader goes to see the code.
+            path: "drivers/databento/1",
+          },
           // The authoring request that produced it: the loop's record of what
           // was asked for, which is a different fact from what is installed.
           build: {
