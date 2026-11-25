@@ -260,6 +260,55 @@ def test_a_row_waiting_for_a_driver_is_queued_and_left_where_it_is(
     assert _run(_call(settings.db_path, "driver_jobs_open")) == 1
 
 
+def test_a_job_that_stopped_for_a_human_is_not_queued_a_second_time(
+    client, settings, wire, tmp_path
+):
+    """`needs_human` is a stop, so the next pass must not mint another job.
+
+    The open-jobs index excludes `needs_human` on purpose (a *new* request may
+    file a new job), which means the index alone allowed one fresh job per pass
+    for a request that keeps being re-approved. On the deployment that was a
+    job a minute, each dying before any spend -- but a driver that is merely
+    wrong fails *after* the authoring conversation, and a job a minute is then
+    a bill rather than a retry.
+    """
+    wire.drivers = {}
+    request_id = _approved(client, settings)
+
+    store = Store(settings.db_path)
+    _run(store.connect())
+
+    async def go():
+        try:
+            first = await tick(
+                store,
+                datasets_dir=tmp_path / "datasets",
+                driver_url=wire.url,
+                driver_token=wire.token,
+            )
+            job = await store.driver_job_latest("Databento")
+            await store.driver_job_update(
+                job["id"], state="needs_human", last_error="the agent never pushed"
+            )
+            second = await tick(
+                store,
+                datasets_dir=tmp_path / "datasets",
+                driver_url=wire.url,
+                driver_token=wire.token,
+            )
+            return first, second, await store.driver_job_list()
+        finally:
+            await store.close()
+
+    first, second, jobs = _run(go())
+    assert [r.refused for r in first] == ["driver_missing"]
+    assert len(jobs) == 1, "a stopped job must not be replaced by a new one"
+    assert second[0].settled is False
+    assert "stopped for a human" in second[0].errors["detail"]
+    assert "the agent never pushed" in second[0].errors["detail"]
+    assert _state(settings.db_path, request_id)["driver_state"] == "needs_human"
+
+
 def test_a_row_waiting_for_a_driver_does_not_spin_the_loop(
     client, settings, wire, tmp_path
 ):

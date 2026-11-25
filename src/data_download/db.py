@@ -1643,6 +1643,26 @@ class Store:
         ) as cur:
             return [dict(row) for row in await cur.fetchall()]
 
+    async def driver_job_latest(self, vendor: str) -> dict[str, Any] | None:
+        """The newest job for `vendor`, whatever state it ended in.
+
+        The runner asks this before it queues another one, because `needs_human`
+        is a **stop** and the partial unique index cannot say so: it excludes
+        `needs_human`, which is right for "another request may file a new job"
+        and wrong for "the same request notices its job stopped". Without this
+        read, every pass over one waiting request minted a new job and the
+        worker worked it, so a driver that could not be written was attempted
+        once a minute -- and would have been authored, and paid for, once a
+        minute, had the failure been past the pre-flight checks.
+        """
+        async with self.conn.execute(
+            f"{self._DRIVER_JOB_SELECT} WHERE j.vendor = ? "
+            "ORDER BY j.created_at DESC, j.id DESC LIMIT 1",
+            (vendor,),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
     async def driver_jobs_open(self) -> int:
         """How many jobs are still being worked on.
 
