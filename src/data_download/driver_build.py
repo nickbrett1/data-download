@@ -13,10 +13,11 @@ The states are the phase order's, and each transition is a step that can refuse:
 Five properties worth stating, because each is a thing this is *not*:
 
 1. **It does not write the driver.** `author` is a callable and the default one
-   is an external command (`--author-cmd`): the ticket arrives on stdin as JSON,
-   the answer on stdout as `{"branch": ..., "commit_sha": ...}`. That is the
-   harness seam, and keeping it a process contract means the loop does not
-   acquire an opinion about which agent authored the code.
+   is an external command (`--author-cmd`): the ticket arrives on stdin as plain
+   text, the answer on stdout as `{"branch": ..., "commit_sha": ...}`. That is
+   the harness seam, and keeping it a process contract means the loop does not
+   acquire an opinion about which agent authored the code -- goose, an OpenHands
+   conversation, or a person are all one variable.
 2. **It does not trust its own gate.** `gate` asks GitHub for the commit's check
    runs and refuses on anything not green. The probe after it is the part CI
    cannot give: a real vendor call.
@@ -322,8 +323,6 @@ def _ticket(row: dict[str, Any]) -> str:
             "verify. Look at drivers/stub/ and drivers/databento/ for the shape.",
             "Add tests under tests/fixtures/ or beside the driver. Do not modify",
             "src/ or tests/ outside tests/fixtures/.",
-            "",
-            "Reply with JSON only: {\"branch\": \"<branch>\", \"commit_sha\": \"<sha>\"}",
         ]
     )
 
@@ -461,6 +460,9 @@ async def run_once(
                 row["id"],
                 branch=str(authored["branch"]),
                 commit_sha=str(authored["commit_sha"]),
+                # Provenance, not a decision: the harness may be a plain shell
+                # agent with no transcript, and the loop must not care.
+                author_ref=str(authored.get("author_ref") or "") or None,
                 now=now,
             ) or row
         gate = steps.gate(row)

@@ -475,6 +475,63 @@ def test_a_vendor_with_a_driver_being_built_says_so(client, db_path, monkeypatch
     assert row["build"]["open"] is True
 
 
+def test_a_build_carries_the_transcript_that_wrote_it(client, db_path, monkeypatch):
+    """Who wrote this driver, and where the record of that is.
+
+    The conversation id is stored rather than a URL: which host serves the canvas
+    is the deployment's fact (`DATA_DOWNLOAD_OPENHANDS_URL`), so the payload says
+    the id and the base separately and the view joins them.
+    """
+    from data_download import app as app_module
+
+    monkeypatch.setattr(app_module, "_driver_artifacts", lambda _settings: ([], ""))
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO driver_jobs (id, vendor, state, attempts, branch, "
+            "commit_sha, author_ref, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                "drv_2",
+                "Databento",
+                "installed",
+                1,
+                "driver-loop/databento-1",
+                "a" * 40,
+                "conv-9",
+                iso(),
+                iso(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    body = client.get("/ui/plan-types.json").json()
+    build = body["types"][0]["implementations"][0]["build"]
+    assert build["author_ref"] == "conv-9"
+    # Without a configured canvas the id is still the fact; the view must not
+    # invent a link from it.
+    assert body["drivers"]["openhands_url"] == ""
+
+
+def test_the_canvas_url_comes_from_the_deployment(settings, monkeypatch):
+    """The deployment names its canvas; the store never does."""
+    import dataclasses
+
+    from fastapi.testclient import TestClient
+
+    from data_download import app as app_module
+
+    monkeypatch.setattr(app_module, "_driver_artifacts", lambda _settings: ([], ""))
+    app = app_module.create_app(
+        dataclasses.replace(settings, openhands_url="http://canvas.local:3088")
+    )
+    with TestClient(app, client=("127.0.0.1", 51234)) as page:
+        body = page.get("/ui/plan-types.json").json()
+    assert body["drivers"]["openhands_url"] == "http://canvas.local:3088"
+
+
 def test_the_view_models_ask_for_no_credential(client, db_path):
     """The read-model is public, and that is a decision rather than an omission.
 

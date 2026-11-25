@@ -45,6 +45,10 @@ services:
       # guessing), which is the right default for a host that has not decided
       # where its data lives.
       DATA_DOWNLOAD_DATASETS_DIR: ${DATA_DOWNLOAD_DATASETS_DIR:-/datasets}
+      # Phase 5.5: where a driver's authoring transcript is readable, so the
+      # plan-types page can link one. Unset means the conversation id is shown
+      # and not turned into a link -- the id is still what finds it.
+      DATA_DOWNLOAD_OPENHANDS_URL: ${DATA_DOWNLOAD_OPENHANDS_URL:-}
     volumes:
       # The datasets root, one folder per requested dataset. Host-side path is
       # a share, not the container's layer: a bind mount is the only way these

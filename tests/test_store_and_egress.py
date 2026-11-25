@@ -40,8 +40,13 @@ RUNTIME_MODULE = "runtime_http.py"
 # it reads a commit's checks and diff, merges a branch, and downloads the tree
 # it installs from. One named module holds that, so there is one egress path to
 # audit and one credential to revoke.
-GITHUB_IMPORTS = ("urllib.request", "urllib.error")
-GITHUB_MODULE = "github_api.py"
+#
+# Phase 5.6 adds a second egress path and keeps the same rule: the authoring
+# agent's server, spoken to over HTTP by `openhands_agent.py`. Two files, both
+# named, both reachable only from the loop on its own host -- a third
+# `urllib.request` anywhere else is a third way out of the container.
+EGRESS_IMPORTS = ("urllib.request", "urllib.error")
+EGRESS_MODULES = ("github_api.py", "openhands_agent.py")
 
 
 def test_unusable_store_is_up_but_broken(tmp_path):
@@ -203,10 +208,11 @@ def test_no_vendor_client_or_network_import(path: Path):
                 f"{path.name} imports {module}; only {RUNTIME_MODULE} may open a "
                 "connection to the driver runtime, so there is one call site to audit"
             )
-        if module.startswith(GITHUB_IMPORTS):
-            assert path.name == GITHUB_MODULE, (
-                f"{path.name} imports {module}; only {GITHUB_MODULE} may reach GitHub, "
-                "so the loop's egress and credential live in one file"
+        if module.startswith(EGRESS_IMPORTS):
+            assert path.name in EGRESS_MODULES, (
+                f"{path.name} imports {module}; only {', '.join(EGRESS_MODULES)} "
+                "may leave this process, so the loop's egress and credentials "
+                "live in named files"
             )
 
 

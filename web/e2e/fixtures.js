@@ -211,6 +211,9 @@ export const planTypes = {
     known: true,
     detail: "",
     count: 2,
+    // Where a transcript is readable, when this deployment has a canvas. Empty
+    // would mean the id is shown but is not a link.
+    openhands_url: "http://canvas.local:3088",
     // The browse list: every artefact, joined to the types it answers. `stub`
     // answers nothing, which is a state the page has to draw rather than hide.
     installed: [
@@ -252,6 +255,9 @@ export const planTypes = {
             attempts: 1,
             branch: "driver-loop/databento-20261124t160220z",
             commit: "9f28f7583a9b233802aa6d32df4b4dc6a563b1c7",
+            // The authoring conversation. The fixture deployment has a canvas,
+            // so the page can turn this id into a link.
+            author_ref: "a31b725e-c0ee-4e27-abfa-38dc921e83c8",
             error: "",
             created_at: "2026-11-24T16:02:07Z",
             updated_at: "2026-11-24T16:37:29Z",
@@ -312,6 +318,7 @@ export const planTypes = {
             attempts: 1,
             branch: "driver-loop/nabu-20261124t161000z",
             commit: "",
+            author_ref: "",
             error: "",
             created_at: "2026-11-24T16:10:00Z",
             updated_at: "2026-11-24T16:12:00Z",

@@ -672,6 +672,16 @@ test.describe("plan types", () => {
       "driver-loop/databento-20261124t160220z",
     );
     await expect(detail).toContainText("9f28f75");
+
+    // The transcript is the other half of that provenance: the branch says what
+    // was written, the conversation says who wrote it and what it cost. Linked
+    // only because this deployment names its canvas.
+    const transcript = detail.locator("a.ref");
+    await expect(transcript).toHaveText("transcript");
+    await expect(transcript).toHaveAttribute(
+      "href",
+      "http://canvas.local:3088/canvas/conversations/a31b725e-c0ee-4e27-abfa-38dc921e83c8",
+    );
   });
 
   test("a deep link opens the type and the driver it names", async ({

@@ -113,6 +113,14 @@
     return "";
   }
 
+  // The authoring transcript, as a link only when the deployment named where
+  // its canvas lives: the store keeps the conversation *id*, so a URL built
+  // from a guess would be a link to a 404.
+  function transcript(ref) {
+    const base = (data?.drivers?.openhands_url ?? "").replace(/\/+$/, "");
+    return base && ref ? `${base}/canvas/conversations/${ref}` : "";
+  }
+
   function openDriverFor(type) {
     if (Object.hasOwn(chosen, type.name)) return chosen[type.name];
     if (hashType === type.name) return hashDriver;
@@ -260,6 +268,25 @@
                         {/if}
                         {#if impl.build.commit}
                           @ <code>{impl.build.commit.slice(0, 7)}</code>
+                        {/if}
+                        <!-- Where the work was actually done, when the authoring
+                             agent left a transcript. Linked only if this
+                             deployment says where its canvas is served; the id
+                             alone still names the conversation. -->
+                        {#if impl.build.author_ref}
+                          ·
+                          {#if transcript(impl.build.author_ref)}
+                            <a
+                              class="ref"
+                              href={transcript(impl.build.author_ref)}
+                              target="_blank"
+                              rel="noreferrer">transcript</a
+                            >
+                          {:else}
+                            <span class="ref" title={impl.build.author_ref}
+                              >authored in openhands</span
+                            >
+                          {/if}
                         {/if}
                       </dd>
                     {/if}
@@ -454,6 +481,18 @@
   .impl-on {
     color: var(--accent);
     background: var(--accent-soft);
+  }
+
+  /* A transcript link sits inside a definition line, so it must not add colour
+     noise: accent, no underline until hovered, and the same size as the code
+     beside it. */
+  .ref {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .ref:hover {
+    text-decoration: underline;
   }
 
   /* Not installed is not an error: the type is still readable, and a request

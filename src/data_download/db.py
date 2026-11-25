@@ -86,6 +86,11 @@ ADDED_COLUMNS = (
     # Nullable and added in place -- like `archived_at`, a column rather than a
     # state, because the request's state is still honestly `approved`.
     ("requests", "driver_state", "TEXT"),
+    # Phase 5.5: the transcript that authored the driver. A conversation id, not
+    # a URL: which host serves the canvas is a deployment's fact, not the
+    # store's, and a stored URL would rot the day it moved. Nullable because
+    # the harness may be a plain shell agent with no transcript at all.
+    ("driver_jobs", "author_ref", "TEXT"),
 )
 
 
@@ -1643,6 +1648,7 @@ class Store:
             "commit_sha",
             "artifact_sha256",
             "verdict_json",
+            "author_ref",
             "last_error",
             "attempts",
             "request_id",
