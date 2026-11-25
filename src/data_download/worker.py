@@ -55,6 +55,25 @@ log = logging.getLogger(__name__)
 PASS_LIMIT = 10
 
 
+def made_progress(results: list[RunResult]) -> bool:
+    """Did the pass change the queue, or did it only look at it?
+
+    A `settled=False` result is `run_one` saying "I left this row exactly where
+    I found it". `driver_missing` is the one that happens in the field: a
+    request whose vendor has no installed driver is queued for authoring and
+    stays `approved` on purpose, so it is still the oldest row the next pass
+    asks for. Treating that as work is how the loop never reached its idle wait
+    -- measured at ~640 passes a second for as long as a driver took to be
+    written, with the same row and the same log line every time.
+
+    Nothing is lost by sleeping: the driver job is in the store, the authoring
+    worker has its own nudge, and the idle interval is what picks the row up
+    again. The condition to re-check is "a driver got installed", and that
+    arrives on the next beat.
+    """
+    return any(result.settled for result in results)
+
+
 async def tick(
     store: Store,
     *,
@@ -207,8 +226,10 @@ class Worker:
         )
         while not self._stopping.is_set():
             ran = await self.once()
-            if ran:
-                # Still work to do: no sleep, no lost minute per row.
+            if made_progress(ran):
+                # Still work to do: no sleep, no lost minute per row. A pass
+                # that ran nothing that settled is not work -- see
+                # `made_progress`.
                 continue
             self._nudge.clear()
             try:
