@@ -25,6 +25,52 @@ def test_a_timestamp_names_the_day_it_covers():
     assert name == "2026-11-04_2026-11-04-abc123"
 
 
+def test_the_plans_split_decides_how_finely_the_window_is_written():
+    """The plan declares the cut; the folder is named at that precision.
+
+    A day split names days (the file-per-day convention the store holds). An
+    hourly cut, or an unsplit window in one file, cannot be described by a date
+    alone: the hours are where the data is cut, and a day-only name would show
+    `2026-11-04_2026-11-04` -- a half-open window that reads as empty.
+    """
+    hourly = landing_name(
+        "req_abc123",
+        "2026-11-04T09:30:00Z",
+        "2026-11-04T16:00:00Z",
+        split="hour",
+    )
+    assert hourly == "2026-11-04T0930_2026-11-04T1600-abc123"
+
+    unsplit = landing_name(
+        "req_abc123",
+        "2026-11-04T09:30:00Z",
+        "2026-11-04T16:00:00Z",
+        split="none",
+    )
+    assert unsplit == hourly
+
+
+def test_a_split_finer_than_a_day_names_a_day_spanning_window_in_days():
+    """An unsplit week is one file, and one file is described by its days."""
+    name = landing_name("req_abc123", "2026-11-04", "2026-11-07", split="none")
+    assert name == "2026-11-04_2026-11-07-abc123"
+
+
+def test_an_unknown_split_names_the_window_in_instants():
+    """A unit invented later must not silently fall back to a day-only name."""
+    name = landing_name(
+        "req_abc123",
+        "2026-11-04T09:30:00Z",
+        "2026-11-04T16:00:00Z",
+        split="week",
+    )
+    assert name == "2026-11-04T0930_2026-11-04T1600-abc123"
+
+
+def test_a_fine_name_with_no_window_still_keeps_the_request_id():
+    assert landing_name("req_abc", None, None, split="hour") == "req_abc"
+
+
 def test_two_filings_of_one_window_do_not_collide():
     first = landing_name("req_aaaaaaaaaaaaaaaa", "2026-11-04", "2026-11-06")
     second = landing_name("req_bbbbbbbbbbbbbbbb", "2026-11-04", "2026-11-06")

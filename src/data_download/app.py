@@ -979,7 +979,12 @@ def _prospect(
     # window and a short id). The vendor used to be missing from this promise,
     # so the path shown was one level shallower than the one the bytes land in.
     facts = datasets.job_facts(job)
-    name = layout.landing_name(str(row["id"]), facts.get("start"), facts.get("end"))
+    name = layout.landing_name(
+        str(row["id"]),
+        facts.get("start"),
+        facts.get("end"),
+        split=facts.get("split"),
+    )
     vendor_slug = layout.vendor_slug(_vendor_of(row, registry) if registry else "")
     parts = [part for part in (vendor_slug, dataset, name) if part]
     landing = (

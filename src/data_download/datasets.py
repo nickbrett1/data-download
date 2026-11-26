@@ -115,6 +115,7 @@ def job_facts(job: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     resolve = _step_kwargs(job, "resolve")
     quote = _step_kwargs(job, "quote")
+    submit = _step_kwargs(job, "submit")
     download = _step_kwargs(job, "download")
     return {
         "dataset": resolve.get("dataset") or quote.get("dataset"),
@@ -123,6 +124,10 @@ def job_facts(job: dict[str, Any] | None) -> dict[str, Any]:
         "schema": quote.get("schema") or download.get("schema"),
         "start": quote.get("start"),
         "end": quote.get("end"),
+        # The plan's cut, which decides how finely the landing's folder is
+        # named (`layout.landing_name`). Read here as well as in the runner so
+        # the page promises the directory the bytes will actually land in.
+        "split": submit.get("split_duration"),
     }
 
 
@@ -177,7 +182,12 @@ def _request_entry(
     # (`layout.landing_name`); anything landed before that layout is named by
     # the request id. The new name is the answer, and the old one is the
     # fallback -- a layout change must not take history off the page.
-    name = layout.landing_name(str(row["id"]), facts.get("start"), facts.get("end"))
+    name = layout.landing_name(
+        str(row["id"]),
+        facts.get("start"),
+        facts.get("end"),
+        split=facts.get("split"),
+    )
     request_dir = (
         resolve_under(root, vendor_slug, str(dataset), name)
         if root is not None and vendor_slug

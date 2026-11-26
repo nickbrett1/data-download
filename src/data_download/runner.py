@@ -201,6 +201,25 @@ def window_of(job: Any) -> tuple[Any, Any]:
     return found.get("start"), found.get("end")
 
 
+def split_of(job: Any) -> str | None:
+    """How this Job cuts the data up: its `submit` step's `split_duration`.
+
+    Read off the Job for the same reason the window is: the Job is what was
+    sealed, and the split decides how finely the landing's directory can be
+    named (`layout.landing_name`). `None` means the Job never said, and the day
+    split -- the convention the store already holds -- is the answer.
+    """
+    steps = job.get("steps") if isinstance(job, dict) else None
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        kwargs = step.get("kwargs")
+        kwargs = kwargs if isinstance(kwargs, dict) else {}
+        if kwargs.get("split_duration"):
+            return str(kwargs["split_duration"])
+    return None
+
+
 def destination(
     datasets_dir: Path,
     vendor: str,
@@ -209,18 +228,21 @@ def destination(
     *,
     start: Any = None,
     end: Any = None,
+    split: Any = None,
 ) -> Path:
     """`<datasets>/<vendor>/<dataset>/<name>/` -- validated, then joined.
 
     `name` is the window and a short id (`layout.landing_name`) when the Job
     carried a window, and the request id when it did not: a person navigating
-    the share reads dates, not 32 hex characters.
+    the share reads dates, not 32 hex characters. `split` is the Job's
+    `split_duration` and decides whether the window is named in days or in
+    instants -- the plan declares the cut, this function does not assume one.
     """
     if not DATASET_RE.match(dataset or ""):
         raise RunRefused("bad_dataset", f"{dataset!r} is not a directory name")
     if not REQUEST_ID_RE.match(request_id or ""):
         raise RunRefused("bad_request_id", f"{request_id!r} is not a request id")
-    name = layout.landing_name(request_id, start, end)
+    name = layout.landing_name(request_id, start, end, split=split)
     if not DATASET_RE.match(name):
         raise RunRefused("bad_request_id", f"{name!r} is not a directory name")
     return Path(datasets_dir) / vendor_slug(vendor) / dataset / name
@@ -612,6 +634,7 @@ async def run_one(
             request_id,
             start=window_start,
             end=window_end,
+            split=split_of(job),
         )
 
         dest = dest_of(job) or "files/"

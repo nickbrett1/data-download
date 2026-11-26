@@ -415,6 +415,59 @@ def test_the_request_lands_under_its_window_and_a_short_id(tmp_path):
     assert landed == tmp_path / "databento" / "GLBX.MDP3" / "2026-11-04_2026-11-06-fc1b83"
 
 
+def test_an_hourly_job_lands_under_its_instants_not_its_day(tmp_path):
+    """The plan says how it cuts; the folder is named at that precision.
+
+    The form this service ships only offers `split_duration: day`, so this
+    binds a Job directly: what is being pinned is that the runner takes the
+    decision from the Job rather than assuming a day.
+    """
+    from data_download.profiles.market_data_window import bind
+    from data_download.runner import split_of
+
+    job = bind(
+        {
+            "vendor": "Databento",
+            "dataset": "GLBX.MDP3",
+            "schema": "trades",
+            "symbols": ["ES.c.0"],
+            "stype_in": "continuous",
+            "start": "2026-11-04T09:30:00Z",
+            "end": "2026-11-04T16:00:00Z",
+            "split_duration": "hour",
+        },
+        {"on_failure": "quarantine"},
+    )
+    landed = destination(
+        tmp_path,
+        "Databento",
+        "GLBX.MDP3",
+        "req_fc1b83716aa44c18ab3a13ea70e3bb8d",
+        start="2026-11-04T09:30:00Z",
+        end="2026-11-04T16:00:00Z",
+        split=split_of(job),
+    )
+    assert split_of(job) == "hour"
+    assert landed.name == "2026-11-04T0930_2026-11-04T1600-fc1b83"
+
+
+def test_a_job_that_never_declared_a_split_names_days(tmp_path):
+    """No declaration is not a licence to guess finely: day is the convention."""
+    from data_download.runner import split_of
+
+    assert split_of({"steps": [{"kind": "download", "kwargs": {"dest": "files/"}}]}) is None
+    landed = destination(
+        tmp_path,
+        "Databento",
+        "GLBX.MDP3",
+        "req_fc1b83716aa44c18ab3a13ea70e3bb8d",
+        start="2026-11-04",
+        end="2026-11-06",
+        split=split_of({}),
+    )
+    assert landed.name == "2026-11-04_2026-11-06-fc1b83"
+
+
 def _dir(datasets, request_id: str, start="2026-10-01", end="2026-10-03"):
     """The directory the runner writes: the window, then a short request id."""
     from data_download.layout import landing_name
