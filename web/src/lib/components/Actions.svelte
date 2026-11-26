@@ -30,16 +30,16 @@
    * - **Archive** writes a date rather than a state. A `failed` attempt's state
    *   is the outcome of something that really happened, so cancelling it would
    *   make the record lie; archiving only takes it off the book's "what needs
-   *   me" list, and the same button puts it back. Archiving is also the one verb
-   *   that ends the visit: the row is being put away, so `onarchived` hands the
-   *   decision to leave the page back to whoever owns the route. Restoring does
-   *   not, because you are asking for the row, not putting it away.
+   *   me" list, and the same button puts it back. Archiving ends the visit; the
+   *   same button putting the row back does not, because you are asking for it,
+   *   not putting it away.
    *
    * - **Cancel** moves a `draft` to `cancelled` and is not a delete: the row,
-   *   its quote, its `why` and its events stay. Two clicks, and the second says
-   *   the word -- not because money is at risk, but because cancelling is a
-   *   statement about a filing and deserves a second look rather than a stray
-   *   tap.
+   *   its quote, its `why` and its events stay, and the book offers it under
+   *   "cancelled". One click: it used to be two ("Cancel" then "Yes, cancel"),
+   *   and the second was a second look at a decision that spends nothing -- the
+   *   row goes back to being a filing, and can be filed again. Nothing is lost
+   *   that a second click could have saved.
    *
    * - **Retry** files the same body again as a *new* request and leaves it in
    *   `draft`. A failed row is history; the repair is a new filing, priced
@@ -51,12 +51,13 @@
   import { getView, postJson } from "$lib/api";
   import { bound, isArchivable, isRetryable, usd } from "$lib/format";
 
-  // `onapproved` and `onarchived` both end the visit: the row has changed
-  // hands (a worker has it now, or it is off the book), so the thing worth
-  // watching is the list, not the page that asked the question. `onchanged`
-  // stays for the verbs whose answer is *on* this page -- a cancel that leaves
-  // a badge to read, a restore that puts the row back.
-  let { request, onchanged, onapproved, onarchived } = $props();
+  // `onleft` ends the visit: the row has changed hands (a worker has it now),
+  // gone off the book (archived), or stopped being a request at all
+  // (cancelled) -- so the thing worth reading is the list, not the page that
+  // asked the question. `onchanged` stays for the verbs whose answer is *on*
+  // this page: a restore that puts the row back, a retry that names the new
+  // request it filed.
+  let { request, onchanged, onleft } = $props();
 
   const id = $derived(request.id);
   const draft = $derived(request.state === "draft");
@@ -77,7 +78,6 @@
   // Per verb, so a refusal sits under the row instead of replacing it.
   let errors = $state({});
   let done = $state({});
-  let confirming = $state(false);
   let filed = $state(null);
   let archiveResult = $state(null);
 
@@ -138,7 +138,6 @@
       return null;
     } finally {
       busy = "";
-      confirming = false;
     }
   }
 
@@ -148,12 +147,12 @@
     const result = await run("approve", `${base}/approve`, {
       note: note.trim() || null,
     });
-    if (result) (onapproved ?? onchanged)?.();
+    if (result) (onleft ?? onchanged)?.();
   }
 
   async function cancel() {
     const result = await run("cancel", `${base}/cancel`, {});
-    if (result) onchanged?.();
+    if (result) (onleft ?? onchanged)?.();
   }
 
   async function retry() {
@@ -168,7 +167,7 @@
     archiveResult = result;
     // Putting the row away ends the visit; asking for it back (a null
     // `archived_at`) does not -- you are still reading the row you asked for.
-    if (result.archived_at) onarchived?.();
+    if (result.archived_at) (onleft ?? onchanged)?.();
   }
 </script>
 
@@ -282,7 +281,7 @@
           type="button"
           data-verb="cancel"
           disabled={busy !== "" || !ready}
-          onclick={() => (confirming = true)}
+          onclick={cancel}
         >
           <!-- A cross: cancelling takes the request off the queue. Decorative
                -- the word beside it is the label. -->
@@ -340,35 +339,8 @@
       {/if}
     </div>
 
-    {#if confirming}
-      <!-- The second click, in the row beneath rather than beside: the buttons
-           above stay where they were, so nothing jumps under a moving finger. -->
-      <div class="verbs confirm">
-        <button
-          class="btn verb danger"
-          type="button"
-          data-verb="cancel-confirm"
-          disabled={busy !== ""}
-          onclick={cancel}
-        >
-          Yes, cancel
-        </button>
-        <button
-          class="btn verb"
-          type="button"
-          disabled={busy !== ""}
-          onclick={() => (confirming = false)}
-        >
-          Keep it
-        </button>
-      </div>
-    {/if}
-
     {#if done.approve}
       <p class="quiet">Approved.</p>
-    {/if}
-    {#if done.cancel}
-      <p class="quiet">Cancelled.</p>
     {/if}
     {#if filed}
       <p class="quiet">
@@ -423,10 +395,6 @@
     flex-wrap: wrap;
     gap: 10px;
     align-items: center;
-  }
-
-  .verbs.confirm {
-    margin-top: 10px;
   }
 
   /* Approve is the one that spends, so it keeps the accent even in a row where

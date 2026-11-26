@@ -56,9 +56,6 @@ export const dashboard = {
     {
       id: "req_4c81be07",
       created_at: "2026-11-14T23:53:00Z",
-      // Filed at 23:53, claimed five minutes later: the row that has moved most
-      // recently is not the row that was filed most recently.
-      updated_at: "2026-11-14T23:58:00Z",
       seq: 2,
       label: "market_data_window",
       vendor: "Databento",

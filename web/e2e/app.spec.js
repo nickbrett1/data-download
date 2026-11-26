@@ -124,37 +124,47 @@ test.describe("the request book", () => {
   });
 
   test("can be read in the order things last moved", async ({ page }) => {
-    await mock(page);
+    // Most recently moved is the default: the book answers "what is happening
+    // now?" far more often than "what did I file?", and a row claimed a minute
+    // ago should not sit five rows down under yesterday's filings. This book's
+    // third request was filed early and moved late, so the two orders disagree
+    // about the top row.
+    const moved = {
+      ...dashboard,
+      rows: dashboard.rows.map((row) =>
+        row.id === "req_b31d5e0a"
+          ? { ...row, updated_at: "2026-11-25T09:00:00Z" }
+          : row,
+      ),
+    };
+    await mock(page, { requests: moved });
     await page.goto("/");
 
-    // The default is the book's own order: what was filed, newest first. The
-    // last column is `updated`, so the question "what changed while I was
-    // away?" needs an order, not just a figure to compare by eye.
     const order = page.locator(".order");
-    await expect(order).toHaveText("by date filed");
-    const top = page.locator(".tbl-row").first().locator(".updated");
-    await expect(top).toHaveText("14 Nov 23:10");
-
-    await order.click();
     await expect(order).toHaveText("by last change");
-    // req_4c81be07 was filed a moment *after* the row above and claimed a
-    // moment after that, so the two orders disagree about which row is first.
-    await expect(top).toHaveText("14 Nov 23:58");
+    const top = page.locator(".tbl-row").first().locator(".updated");
+    await expect(top).toHaveText("25 Nov 09:00");
     await expect(page.locator(".tbl-row")).toHaveCount(5);
 
-    // The order is a URL parameter, so a reload keeps it and a link carries it.
-    await expect(page).toHaveURL(/order=updated/);
-    await page.reload();
-    await expect(page.locator(".order")).toHaveText("by last change");
-    await expect(
-      page.locator(".tbl-row").first().locator(".updated"),
-    ).toHaveText("14 Nov 23:58");
+    await order.click();
+    await expect(order).toHaveText("by date filed");
+    // req_9f2a41c8 was the last thing filed, so filing order puts it first.
+    await expect(top).toHaveText("14 Nov 23:10");
 
-    await page.locator(".order").click();
-    await expect(page).not.toHaveURL(/order=updated/);
+    // The order is a URL parameter, so a reload keeps it and a link carries it.
+    await expect(page).toHaveURL(/order=filed/);
+    await page.reload();
+    await expect(page.locator(".order")).toHaveText("by date filed");
     await expect(
       page.locator(".tbl-row").first().locator(".updated"),
     ).toHaveText("14 Nov 23:10");
+
+    // ...and the default is the default: no parameter.
+    await page.locator(".order").click();
+    await expect(page).not.toHaveURL(/order=filed/);
+    await expect(
+      page.locator(".tbl-row").first().locator(".updated"),
+    ).toHaveText("25 Nov 09:00");
   });
 
   test("says which days each request covers", async ({ page }) => {
@@ -1180,7 +1190,7 @@ test.describe("the shell on a phone", () => {
     await expect(page.locator(".tbl-row")).toHaveCount(5);
     await expectTabs(page, "Requests");
     await expect(page.locator(".lede")).toHaveText(
-      /^The request book\s*·\s*by date filed$/,
+      /^The request book\s*·\s*by last change$/,
     );
     await expectNoHorizontalScroll(page);
   });
@@ -2459,7 +2469,7 @@ test.describe("a drafted request can be cancelled", () => {
     cancelled: true,
   };
 
-  test("asks twice, then cancels, and says the row stays", async ({ page }) => {
+  test("cancels in one click, and goes back to the book", async ({ page }) => {
     let posted = null;
     await page.route("**/v1/requests/*/cancel", async (route) => {
       posted = route.request().url();
@@ -2472,39 +2482,19 @@ test.describe("a drafted request can be cancelled", () => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
 
-    const actions = page.locator(".block.actions");
-    // No paragraph beside the verb: the two-click confirm is the explanation.
-    await expect(page.locator(".verbs p")).toHaveCount(0);
     await expect(page.locator('.verbs [data-verb="cancel"]')).toBeVisible();
-
-    // The first click only asks. Nothing has been posted.
-    await page.getByRole("button", { name: "Cancel" }).click();
-    expect(posted).toBeNull();
-    await expect(actions).toContainText("Yes, cancel");
-
-    await page.getByRole("button", { name: "Yes, cancel" }).click();
-    await expect(actions).toContainText("Cancelled.");
-    expect(posted).toContain("/v1/requests/req_draft01/cancel");
-  });
-
-  test("the first click can be taken back", async ({ page }) => {
-    let posted = null;
-    await page.route("**/v1/requests/*/cancel", async (route) => {
-      posted = route.request().url();
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(cancelled),
-      });
-    });
-    await mock(page, { detail: draftDetail });
-    await page.goto("/requests/req_draft01");
+    // No second question: a cancel spends nothing, and the row is not gone --
+    // the book offers it under "cancelled". The click is the statement.
+    await expect(page.locator(".verbs")).not.toContainText("Yes, cancel");
 
     await page.getByRole("button", { name: "Cancel" }).click();
-    await page.getByRole("button", { name: "Keep it" }).click();
-
-    await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
-    expect(posted).toBeNull();
+    await expect
+      .poll(() => posted)
+      .toContain("/v1/requests/req_draft01/cancel");
+    // The row is not a request any more, so the page that recorded it is not
+    // where the reader wants to be; the book is.
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator(".tbl-row")).toHaveCount(5);
   });
 
   test("is not offered once the request has been approved", async ({
@@ -2563,7 +2553,6 @@ test.describe("a drafted request can be cancelled", () => {
     await mock(page, { detail: draftDetail });
     await page.goto("/requests/req_draft01");
     await page.getByRole("button", { name: "Cancel" }).click();
-    await page.getByRole("button", { name: "Yes, cancel" }).click();
     await expect(page.locator('.failure[data-verb="cancel"]')).toContainText(
       "has been authorised",
     );

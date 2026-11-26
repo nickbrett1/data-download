@@ -118,23 +118,26 @@
   });
 
   // The order, as a URL parameter for the same reason `show` is one: a link to
-  // "the ones that moved most recently" is worth pasting into a chat. Newest
-  // filed stays the default -- it is the book's own order, and a reader who
-  // wants the queue sorted by attention asks for it.
+  // "the ones that moved most recently" is worth pasting into a chat.
+  //
+  // Most-recently-moved is the default. The book is read to answer "what is
+  // happening?" far more often than "what did I file?", and a row claimed a
+  // minute ago is the one a reader came for -- under filed order it could sit
+  // five rows down a page that has not changed since yesterday. Filing order is
+  // one click away, and `?order=filed` is how a link asks for it.
   let order = $state(currentOrder());
 
   function currentOrder() {
-    if (typeof window === "undefined") return "filed";
-    return new URLSearchParams(window.location.search).get("order") ===
-      "updated"
-      ? "updated"
-      : "filed";
+    if (typeof window === "undefined") return "updated";
+    return new URLSearchParams(window.location.search).get("order") === "filed"
+      ? "filed"
+      : "updated";
   }
 
   function setOrder(next) {
     order = next;
     const url = new URL(window.location.href);
-    if (next === "updated") url.searchParams.set("order", "updated");
+    if (next === "filed") url.searchParams.set("order", "filed");
     else url.searchParams.delete("order");
     window.history.replaceState({}, "", url);
   }

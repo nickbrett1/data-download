@@ -92,12 +92,13 @@
     return () => clearInterval(timer);
   });
 
-  /** Archiving takes the row off the book, so this page -- a decision record --
-   * is the wrong place to still be: you put it away, you do not want to keep
-   * reading it. `assign("/")` rather than `history.back()` because a request
-   * page is a link you can arrive at from anywhere (a note, a chat, a
-   * bookmark), and "back" then leaves the app instead of returning to the
-   * list. The list is the destination either way. */
+  /** Approving, archiving and cancelling all change who the row belongs to: a
+   * worker has it, it is off the book, or it is not a request any more. None of
+   * the three leaves anything on this page worth reading, so the page leaves.
+   * `assign("/")` rather than `history.back()` because a request page is a link
+   * you can arrive at from anywhere (a note, a chat, a bookmark), and "back"
+   * then leaves the app instead of returning to the list. The list is the
+   * destination either way. */
   function leaveToList() {
     window.location.assign("/");
   }
@@ -498,12 +499,7 @@
            A request page is a decision record: what was asked, why, and then
            one cluster of buttons. -->
       {#if hasVerbs}
-        <Actions
-          request={data}
-          onchanged={() => load()}
-          onapproved={leaveToList}
-          onarchived={leaveToList}
-        />
+        <Actions request={data} onchanged={() => load()} onleft={leaveToList} />
       {/if}
 
       {#if BLOCKED.has(data.facet)}
