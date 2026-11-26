@@ -50,6 +50,7 @@ from .config import Settings, load_settings
 from .db import (
     ApproveRefused,
     CancelRefused,
+    DriverJobRetireRefused,
     EscalateRefused,
     Store,
     canonical_json,
@@ -336,15 +337,22 @@ def _builds_by_vendor(jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
     Only the newest job per vendor: a vendor whose first build was abandoned can
     have more than one, and the answer to "what is happening about this vendor"
-    is the current one.
+    is the current one. A *retired* stop is not an answer at all -- a human put
+    it down, so the vendor is back to "nobody has written one" until something
+    asks again, and showing the stop would keep the page blocked by history.
     """
     builds: dict[str, dict[str, Any]] = {}
     for job in jobs:
         key = _norm(job.get("vendor"))
         if not key or key in builds:
             continue  # the store lists newest first
+        if job.get("retired_at"):
+            continue
         state = str(job.get("state") or "")
         builds[key] = {
+            # The id, so the page can name the build it wants to retire: the
+            # route is `/v1/driver-jobs/{id}/retire` and a vendor is not an id.
+            "id": str(job.get("id") or ""),
             "vendor": str(job.get("vendor") or ""),
             "state": state,
             # Whether it is still moving. The store owns that list; copying the
@@ -1966,6 +1974,70 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "archived_at": row["archived_at"],
                 # False for a second archive of the same row: no second event.
                 "changed": changed,
+            },
+        )
+
+    @app.post("/v1/driver-jobs/{job_id}/retire")
+    async def retire_driver_job(request: Request, job_id: str) -> JSONResponse:
+        """Put down a driver build that stopped, so its vendor can be tried again.
+
+        `needs_human` is the loop saying it gave up, and nothing in the loop
+        leaves it: a job that stopped once stops again the same way. What had no
+        way out was the *deployment* fault -- the loop stopped because the
+        container could not read a key, somebody fixed the key, and every later
+        request for that vendor was still refused with the old job's reason.
+
+        Retirement is a person's verb, not a retry: it says "that build is
+        history", keeps its error and branch on the row, clears the request's
+        `driver_state` so the page stops claiming a build is coming, and lets
+        the next approval queue a fresh build. Only a stopped job can be
+        retired -- a `queued`/`building` one is somebody's work in flight.
+
+        `submit` scope, like cancel and retry: it spends nothing and approves
+        nothing.
+        """
+        auth.require_submit_or_approver(request)
+        store = await _store(request)
+        note = None
+        raw = await request.body()
+        if raw.strip():
+            try:
+                body = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise errors.invalid_body("body is not valid JSON") from None
+            if not isinstance(body, dict):
+                raise errors.invalid_body("body must be a JSON object")
+            note = body.get("note")
+            if note is not None and not isinstance(note, str):
+                raise errors.invalid_body("note must be a string")
+        note = " ".join((note or "").split())[:400]
+        try:
+            job = await store.driver_job_retire(job_id, note=note)
+        except DriverJobRetireRefused as exc:
+            if exc.reason == "not_found":
+                raise errors.not_found(f"no driver job {job_id!r}") from None
+            raise errors.driver_retire_refused(exc.reason, exc.state) from None
+        if job.get("request_id"):
+            # The trail is the record: the request says the build was put down,
+            # and why, so the next reader does not wonder why a stopped build
+            # has no successor.
+            await store.note_driver_state(
+                str(job["request_id"]),
+                None,
+                detail={
+                    "retired": job_id,
+                    "vendor": job.get("vendor"),
+                    "note": note or "the stopped build was put down",
+                },
+            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "id": job.get("id"),
+                "vendor": job.get("vendor"),
+                "state": job.get("state"),
+                "retired_at": job.get("retired_at"),
+                "request_id": job.get("request_id"),
             },
         )
 

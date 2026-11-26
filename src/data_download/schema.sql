@@ -362,6 +362,11 @@ CREATE TABLE IF NOT EXISTS driver_jobs (
   verdict_json     TEXT,                -- probe verdict, reviewer findings
   author_ref       TEXT,                -- the authoring conversation, if any
   last_error       TEXT,
+  -- A human put this build down. `needs_human` is a stop, and a stop with no
+  -- way out blocks its vendor forever: the runner refuses to queue a new build
+  -- while the newest row for that vendor is stopped. Nullable and added in
+  -- place -- a column, not a state, so the CHECK above does not widen.
+  retired_at       TEXT,
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
   CHECK (state IN ('queued','building','gated','probing','merging',

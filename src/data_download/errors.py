@@ -234,6 +234,27 @@ def cancel_refused(reason: str, state: object) -> ApiError:
     )
 
 
+def driver_retire_refused(reason: str, state: object) -> ApiError:
+    """A refusal from `Store.driver_job_retire`.
+
+    `not_stopped` is the one that matters: a queued or building job is
+    somebody's work in flight, and retiring it would be the loop's one
+    guarantee -- that a stop is a stop -- turned into a shrug.
+    """
+    return ApiError(
+        409,
+        "driver_retire_refused",
+        (
+            "only a driver build that stopped for a human can be retired: this "
+            "one is still queued or being worked"
+            if reason == "not_stopped"
+            else "the driver build could not be retired"
+        ),
+        reason=reason,
+        state=state,
+    )
+
+
 def archive_refused(reason: str, state: object) -> ApiError:
     """A refusal from `Store.archive`.
 

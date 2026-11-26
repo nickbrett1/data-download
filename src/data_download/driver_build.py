@@ -100,6 +100,9 @@ class Steps:
     probe: Callable[[dict[str, Any]], dict[str, Any]]
     merge: Callable[[dict[str, Any]], dict[str, Any]]
     install: Callable[[dict[str, Any]], dict[str, Any]]
+    #: Remove the artefact this job installed, given what `install` returned.
+    #: Optional: a test that never installs anything has nothing to remove.
+    uninstall: Callable[[dict[str, Any]], Any] | None = None
 
 
 # -- the default install -----------------------------------------------------
@@ -505,6 +508,18 @@ def default_steps(
                 replace_sha256=row.get("artifact_sha256"),
             )
 
+    def uninstall(artifact: dict[str, Any]) -> Any:
+        # Best effort by design: the job is already stopping for a reason, and
+        # a failed cleanup must not replace that reason with its own. The caller
+        # logs the difference.
+        return driver_client.uninstall(
+            url=settings.driver_runtime_url,
+            token=settings.driver_runtime_token,
+            driver=str(artifact.get("driver") or ""),
+            version=str(artifact.get("version") or ""),
+            sha256=str(artifact.get("artifact_sha256") or ""),
+        )
+
     return Steps(
         author=author,
         gate=gate,
@@ -512,6 +527,7 @@ def default_steps(
         probe=probe,
         merge=merge,
         install=install,
+        uninstall=uninstall,
     )
 
 
@@ -588,6 +604,10 @@ async def run_once(
         row = await store.driver_job_update(
             row["id"], state="building", attempts=attempts, now=now
         ) or row
+    #: What `install` returned, if this pass got that far. A stop *after* an
+    #: install leaves an artefact nobody has vouched for, so the way out has to
+    #: know which artefact to remove.
+    installed: dict[str, Any] | None = None
     try:
         if not row.get("branch"):
             authored = await _step(steps.author, row)
@@ -654,6 +674,25 @@ async def run_once(
         return await store.driver_job_update(row["id"], state="installed", now=now)
     except LoopRefused as exc:
         log.warning("driver job %s stopped: %s", row["id"], exc)
+        if installed is not None and steps.uninstall is not None:
+            # The install precedes the probe, so a stop can leave a driver in
+            # /drivers that no probe ever passed. It is the one artefact the
+            # next request would happily run, so it goes. Best effort: the stop
+            # is the report, and a cleanup that failed must not become one.
+            try:
+                await _step(steps.uninstall, installed)
+                log.info(
+                    "driver job %s: removed the install this pass made (%s v%s)",
+                    row["id"],
+                    installed.get("driver"),
+                    installed.get("version"),
+                )
+            except Exception:  # noqa: BLE001 - the stop is the report
+                log.warning(
+                    "driver job %s: could not remove the install this pass made",
+                    row["id"],
+                    exc_info=True,
+                )
         row = await store.driver_job_update(
             row["id"], state="needs_human", last_error=str(exc), now=now
         ) or row

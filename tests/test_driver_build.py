@@ -610,3 +610,85 @@ def test_a_key_file_that_is_not_there_stops_the_worker_at_start_up(tmp_path):
     given.author_iterations = 10
     given.driver_runtime_url = "http://drivers:8831"
     assert driver_build.steps_from_settings(given, registry=None, workdir=tmp_path)
+
+
+def test_a_stop_removes_the_install_it_made(tmp_path):
+    """Install happens before the probe, so a stop can leave an unproved driver.
+
+    That artefact is the one thing the next request would happily run instead of
+    re-authoring, so the way out of a stopped job removes it -- naming this
+    job's own digest, which is the only install the runtime will part with.
+    """
+    store = _store(tmp_path)
+    try:
+        _job(store)
+        removed = []
+
+        def uninstall(artifact):
+            removed.append(artifact)
+            return {"removed": True}
+
+        done = _run(
+            driver_build.run_once(
+                store,
+                _steps(
+                    install=lambda row: {
+                        "driver": "databento",
+                        "version": "2",
+                        "artifact_sha256": "e" * 64,
+                    },
+                    probe=lambda row: {"verdict": "contradiction"},
+                    uninstall=uninstall,
+                ),
+            )
+        )
+        assert done["state"] == "needs_human"
+        assert removed == [
+            {"driver": "databento", "version": "2", "artifact_sha256": "e" * 64}
+        ]
+    finally:
+        _run(store.close())
+
+
+def test_a_shortfall_retry_keeps_its_install(tmp_path):
+    """The retry's whole mechanism is replacing its own install.
+
+    Removing it would make the second turn install the same name and version
+    over nothing -- allowed, but the digest it recorded is what proves the
+    replacement is its own work.
+    """
+    store = _store(tmp_path)
+    try:
+        _job(store)
+        removed = []
+        steps = _steps(
+            probe=lambda row: {"verdict": "shortfall"},
+            uninstall=lambda artifact: removed.append(artifact),
+        )
+        assert _run(driver_build.run_once(store, steps))["state"] == "queued"
+        assert removed == []
+    finally:
+        _run(store.close())
+
+
+def test_a_failed_cleanup_does_not_replace_the_reason_it_stopped(tmp_path):
+    store = _store(tmp_path)
+    try:
+        _job(store)
+
+        def uninstall(artifact):
+            raise RuntimeError("the runtime is gone")
+
+        done = _run(
+            driver_build.run_once(
+                store,
+                _steps(
+                    probe=lambda row: {"verdict": "contradiction"},
+                    uninstall=uninstall,
+                ),
+            )
+        )
+        assert done["state"] == "needs_human"
+        assert "contradiction" in done["last_error"]
+    finally:
+        _run(store.close())

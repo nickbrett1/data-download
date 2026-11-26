@@ -98,3 +98,54 @@ def test_the_schema_declares_its_own_dialect(client):
     first = _view(client)["types"][0]
     schema = json.loads(first["schema"]["raw"])
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+
+
+def test_a_build_carries_the_id_a_person_needs_to_retire_it():
+    """The page's verb posts to `/v1/driver-jobs/{id}/retire`, so the row has to
+    carry an id: a vendor name is not one."""
+    from data_download.app import _builds_by_vendor
+
+    builds = _builds_by_vendor(
+        [{"id": "drv_stopped", "vendor": "Databento", "state": "needs_human"}]
+    )
+    assert builds["databento"]["id"] == "drv_stopped"
+    assert builds["databento"]["state"] == "needs_human"
+
+
+def test_a_retired_build_is_history_not_the_vendors_state():
+    """Retiring is how a stop stops blocking its vendor. If the view still
+    showed it, the page would keep saying "driver build stopped" for ever and
+    the verb would look like it had done nothing."""
+    from data_download.app import _builds_by_vendor
+
+    builds = _builds_by_vendor(
+        [
+            {
+                "id": "drv_stopped",
+                "vendor": "Databento",
+                "state": "needs_human",
+                "retired_at": "2026-11-26T15:00:00Z",
+            },
+            # The newest unretired row is the vendor's answer again -- an older
+            # installed build is what is actually running.
+            {"id": "drv_older", "vendor": "Databento", "state": "installed"},
+        ]
+    )
+    assert builds["databento"]["id"] == "drv_older"
+    assert builds["databento"]["state"] == "installed"
+
+
+def test_a_vendor_whose_only_build_was_retired_has_no_build():
+    from data_download.app import _builds_by_vendor
+
+    builds = _builds_by_vendor(
+        [
+            {
+                "id": "drv_stopped",
+                "vendor": "Nabu",
+                "state": "needs_human",
+                "retired_at": "2026-11-26T15:00:00Z",
+            }
+        ]
+    )
+    assert "nabu" not in builds

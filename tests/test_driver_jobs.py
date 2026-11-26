@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from conftest import seed
 from data_download.db import Store
 
@@ -175,5 +177,51 @@ def test_a_driver_state_that_did_not_change_writes_no_second_event(tmp_path):
         events = _run(store.events_for("req_waiting"))
         assert len(events) == 2
         assert json.loads(events[-1]["detail_json"])["error"] == "a bill"
+    finally:
+        _run(store.close())
+
+
+def test_a_stopped_build_can_be_retired_and_the_vendor_tried_again(tmp_path):
+    """`needs_human` is a stop, and a stop with no way out strands its vendor.
+
+    The runner refuses to queue a new build while the newest row for that vendor
+    is stopped -- right, because a job that stopped once stops again the same
+    way. Retiring is the deployment-fault exit: the row keeps its error and its
+    branch, and a new job may be queued after it.
+    """
+    store = _store(tmp_path)
+    try:
+        job = _run(store.driver_job_enqueue(vendor="Databento"))
+        _run(store.driver_job_update(job["id"], state="needs_human", last_error="docker missing"))
+        retired = _run(store.driver_job_retire(job["id"], note="the key file is mounted now"))
+        assert retired["retired_at"]
+        assert "docker missing" in retired["last_error"]
+        assert "the key file is mounted now" in retired["last_error"]
+        # History, not a live answer: the next request may queue a build.
+        assert _run(store.driver_job_latest("Databento")) is None
+        assert _run(store.driver_job_enqueue(vendor="Databento")) is not None
+    finally:
+        _run(store.close())
+
+
+def test_only_a_stopped_build_may_be_retired(tmp_path):
+    """A queued or building job is somebody's work in flight."""
+    from data_download.db import DriverJobRetireRefused
+
+    store = _store(tmp_path)
+    try:
+        job = _run(store.driver_job_enqueue(vendor="Databento"))
+        with pytest.raises(DriverJobRetireRefused) as refused:
+            _run(store.driver_job_retire(job["id"]))
+        assert refused.value.reason == "not_stopped"
+        assert refused.value.state == "queued"
+        # Twice is not a second retirement: the column is already set.
+        _run(store.driver_job_update(job["id"], state="needs_human"))
+        _run(store.driver_job_retire(job["id"]))
+        with pytest.raises(DriverJobRetireRefused):
+            _run(store.driver_job_retire(job["id"]))
+        with pytest.raises(DriverJobRetireRefused) as missing:
+            _run(store.driver_job_retire("drv_nope"))
+        assert missing.value.reason == "not_found"
     finally:
         _run(store.close())

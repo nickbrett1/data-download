@@ -94,6 +94,9 @@ ADDED_COLUMNS = (
     # store's, and a stored URL would rot the day it moved. Nullable because
     # the harness may be a plain shell agent with no transcript at all.
     ("driver_jobs", "author_ref", "TEXT"),
+    # A build a human put down. Nullable and added in place: `needs_human` is a
+    # stop, and a stop with no way out blocks its vendor forever.
+    ("driver_jobs", "retired_at", "TEXT"),
 )
 
 
@@ -411,6 +414,20 @@ class CancelRefused(Exception):
 
     def as_text(self) -> str:
         return f"cancel_refused: {self.reason} (state={self.state})"
+
+
+class DriverJobRetireRefused(Exception):
+    """`retire` said no: no such job, or it has not stopped for a human."""
+
+    REASONS = frozenset({"not_found", "not_stopped"})
+
+    def __init__(self, reason: str, state: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.state = state
+
+    def as_text(self) -> str:
+        return f"driver_retire_refused: {self.reason} (state={self.state})"
 
 
 class ApproveRefused(Exception):
@@ -1680,11 +1697,65 @@ class Store:
         """
         async with self.conn.execute(
             f"{self._DRIVER_JOB_SELECT} WHERE j.vendor = ? "
+            # A retired stop is history, not a live answer: once a human has
+            # put the build down, the next request for that vendor may queue a
+            # new one.
+            "AND j.retired_at IS NULL "
             "ORDER BY j.created_at DESC, j.id DESC LIMIT 1",
             (vendor,),
         ) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
+
+    async def driver_job_retire(
+        self, job_id: str, *, note: str = "", now: str | None = None
+    ) -> dict[str, Any]:
+        """Put a stopped build down, so the vendor can be tried again.
+
+        `needs_human` is a stop and nothing in the loop leaves it -- which is
+        right, because a job that stopped once will stop again in the same way.
+        But "the deployment was broken, I fixed it" has no way out either: the
+        runner refuses to queue a new build while the newest row for that vendor
+        is stopped, so a vendor whose build stopped is stranded until an
+        operator edits the database.
+
+        Retirement is that way out, and it is a person's: only a stopped job can
+        be retired, the row keeps its `last_error` and its branch, and `why` is
+        recorded on the request that was waiting. `retired_at` rather than a new
+        state, because `driver_jobs.state` is a CHECK, and widening it means
+        rebuilding a table on a live store for a fact that is orthogonal to
+        where the job got to.
+        """
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                async with self.conn.execute(
+                    "SELECT state, retired_at FROM driver_jobs WHERE id = ?", (job_id,)
+                ) as cur:
+                    row = await cur.fetchone()
+                if row is None:
+                    await self.conn.execute("ROLLBACK")
+                    raise DriverJobRetireRefused("not_found") from None
+                if row["state"] != "needs_human" or row["retired_at"]:
+                    await self.conn.execute("ROLLBACK")
+                    raise DriverJobRetireRefused("not_stopped", row["state"]) from None
+                await self.conn.execute(
+                    "UPDATE driver_jobs SET retired_at = ? WHERE id = ?", (ts, job_id)
+                )
+                if note:
+                    await self.conn.execute(
+                        "UPDATE driver_jobs SET last_error = last_error || ? "
+                        "WHERE id = ?",
+                        (f"\nretired: {note}", job_id),
+                    )
+                await self.conn.execute("COMMIT")
+            except DriverJobRetireRefused:
+                raise
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+        return await self.driver_job_get(job_id) or {}
 
     async def driver_jobs_open(self) -> int:
         """How many jobs are still being worked on.

@@ -262,6 +262,7 @@ export const planTypes = {
           // The authoring request that produced it: the loop's record of what
           // was asked for, which is a different fact from what is installed.
           build: {
+            id: "drv_databento_1",
             vendor: "Databento",
             state: "installed",
             open: false,
@@ -325,6 +326,7 @@ export const planTypes = {
           // Queued: someone asked for a driver for this vendor and the loop has
           // not finished one. The row must say that, not "no driver installed".
           build: {
+            id: "drv_nabu_1",
             vendor: "Nabu",
             state: "building",
             open: true,

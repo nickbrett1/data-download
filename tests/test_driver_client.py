@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import PLAN_BODY
-from data_download import interpreter
+from data_download import driver_client, interpreter
 from data_download.driver_client import (
     CLIENT_GRACE_S,
     DEADLINES,
@@ -344,3 +344,58 @@ def test_the_client_outlasts_the_runtime_it_is_waiting_for():
         assert budget(verb) > deadline, verb
     # A verb the table has never heard of still gets the default, plus grace.
     assert budget("teleport") == DEFAULT_TIMEOUT + CLIENT_GRACE_S
+
+
+# -- removing an install the job itself made ---------------------------------
+
+
+def test_uninstall_names_the_install_it_made(monkeypatch):
+    """The runtime removes only an artefact whose digest the caller can name.
+
+    Install happens before the probe, so when a probe stops a job the artefact
+    it wrote is the one thing nobody has vouched for. Removing it is how the
+    next request re-authors instead of running it -- and the digest is what
+    stops a job removing somebody else's driver.
+    """
+    seen = {}
+
+    def fake(host, port, method, path, *, token, body=None, timeout=30.0):
+        seen.update(method=method, path=path, token=token, body=body)
+        return 200, {"name": "databento", "version": "2", "removed": True}
+
+    monkeypatch.setattr(driver_client.runtime_http, "request", fake)
+    answer = driver_client.uninstall(
+        url="http://drivers:8831",
+        token="t",
+        driver="databento",
+        version="2",
+        sha256="e" * 64,
+    )
+    assert seen["method"] == "DELETE"
+    assert seen["path"] == "/v1/drivers/databento/2"
+    assert seen["body"] == {"sha256": "e" * 64}
+    assert answer["removed"] is True
+
+
+def test_uninstall_refuses_to_guess_which_install(monkeypatch):
+    """No digest, no DELETE: the runtime would have to choose, and it must not."""
+    monkeypatch.setattr(
+        driver_client.runtime_http,
+        "request",
+        lambda *a, **k: pytest.fail("no request should be sent"),
+    )
+    with pytest.raises(DriverUnavailable):
+        driver_client.uninstall(url="http://drivers:8831", token="t", driver="x", version="1", sha256="")
+
+
+def test_an_uninstall_that_is_refused_keeps_the_runtimes_code(monkeypatch):
+    monkeypatch.setattr(
+        driver_client.runtime_http,
+        "request",
+        lambda *a, **k: (409, {"error": {"code": "install_refused", "detail": "not your install"}}),
+    )
+    with pytest.raises(DriverUnavailable) as refused:
+        driver_client.uninstall(
+            url="http://drivers:8831", token="t", driver="x", version="1", sha256="e" * 64
+        )
+    assert "install_refused" in str(refused.value)

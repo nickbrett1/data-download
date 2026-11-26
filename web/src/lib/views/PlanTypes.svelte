@@ -32,11 +32,15 @@
   import AppShell from "$lib/components/nb/AppShell.svelte";
   import DataTable from "$lib/components/nb/DataTable.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
-  import { getView } from "$lib/api";
+  import { getView, postJson } from "$lib/api";
   import { filed } from "$lib/format";
 
   let data = $state(null);
   let failure = $state("");
+  // Retiring a stopped build: which build is in flight, and what the server
+  // said if it refused. Keyed by id, because two vendors can both be stopped.
+  let retiring = $state("");
+  let retireError = $state({});
 
   // `#<type>` is an anchor into the list (the dashboard links to it);
   // `#<type>/<driver>` also opens that driver's row.
@@ -175,6 +179,32 @@
     window.location.hash = fragment;
     hash = fragment;
   }
+
+  /** Put a stopped build down, then re-read the page.
+   *
+   * `needs_human` is a stop, and a stop with no way out blocks its vendor for
+   * ever: the loop refuses to queue another build while the newest one is
+   * stopped. Retiring is how a person says "that attempt is finished with",
+   * after which the next request for this vendor may ask for a new build. The
+   * page re-reads rather than editing the row in place, because the answer is
+   * the server's: the row after a retire is "no driver installed", which is a
+   * different sentence from the one the page was just showing.
+   */
+  async function retireBuild(build) {
+    retiring = build.id;
+    retireError = { ...retireError, [build.id]: "" };
+    try {
+      await postJson(
+        `/v1/driver-jobs/${encodeURIComponent(build.id)}/retire`,
+        {},
+      );
+      data = await getView("/ui/plan-types.json");
+    } catch (error) {
+      retireError = { ...retireError, [build.id]: error.message };
+    } finally {
+      retiring = "";
+    }
+  }
 </script>
 
 <AppShell
@@ -270,6 +300,38 @@
                     >
                   {/if}
                 </button>
+                {#if !impl.driver && impl.build?.state === "needs_human"}
+                  <!-- A sibling of the toggle, not a child: the row above is one
+                       button and buttons do not nest. Only a stop offers this,
+                       because only a stop is a dead end -- a queued build is
+                       already being worked and an installed driver has nothing
+                       to put down. -->
+                  <div class="retire">
+                    <p class="retire-why">
+                      The build stopped, and its vendor stays blocked: the loop
+                      will not queue another while this one is down.
+                    </p>
+                    <button
+                      class="btn verb"
+                      type="button"
+                      data-verb="retire"
+                      data-build={impl.build.id}
+                      disabled={retiring !== "" || !impl.build.id}
+                      onclick={() => retireBuild(impl.build)}
+                    >
+                      {retiring === impl.build.id
+                        ? "Retiring…"
+                        : "Retire this build"}
+                    </button>
+                    {#if retireError[impl.build.id]}
+                      <!-- The server's words, unedited: a refusal paraphrased
+                           is a guess. -->
+                      <p class="retire-failure">
+                        {retireError[impl.build.id]}
+                      </p>
+                    {/if}
+                  </div>
+                {/if}
                 {#if open}
                   <!-- The match as a rule rather than as prose: this vendor,
                        and one of these dataset codes. Nothing else: the name
@@ -511,6 +573,32 @@
 
   .driver-row.open {
     border-color: var(--accent);
+  }
+
+  /* A stop's way out: under the row, in the same box, because it is a fact
+     about this row and not a verb on the page. Quiet copy, one button -- the
+     person has already read the error in the pill's title. */
+  .retire {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 0 10px 9px;
+  }
+
+  .retire-why {
+    margin: 0;
+    flex: 1 1 16rem;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--ink-dim);
+  }
+
+  .retire-failure {
+    margin: 0;
+    flex: 1 1 100%;
+    font-size: 12px;
+    color: var(--bad);
   }
 
   .driver-line {

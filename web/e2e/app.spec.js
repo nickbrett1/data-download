@@ -712,6 +712,100 @@ test.describe("plan types", () => {
     ).toHaveText(["2 attempts"]);
   });
 
+  test("a stopped build can be retired, and the vendor unblocks", async ({
+    page,
+  }) => {
+    const stopped = withBuildAt(1, {
+      id: "drv_nabu_stopped",
+      state: "needs_human",
+      open: false,
+      attempts: 2,
+      branch: "driver-loop/nabu-20261124t161000z",
+      commit: "",
+      error: "pytest failed: tests/test_nabu_driver.py::test_cost",
+    });
+    await mock(page, { types: stopped });
+
+    // The read after a retire is the server's answer, not the page editing its
+    // own row: the fixture answers null the second time, as the store would
+    // once the build is retired.
+    let retired = false;
+    await page.route("**/ui/plan-types.json", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(retired ? withBuildAt(1, null) : stopped),
+      }),
+    );
+
+    const posted = [];
+    await page.route("**/v1/driver-jobs/*/retire", async (route) => {
+      posted.push(route.request().url());
+      retired = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "drv_nabu_stopped",
+          vendor: "Nabu",
+          state: "needs_human",
+          retired_at: "2026-11-26T15:00:00Z",
+        }),
+      });
+    });
+
+    await page.goto("/plan-types");
+    const row = page.locator(".plan-type").nth(1);
+    await expect(row.locator('[data-verb="retire"]')).toHaveText([
+      "Retire this build",
+    ]);
+
+    await row.locator('[data-verb="retire"]').click();
+
+    await expect.poll(() => posted.length).toBe(1);
+    expect(posted[0]).toContain("/v1/driver-jobs/drv_nabu_stopped/retire");
+    // The row goes back to "nobody has written one", which is a different
+    // sentence from the stop it was showing, and offers no way out again.
+    await expect(row.locator(".impl-off")).toHaveText(["no driver installed"]);
+    await expect(row.locator('[data-verb="retire"]')).toHaveCount(0);
+  });
+
+  test("a refused retire shows the server's sentence", async ({ page }) => {
+    const stopped = withBuildAt(1, {
+      id: "drv_nabu_stopped",
+      state: "needs_human",
+      open: false,
+      attempts: 2,
+      branch: "",
+      commit: "",
+      error: "pytest failed",
+    });
+    await mock(page, { types: stopped });
+    await page.route("**/v1/driver-jobs/*/retire", (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "driver_retire_refused",
+            message:
+              "only a driver build that stopped for a human can be retired: this one is still queued or being worked",
+            reason: "not_stopped",
+          },
+        }),
+      }),
+    );
+
+    await page.goto("/plan-types");
+    const row = page.locator(".plan-type").nth(1);
+    await row.locator('[data-verb="retire"]').click();
+    await expect(row.locator(".retire-failure")).toHaveText([
+      "only a driver build that stopped for a human can be retired: this one is still queued or being worked",
+    ]);
+    // The row is still there to retry: a refusal is not a retire.
+    await expect(row.locator('[data-verb="retire"]')).toBeEnabled();
+  });
+
   test("an installed driver says which build produced it", async ({ page }) => {
     await mock(page);
     await page.goto("/plan-types");

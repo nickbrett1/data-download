@@ -50,7 +50,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from . import interpreter, runtime_http
 
@@ -243,6 +243,62 @@ def driver_for(
     if not matches:
         return None
     return max(matches, key=lambda entry: _version_key(entry.version))
+
+
+def uninstall(
+    *,
+    url: str | None = None,
+    token: str | None = None,
+    driver: str,
+    version: str,
+    sha256: str,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Remove one install this process can prove it made.
+
+    The mirror of `install_over_runtime`'s `replace_sha256`: the runtime will
+    only remove an artefact whose on-disk digest is the one named, so a job can
+    clean up its own work and nothing else.
+
+    It exists because install happens **before** the probe. When the probe stops
+    a job, the artefact it just installed is the one thing nobody has vouched
+    for -- and leaving it listed means the next request *runs* it instead of
+    re-authoring. `driver_build.run_once` calls this on the way out of a stop.
+
+    Raises `DriverUnavailable` on a non-2xx: a failed cleanup is worth a line in
+    the log, not a second exception on top of the one that stopped the job.
+    """
+    host, port = _endpoint(url)
+    name = str(driver or "").strip()
+    where = str(version or "").strip()
+    if not name or not where:
+        raise DriverUnavailable("an uninstall needs a driver name and a version")
+    if not sha256:
+        raise DriverUnavailable(
+            "an uninstall needs the digest the install returned: the runtime "
+            "removes only the artefact a caller can name"
+        )
+    try:
+        status, payload = runtime_http.request(
+            host,
+            port,
+            "DELETE",
+            f"/v1/drivers/{quote(name, safe='')}/{quote(where, safe='')}",
+            token=_token(token),
+            body={"sha256": sha256},
+            timeout=timeout or DEFAULT_TIMEOUT,
+        )
+    except runtime_http.RuntimeUnreachable as exc:
+        raise DriverUnavailable(f"could not remove the driver: {exc}") from exc
+    if not 200 <= status < 300:
+        error = payload.get("error") if isinstance(payload, dict) else {}
+        code = (error or {}).get("code") or "unknown"
+        detail = (error or {}).get("detail") or ""
+        raise DriverUnavailable(
+            f"could not remove {name} v{where}: {status} {code}"
+            + (f" ({detail})" if detail else "")
+        )
+    return payload if isinstance(payload, dict) else {}
 
 
 class RemoteDriver:
