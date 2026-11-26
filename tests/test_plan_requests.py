@@ -50,6 +50,14 @@ def test_plan_submit_returns_202_then_reads_back(client):
         "resolve", "quote", "submit", "poll", "download", "convert", "verify",
     ]
     assert row["job"]["steps"][-1]["kwargs"]["on_failure"] == "quarantine"
+    # The resolve step carries the request's own window. Without dates a vendor
+    # resolves symbology over "the recent past", and the recent past is exactly
+    # where a subscription dataset's licence ends -- Databento answers 422
+    # `dataset_unavailable_range` for a window ending today when the
+    # entitlement ends last night, so the Job died before it ever quoted.
+    resolve = row["job"]["steps"][0]["kwargs"]
+    assert resolve["start"] == PLAN_BODY["params"]["start"]
+    assert resolve["end"] == PLAN_BODY["params"]["end"]
     assert row["job_hash"]
 
     # §2 rule 3: the Job names its Plan and carries no code pointer.

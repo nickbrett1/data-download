@@ -68,12 +68,24 @@ def bind(
         # Symbology first: every later step quotes and submits against what this
         # resolves to, and an unresolvable symbol is the cheapest failure there
         # is.
+        #
+        # The window travels with it. A resolve without dates means "resolve
+        # over the recent past", and the recent past is the one boundary a
+        # subscription dataset's licence is guaranteed to be near: Databento
+        # answers `422 dataset_unavailable_range` for a window ending today
+        # when the entitlement ends yesterday evening, so a Job that resolved
+        # without its own dates failed *before* quoting -- every time, for
+        # exactly the datasets that need a licence. The driver already accepts
+        # `start`/`end` and uses them when given; the binder was the layer
+        # dropping them.
         {
             "kind": "resolve",
             "kwargs": {
                 "dataset": dataset,
                 "symbols": symbols,
                 "stype_in": stype_in,
+                "start": start,
+                "end": end,
             },
         },
         # A quote step, emitted rather than performed. Nothing ever compares its
