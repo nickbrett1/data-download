@@ -536,7 +536,10 @@ export const draftDetail = {
         detail: "on failure: quarantine",
       },
     ],
-    landing: { path: "/srv/data/datasets/GLBX.MDP3/req_draft01/", dataset: "GLBX.MDP3" },
+    landing: {
+      path: "/srv/data/datasets/GLBX.MDP3/req_draft01/",
+      dataset: "GLBX.MDP3",
+    },
     checks: [
       {
         label: "ceiling",
