@@ -1554,35 +1554,23 @@ test.describe("naming a request, and opening it", () => {
     await expect(filed).toHaveCount(1);
     await expect(filed.locator("dd")).toHaveText("page");
 
-    // The prospect is read off the sealed Job, so the steps are the runner's
-    // steps in the runner's order -- not a marketing summary of them.
+    // What approving would do, in two facts: where the bytes land, and what
+    // was already checked. The seven-step pipeline used to be listed here, and
+    // it answered "how does this work?" -- not "will I get my data?".
     const prospect = page.locator(".block.prospect");
     await expect(prospect.locator(".micro")).toHaveText("if you approve");
-    const steps = await prospect.locator(".steps .verb").allTextContents();
-    expect(steps).toEqual([
+    await expect(prospect.locator(".steps li")).toHaveCount(0);
+    await expect(prospect).not.toContainText(
       "ask the vendor what it has, and what this window costs",
-      "price it against the vendor's own metadata",
-      "hand the vendor a batch job and keep its id",
-      "wait for the vendor to finish",
-      "fetch the files",
-      "convert the landing files",
-      "check the vendor's manifest against the bytes",
-    ]);
-    // A step prints an argument only when it decides one: where the bytes go,
-    // what they are converted between, and what a disagreement means. The
-    // request's dataset, schema, symbols and window are the parameters table's.
-    const details = await prospect.locator(".steps .detail").allTextContents();
-    expect(details).toEqual(["files/", "dbn · parquet", "quarantine"]);
-    await expect(prospect).not.toContainText("1 symbols");
+    );
     await expect(prospect).toContainText(
       "/datasets/databento/GLBX.MDP3/2026-11-04_2026-11-06-1a2b3c/",
     );
     // Checks are recorded facts, and each carries a verdict rather than a
     // promise, so a reader can tell a guarantee from an expectation.
     await expect(prospect.locator(".checks dt")).toHaveCount(3);
-    // Nothing restates the approval mechanics: the steps are what a click
-    // spends, and who may approve is the credential the button already asks
-    // for. A paragraph under them was the same facts in prose.
+    // Nothing restates the approval mechanics: who may approve is the
+    // credential the button already asks for.
     await expect(prospect.locator(".note")).toHaveCount(0);
   });
 

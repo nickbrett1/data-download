@@ -869,13 +869,14 @@ def _gap_of(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-# What each step of a Job does, in the words a reader who is deciding would use.
+# What each step of a Job does, in the words a reader waiting on it would use.
 #
-# The list is the *sealed Job's* steps, not a description of a plan type: a page
-# that promised a pipeline the bytes never ran would be worse than one that said
-# nothing, and `convert` only appears here because this Job has that step. An
-# unknown kind is printed as itself rather than dropped -- a step this file has
-# not learned about is still a step the runner will run.
+# The pipeline is no longer listed on the request page, but the trail names each
+# step as the runner reaches it, and these are the words it uses: "step 4 of 7 --
+# wait for the vendor to finish". The verb comes from the *sealed Job's* kind,
+# not from a description of a plan type, and an unknown kind is printed as
+# itself rather than dropped -- a step this file has not learned about is still
+# a step the runner will run.
 STEP_VERBS = {
     "resolve": "ask the vendor what it has, and what this window costs",
     "quote": "price it against the vendor's own metadata",
@@ -885,37 +886,6 @@ STEP_VERBS = {
     "convert": "convert the landing files",
     "verify": "check the vendor's manifest against the bytes",
 }
-
-# What a step adds that the page has not already said.
-#
-# The allowlist used to carry the request's own facts -- dataset, schema,
-# symbols, window -- so `GLBX.MDP3 · trades · 1 symbols · 2026-11-19 · 2026-11-20`
-# was printed under three consecutive steps, none of which decides any of it.
-# Those facts are the parameters table's, stated once at the top of the same
-# page, so repeating them beside a step only made the pipeline look like a wall
-# of jargon. What remains is the handful of things a step *does* decide: where
-# the bytes go, what they are converted from and to, and what happens when the
-# vendor's manifest disagrees.
-STEP_DETAIL_KEYS = ("dest", "from", "to", "on_failure")
-
-
-def _step_detail(step: dict[str, Any]) -> str:
-    kwargs = step.get("kwargs") or {}
-    parts: list[str] = []
-    for key in STEP_DETAIL_KEYS:
-        value = kwargs.get(key)
-        if value in (None, "", [], {}):
-            continue
-        if isinstance(value, list):
-            parts.append(", ".join(map(str, value)))
-        elif isinstance(value, dict):
-            start, end = value.get("start"), value.get("end")
-            if start and end:
-                parts.append(f"{start} → {end}")
-        else:
-            parts.append(str(value))
-    return " · ".join(parts)
-
 
 def _prospect(
     row: dict[str, Any],
@@ -927,14 +897,20 @@ def _prospect(
     """What approving this row would *do*, for a reader deciding whether to.
 
     The book answers "what is this and where is it"; this is the other half of
-    a decision -- the steps that will run, where the bytes will land, and what
-    has already been checked. All of it is read off the row: the steps come from
-    the sealed Job (the same bytes the runner will execute), the landing path
-    from the dataset and the row's id, the checks from the quote, the ceiling
-    and the catalogue answer that were recorded at submit. Nothing here is a
-    forecast of a vendor's behaviour, and that is the point: everything on the
-    page is something the service knows, so a reader can tell the difference
-    between a guarantee and an expectation.
+    a decision -- where the bytes will land, and what has already been checked.
+    All of it is read off the row: the landing path from the dataset and the
+    window, the checks from the quote, the ceiling, the catalogue answer and the
+    Job's own step list, all recorded at submit. Nothing here is a forecast of a
+    vendor's behaviour, and that is the point: everything on the page is
+    something the service knows, so a reader can tell the difference between a
+    guarantee and an expectation.
+
+    The seven steps are *not* here. They were, one per line with their verbs and
+    their details, and they answered "how does this work?" to a reader whose
+    question was "will I get my data?". The Job still runs them, and the trail
+    names each as it starts (`step 4 of 7 -- wait for the vendor to finish`), so
+    the pipeline is still visible -- at the moment it is a fact about this run
+    rather than a preview of every run.
 
     Returns `{"ready": False, "why": ...}` for a row that has no Job -- a blocked
     intent, or a draft filed before binding -- because "what will happen" has no
@@ -947,7 +923,7 @@ def _prospect(
             if not reason
             else f"this row has no Job ({reason}), so approving it would run nothing"
         )
-        return {"ready": False, "why": why, "steps": [], "checks": []}
+        return {"ready": False, "why": why, "checks": []}
 
     try:
         job = json.loads(row["job_json"])
@@ -955,16 +931,13 @@ def _prospect(
         return {
             "ready": False,
             "why": "the stored Job cannot be read, so what it would run is unknown",
-            "steps": [],
             "checks": [],
         }
 
-    steps = [
-        {
-            "kind": str(step.get("kind") or ""),
-            "verb": STEP_VERBS.get(str(step.get("kind") or ""), "run this step"),
-            "detail": _step_detail(step),
-        }
+    # Read for one reason only: whether this Job verifies what it lands. The
+    # steps are not rendered -- see the docstring.
+    kinds = [
+        str(step.get("kind") or "")
         for step in (job.get("steps") or [])
         if isinstance(step, dict)
     ]
@@ -1018,7 +991,7 @@ def _prospect(
                 ),
             }
         )
-    verify = next((s for s in steps if s["kind"] == "verify"), None)
+    verify = "verify" if "verify" in kinds else None
     checks.append(
         {
             "label": "verify",
@@ -1034,15 +1007,14 @@ def _prospect(
     return {
         "ready": True,
         "why": "",
-        "steps": steps,
         "landing": landing,
         "checks": checks,
         # No note about approving. It said who may approve, that a run cannot
         # be cancelled, and that a retry files a fresh draft -- three facts the
         # page already carries: the button asks for the credential and the
-        # server refuses without it, the steps above are what the click spends,
-        # and a failed row offers `retry` in so many words. Prose restating a
-        # page is the one thing a decision record cannot afford.
+        # server refuses without it, and a failed row offers `retry` in so many
+        # words. Prose restating a page is the one thing a decision record
+        # cannot afford.
     }
 
 
@@ -2397,9 +2369,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # `_book_row` copies the column, but an older row has none -- `None`
             # says "not recorded", which is different from a name.
             "filed_by": row["filed_by"] if "filed_by" in row.keys() else None,
-            # What approving would do: the Job's own steps, where the bytes land,
-            # and what has already been checked. Read off the row, so a reader
-            # can tell a recorded fact from an expectation.
+            # What approving would do: where the bytes land, and what has
+            # already been checked. Read off the row, so a reader can tell a
+            # recorded fact from an expectation.
             # The table row, not the view: the view is the book's projection
             # and drops `job_json`, which is the one column this needs.
             "prospect": _prospect(

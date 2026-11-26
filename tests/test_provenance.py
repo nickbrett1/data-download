@@ -23,8 +23,6 @@ from conftest import PLAN_BODY, auth, iso, seed
 
 FILED_BY = "X-Data-Download-Filed-By"
 
-STEP_KINDS = ["resolve", "quote", "submit", "poll", "download", "convert", "verify"]
-
 
 def _file(client, **extra):
     response = client.post(
@@ -65,15 +63,21 @@ def test_the_declaration_is_bounded_and_printable(client):
     assert got.startswith("agentscriptalert1")
 
 
-def test_the_prospect_is_the_sealed_jobs_own_steps(client):
+def test_the_prospect_does_not_preview_the_pipeline(client):
+    """Seven numbered steps answered a question a decider was not asking.
+
+    "ask the vendor what it has" ... "check the vendor's manifest against the
+    bytes" is how the service works, not what a person gets; the Job still runs
+    all seven and the trail names each as it starts. What a decision turns on is
+    where the bytes land and whether anything is already wrong, and that is all
+    the prospect carries.
+    """
     filed = _file(client)
     detail = client.get(f"/ui/request/{filed['request_id']}.json").json()
     prospect = detail["prospect"]
     assert prospect["ready"] is True
-    # The Job is the published artefact: the page cannot promise a pipeline the
-    # runner will not execute, because it is reading the runner's own script.
-    assert [step["kind"] for step in prospect["steps"]] == STEP_KINDS
-    assert all(step["verb"] for step in prospect["steps"])
+    assert "steps" not in prospect
+    assert set(prospect) == {"ready", "why", "landing", "checks"}
     # The dataset comes from the Job's resolve step, not from a guess.
     assert detail["dataset"] == "GLBX.MDP3"
     # `landing` is `None` here on purpose: this suite's settings name no
@@ -122,7 +126,7 @@ def test_the_trail_says_where_the_run_has_got_to(client, db_path, settings):
 
 
 def test_the_prospect_does_not_restate_approving_in_prose(client):
-    """The steps are what a click spends; the button is who may spend it.
+    """The button is who may approve; the trail is what the click spent.
 
     A note under them said both again ("approving needs a tailnet login…",
     "a run cannot be cancelled…") in the one place a paragraph has to be read
@@ -132,33 +136,6 @@ def test_the_prospect_does_not_restate_approving_in_prose(client):
     prospect = client.get(f"/ui/request/{filed['request_id']}.json").json()["prospect"]
     assert "approval" not in prospect
     assert "note" not in prospect
-
-
-def test_a_step_prints_only_what_it_decides(client):
-    """The pipeline says what each step *does*, not what the request asked for.
-
-    Dataset, schema, symbols and window are the same on every step and are in
-    the parameters table above; printing them beside each one made the list read
-    as jargon and said nothing twice over.
-    """
-    filed = _file(client)
-    steps = client.get(f"/ui/request/{filed['request_id']}.json").json()["prospect"][
-        "steps"
-    ]
-    details = {step["kind"]: step["detail"] for step in steps}
-    assert details == {
-        "resolve": "",
-        "quote": "",
-        "submit": "",
-        "poll": "",
-        "download": "files/",
-        "convert": "dbn · parquet",
-        "verify": "quarantine",
-    }
-    for step in steps:
-        assert "GLBX.MDP3" not in step["detail"]
-        assert "trades" not in step["detail"]
-        assert "2026-10-01" not in step["detail"]
 
 
 def test_the_landing_path_is_the_one_the_runner_writes(db_path, tmp_path):
@@ -230,7 +207,7 @@ def test_a_row_with_no_job_says_it_would_run_nothing(client, db_path):
     prospect = client.get("/ui/request/seed_blocked.json").json()["prospect"]
     assert prospect["ready"] is False
     assert "awaiting_plan" in prospect["why"]
-    assert prospect["steps"] == []
+    assert "steps" not in prospect
 
 
 def test_a_page_filed_retry_says_the_page_filed_it(client, db_path):

@@ -447,28 +447,21 @@
         {/if}
       </section>
 
-      <!-- What approving would do, before the verbs that do it. The steps are
-           the sealed Job's own -- the same bytes the runner will execute -- so
-           this is the pipeline as it will run, not a description of what a plan
-           type usually does. Everything here was recorded at submit; nothing is
-           a forecast of the vendor. -->
+      <!-- What approving would do, before the verbs that do it: where the
+           bytes land, and what has already been checked. The seven-step
+           pipeline used to be listed here, in full, and it was the one part of
+           the page that answered a question nobody deciding was asking -- "how
+           does this work?" against "will I get my data?". The steps still run,
+           and the trail names each one as it starts ("step 4 of 7 -- wait for
+           the vendor to finish"), which is where a reader who cares about the
+           pipeline actually meets it. What is left is the two things a decision
+           turns on: where it lands, and whether anything is wrong. -->
       {#if data.prospect}
         <section class="block prospect">
           <p class="micro">if you approve</p>
           {#if !data.prospect.ready}
             <p class="quiet">{data.prospect.why}</p>
           {:else}
-            <ol class="steps">
-              {#each data.prospect.steps as step, index (index)}
-                <li>
-                  <span class="n">{index + 1}</span>
-                  <span class="verb">{step.verb}</span>
-                  {#if step.detail}
-                    <code class="detail">{step.detail}</code>
-                  {/if}
-                </li>
-              {/each}
-            </ol>
             {#if data.prospect.landing}
               <p class="quiet landing">
                 lands at <code>{data.prospect.landing.path}</code>
@@ -492,8 +485,8 @@
             <!-- No paragraph about approving: who may approve is the
                  credential the button asks for, and "a run cannot be
                  cancelled" / "a failed row is retried" are the verbs the page
-                 already offers. Prose under a list of steps is the list said
-                 again. -->
+                 already offers. Prose restating a page is the one thing a
+                 decision record cannot afford. -->
           {/if}
         </section>
       {/if}
@@ -688,41 +681,6 @@
     color: var(--ink);
   }
 
-  /* The pipeline, numbered because the order is the information: `download`
-     before `verify` is a different guarantee from the reverse. One column, the
-     step's verb first, and -- only where the step decides something the request
-     itself does not -- that decision in mono and quiet beneath it. A step that
-     repeats the request's dataset, symbols and window says nothing new. */
-  .steps {
-    margin: 10px 0 0;
-    padding: 0;
-    list-style: none;
-    display: grid;
-    gap: 6px;
-  }
-
-  .steps li {
-    display: grid;
-    grid-template-columns: 18px 1fr;
-    column-gap: 8px;
-    align-items: baseline;
-    font-size: 13.5px;
-    line-height: 1.45;
-  }
-
-  .steps .n {
-    font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 11px;
-    color: var(--ink-faint);
-    text-align: right;
-  }
-
-  .steps .detail {
-    grid-column: 2;
-    font-size: 11.5px;
-    color: var(--ink-muted);
-  }
-
   .landing {
     margin: 10px 0 0;
   }
@@ -731,10 +689,9 @@
      `/datasets/GLBX.MDP3/req_fc1b83716aa44c18ab3a13ea70e3bb8d/` is wider than a
      phone, and a code block that will not break pushes the whole card sideways.
      Break wherever the line ends rather than at a slash -- the path is copied,
-     not scanned, and a wrapped path is legible while an overflowing one is not.
-     The steps' details carry vendor arguments with the same shape. */
-  .landing code,
-  .steps .detail {
+     not scanned, and a wrapped path is legible while an overflowing one is
+     not. */
+  .landing code {
     overflow-wrap: anywhere;
   }
 

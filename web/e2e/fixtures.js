@@ -511,43 +511,12 @@ export const draftDetail = {
   match: null,
   failure: null,
   filed_by: "page",
-  // A bound row: seven steps read off the sealed Job, the landing directory the
-  // runner will write, and the checks that were recorded at submit.
+  // A bound row: where the runner will write, and the checks that were recorded
+  // at submit. The seven steps are not on the page -- they are what the run
+  // does, and the trail names each one as it starts.
   prospect: {
     ready: true,
     why: "",
-    steps: [
-      // A step carries a detail only when it decides something the page has not
-      // already said. The request's dataset, schema, symbols and window are the
-      // parameters table's, not each step's.
-      {
-        kind: "resolve",
-        verb: "ask the vendor what it has, and what this window costs",
-        detail: null,
-      },
-      {
-        kind: "quote",
-        verb: "price it against the vendor's own metadata",
-        detail: null,
-      },
-      {
-        kind: "submit",
-        verb: "hand the vendor a batch job and keep its id",
-        detail: null,
-      },
-      { kind: "poll", verb: "wait for the vendor to finish", detail: null },
-      { kind: "download", verb: "fetch the files", detail: "files/" },
-      {
-        kind: "convert",
-        verb: "convert the landing files",
-        detail: "dbn · parquet",
-      },
-      {
-        kind: "verify",
-        verb: "check the vendor's manifest against the bytes",
-        detail: "quarantine",
-      },
-    ],
     landing: {
       // The runner's path: the vendor's folder, the dataset, and a directory
       // named by the window and a short id (see `layout.landing_name`).
