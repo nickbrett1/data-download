@@ -539,10 +539,9 @@ export const draftDetail = {
       },
     ],
     landing: {
-      // The real shape: a 32-hex request id inside the path. One unbroken
-      // token, wider than a phone -- the case that used to push the card
-      // sideways.
-      path: "/datasets/GLBX.MDP3/req_fc1b83716aa44c18ab3a13ea70e3bb8d/",
+      // The runner's path: the vendor's folder, the dataset, and a directory
+      // named by the window and a short id (see `layout.landing_name`).
+      path: "/datasets/databento/GLBX.MDP3/2026-11-04_2026-11-06-1a2b3c/",
       dataset: "GLBX.MDP3",
     },
     checks: [
@@ -564,10 +563,10 @@ export const draftDetail = {
       },
     ],
     approval: {
-      who: "a tailnet login named in DATA_DOWNLOAD_APPROVERS, through `tailscale serve`",
-      does: "claims the row under a lease, runs this Job once, and lands the bytes only if the verifier agrees",
+      who: "a tailnet login in DATA_DOWNLOAD_APPROVERS",
+      does: "runs this Job once, and lands the bytes only if the verifier agrees",
       after:
-        "a run cannot be cancelled once it starts; a failed row can be retried, which files a fresh draft for a second approval",
+        "a run cannot be cancelled; a failed row is retried as a fresh draft",
     },
   },
   identity: {

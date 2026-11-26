@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import driver_client, interpreter
+from . import driver_client, interpreter, layout
 from . import job as job_mod
 from .claim import default_owner
 from .config import find_plan_types_dir, load_settings
@@ -175,21 +175,55 @@ def vendor_slug(vendor: str | None) -> str:
     Case is not meaningful in a directory name and two spellings of one vendor
     would be two folders, so the registry's display name is folded once, here.
     """
-    slug = " ".join((vendor or "").split()).lower().replace(" ", "-").replace("_", "-")
+    slug = layout.vendor_slug(vendor)
     if not DATASET_RE.match(slug):
         raise RunRefused("bad_vendor", f"{vendor!r} is not a directory name")
     return slug
 
 
+def window_of(job: Any) -> tuple[Any, Any]:
+    """The window this Job asked for: its `resolve` dates, or its `quote` dates.
+
+    Read off the Job for the same reason `dataset_of` is -- the Job is what was
+    sealed. The binder puts the window on both steps; an older Job, or another
+    plan type, may carry it on one.
+    """
+    steps = job.get("steps") if isinstance(job, dict) else None
+    found: dict[str, Any] = {}
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        kwargs = step.get("kwargs")
+        kwargs = kwargs if isinstance(kwargs, dict) else {}
+        for key in ("start", "end"):
+            if key not in found and kwargs.get(key):
+                found[key] = kwargs[key]
+    return found.get("start"), found.get("end")
+
+
 def destination(
-    datasets_dir: Path, vendor: str, dataset: str, request_id: str
+    datasets_dir: Path,
+    vendor: str,
+    dataset: str,
+    request_id: str,
+    *,
+    start: Any = None,
+    end: Any = None,
 ) -> Path:
-    """`<datasets>/<vendor>/<dataset>/<request_id>/` -- validated, then joined."""
+    """`<datasets>/<vendor>/<dataset>/<name>/` -- validated, then joined.
+
+    `name` is the window and a short id (`layout.landing_name`) when the Job
+    carried a window, and the request id when it did not: a person navigating
+    the share reads dates, not 32 hex characters.
+    """
     if not DATASET_RE.match(dataset or ""):
         raise RunRefused("bad_dataset", f"{dataset!r} is not a directory name")
     if not REQUEST_ID_RE.match(request_id or ""):
         raise RunRefused("bad_request_id", f"{request_id!r} is not a request id")
-    return Path(datasets_dir) / vendor_slug(vendor) / dataset / request_id
+    name = layout.landing_name(request_id, start, end)
+    if not DATASET_RE.match(name):
+        raise RunRefused("bad_request_id", f"{name!r} is not a directory name")
+    return Path(datasets_dir) / vendor_slug(vendor) / dataset / name
 
 
 def bundle_digest(files: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> str:
@@ -570,7 +604,15 @@ async def run_one(
                 },
                 now=now,
             )
-        root = destination(Path(datasets_dir), vendor, dataset or "", request_id)
+        window_start, window_end = window_of(job)
+        root = destination(
+            Path(datasets_dir),
+            vendor,
+            dataset or "",
+            request_id,
+            start=window_start,
+            end=window_end,
+        )
 
         dest = dest_of(job) or "files/"
         relative = Path(dest)

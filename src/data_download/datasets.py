@@ -36,6 +36,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from . import layout
 from .registry import Registry
 
 # States worth browsing: what is committed, and what is on its way.
@@ -171,12 +172,25 @@ def _request_entry(
         # row always has one; this is the belt to the claim's braces.)
         return None
 
-    vendor_slug = " ".join(str(vendor).split()).lower().replace(" ", "-")
+    vendor_slug = layout.vendor_slug(vendor)
+    # The directory a run writes today is named by its window and a short id
+    # (`layout.landing_name`); anything landed before that layout is named by
+    # the request id. The new name is the answer, and the old one is the
+    # fallback -- a layout change must not take history off the page.
+    name = layout.landing_name(str(row["id"]), facts.get("start"), facts.get("end"))
     request_dir = (
-        resolve_under(root, vendor_slug, str(dataset), str(row["id"]))
+        resolve_under(root, vendor_slug, str(dataset), name)
         if root is not None and vendor_slug
         else None
     )
+    legacy = (
+        resolve_under(root, vendor_slug, str(dataset), layout.legacy_name(str(row["id"])))
+        if root is not None and vendor_slug
+        else None
+    )
+    if (request_dir is None or not request_dir.is_dir()) and legacy is not None:
+        if legacy.is_dir():
+            request_dir, name = legacy, layout.legacy_name(str(row["id"]))
     landing = _landing(request_dir) if request_dir else None
     dest = (request_dir / "files") if request_dir else None
 
@@ -200,7 +214,7 @@ def _request_entry(
 
     for entry in files:
         entry["href"] = (
-            f"/datasets/file/{vendor_slug}/{dataset}/{row['id']}/{entry['name']}"
+            f"/datasets/file/{vendor_slug}/{dataset}/{name}/{entry['name']}"
             if vendor_slug
             else None
         )

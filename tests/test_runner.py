@@ -144,7 +144,7 @@ def test_a_clean_run_lands_bytes_under_the_dataset_and_settles(
     assert result.settled is True
     assert len(result.files) == 2  # 2026-10-01 -> 2026-10-03, split by day
 
-    root = datasets / "databento" / "GLBX.MDP3" / request_id
+    root = _dir(datasets, request_id)
     landed = sorted(p.name for p in (root / "files").iterdir())
     assert landed == ["GLBX.MDP3-2026-10-01.dbn.zst", "GLBX.MDP3-2026-10-02.dbn.zst"]
 
@@ -168,7 +168,7 @@ def test_the_landed_digest_is_the_hash_of_the_landed_bytes(
 ):
     request_id, datasets, result = _land(client, settings, tmp_path, wire)
 
-    root = datasets / "databento" / "GLBX.MDP3" / request_id / "files"
+    root = _dir(datasets, request_id) / "files"
     manifest = "".join(
         f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n"
         for p in sorted(root.iterdir())
@@ -182,7 +182,7 @@ def test_provenance_sits_beside_files_and_never_inside_it(
     """Inside `dest`, `landing.json` would be staged and absent from the vendor
     manifest -- the verifier would correctly call a good landing a contradiction."""
     request_id, datasets, result = _land(client, settings, tmp_path, wire)
-    root = datasets / "databento" / "GLBX.MDP3" / request_id
+    root = _dir(datasets, request_id)
 
     landing = json.loads((root / "landing.json").read_text())
     assert landing["runner_version"] == RUNNER_VERSION
@@ -198,7 +198,7 @@ def test_provenance_sits_beside_files_and_never_inside_it(
 def test_the_landed_event_names_the_owner_and_the_digest(
     client, settings, tmp_path, wire
 ):
-    request_id, _, result = _land(client, settings, tmp_path, wire)
+    request_id, datasets, result = _land(client, settings, tmp_path, wire)
     landed = [e for e in _events(settings.db_path, request_id) if e["event"] == "landed"]
     assert len(landed) == 1
     assert landed[0]["actor_kind"] == "runner"
@@ -206,7 +206,8 @@ def test_the_landed_event_names_the_owner_and_the_digest(
     assert detail["owner"] == "host:1:abc"
     assert detail["landed_sha256"] == result.landed_sha256
     assert detail["files"] == 2
-    assert detail["dest"].endswith(f"/{request_id}/files")
+    # The event records where the bytes went: the window-named directory.
+    assert detail["dest"] == f"{_dir(datasets, request_id)}/files"
 
 
 # -- the verdict decides the state ----------------------------------------
@@ -252,8 +253,8 @@ def test_a_contradiction_settles_failed_and_carries_no_digest(
     assert result.state == "failed"
     assert result.verdict == interpreter.CONTRADICTION
     assert result.landed_sha256 is None
-    assert (datasets / "databento" / "GLBX.MDP3" / request_id / "files").is_dir()
-    assert list((datasets / "databento" / "GLBX.MDP3" / request_id / "files").iterdir()) == []
+    assert (_dir(datasets, request_id) / "files").is_dir()
+    assert list((_dir(datasets, request_id) / "files").iterdir()) == []
 
     stored = _run(_call(settings.db_path, "get_request", request_id))
     assert stored["state"] == "failed"
@@ -401,6 +402,26 @@ def test_a_dataset_cannot_be_a_path(tmp_path):
     )
 
 
+def test_the_request_lands_under_its_window_and_a_short_id(tmp_path):
+    """A person browsing the share reads dates, not 32 hex characters."""
+    landed = destination(
+        tmp_path,
+        "Databento",
+        "GLBX.MDP3",
+        "req_fc1b83716aa44c18ab3a13ea70e3bb8d",
+        start="2026-11-04",
+        end="2026-11-06",
+    )
+    assert landed == tmp_path / "databento" / "GLBX.MDP3" / "2026-11-04_2026-11-06-fc1b83"
+
+
+def _dir(datasets, request_id: str, start="2026-10-01", end="2026-10-03"):
+    """The directory the runner writes: the window, then a short request id."""
+    from data_download.layout import landing_name
+
+    return datasets / "databento" / "GLBX.MDP3" / landing_name(request_id, start, end)
+
+
 def test_the_vendor_is_the_top_level_and_comes_from_the_plan_type(
     client, settings, tmp_path, wire
 ):
@@ -539,7 +560,7 @@ def test_the_cli_runs_the_oldest_approved_request(client, settings, tmp_path, wi
     assert request_id in proc.stdout
     assert "succeeded" in proc.stdout
     assert (
-        tmp_path / "datasets" / "databento" / "GLBX.MDP3" / request_id / "files"
+        _dir(tmp_path / "datasets", request_id) / "files"
     ).is_dir()
 
 

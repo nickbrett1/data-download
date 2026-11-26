@@ -34,6 +34,7 @@ from conftest import CODE_REF, PLAN_BODY, REPO_ROOT, TOKENS, auth, seed, served
 from data_download.app import create_app
 from data_download.config import Settings, parse_interval, parse_switch
 from data_download.db import ClaimRefused, Store, shift_seconds, utcnow
+from data_download.layout import landing_name
 from data_download.worker import Worker, made_progress, tick
 from fake_runtime import FakeRuntime
 
@@ -101,7 +102,11 @@ def test_a_pass_runs_the_approved_row_and_settles_it(
     row = _state(settings.db_path, request_id)
     assert row["state"] == "succeeded"
     assert row["lease_until"] is None
-    landed = tmp_path / "datasets" / "databento" / "GLBX.MDP3" / request_id / "files"
+    landed = (
+        tmp_path / "datasets" / "databento" / "GLBX.MDP3"
+        / landing_name(request_id, "2026-10-01", "2026-10-03")
+        / "files"
+    )
     assert len(list(landed.iterdir())) == 2
 
 
@@ -559,7 +564,11 @@ def test_approving_on_the_page_is_enough(tmp_path, db_path, wire):
         detail = test_client.get(f"/ui/request/{request_id}.json").json()
         assert detail["state"] == "succeeded"
 
-    landed = tmp_path / "datasets" / "databento" / "GLBX.MDP3" / request_id / "files"
+    landed = (
+        tmp_path / "datasets" / "databento" / "GLBX.MDP3"
+        / landing_name(request_id, "2026-10-01", "2026-10-03")
+        / "files"
+    )
     assert len(list(landed.iterdir())) == 2
 
 

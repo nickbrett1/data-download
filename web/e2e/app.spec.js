@@ -1141,16 +1141,25 @@ test.describe("the shell on a phone", () => {
   test("a request page holds a landing path narrower than itself", async ({
     page,
   }) => {
-    // The path is one unbroken token with a 32-hex id in it: it cannot fit a
-    // 390px phone on one line, and it used to widen the whole document rather
-    // than wrap inside its card.
-    await mock(page, { detail: draftDetail });
+    // Rows landed before the dates-first layout are still named by their whole
+    // request id: one unbroken token with 32 hex characters in it, which cannot
+    // fit a 390px phone on one line and used to widen the whole document
+    // rather than wrap inside its card.
+    const legacy =
+      "/datasets/databento/GLBX.MDP3/req_fc1b83716aa44c18ab3a13ea70e3bb8d/";
+    await mock(page, {
+      detail: {
+        ...draftDetail,
+        prospect: {
+          ...draftDetail.prospect,
+          landing: { path: legacy, dataset: "GLBX.MDP3" },
+        },
+      },
+    });
     await page.goto("/requests/req_draft01");
 
     const path = page.locator(".prospect .landing code");
-    await expect(path).toHaveText(
-      "/datasets/GLBX.MDP3/req_fc1b83716aa44c18ab3a13ea70e3bb8d/",
-    );
+    await expect(path).toHaveText(legacy);
     await expectNoHorizontalScroll(page);
 
     // Wrapping is the point, not clipping: the code box fits its paragraph,
@@ -1479,12 +1488,19 @@ test.describe("naming a request, and opening it", () => {
       "check the vendor's manifest against the bytes",
     ]);
     await expect(prospect).toContainText(
-      "/datasets/GLBX.MDP3/req_fc1b83716aa44c18ab3a13ea70e3bb8d/",
+      "/datasets/databento/GLBX.MDP3/2026-11-04_2026-11-06-1a2b3c/",
     );
     // Checks are recorded facts, and each carries a verdict rather than a
     // promise, so a reader can tell a guarantee from an expectation.
     await expect(prospect.locator(".checks dt")).toHaveCount(3);
-    await expect(prospect).toContainText("DATA_DOWNLOAD_APPROVERS");
+    // Three facts, not a paragraph: who may approve, what the click spends,
+    // and what cannot be undone. The lease and the verifier are the steps.
+    const note = prospect.locator(".note");
+    await expect(note).toContainText(
+      "a tailnet login in DATA_DOWNLOAD_APPROVERS",
+    );
+    await expect(note).toContainText("runs this Job once");
+    await expect(note).not.toContainText("under a lease");
   });
 
   test("a row with no Job says approving it would run nothing", async ({

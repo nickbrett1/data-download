@@ -83,6 +83,17 @@ async def _approve_and_claim(settings, request_id: str, owner="host:1:abc"):
         await store.close()
 
 
+def _landing_dir(datasets, request_id: str, start="2026-10-01", end="2026-10-03"):
+    """The directory the runner writes for this request: window, then a short id.
+
+    Named once here rather than spelled out in each test, so a test that makes
+    the directory by hand makes the same one the runner would.
+    """
+    from data_download.layout import landing_name
+
+    return datasets / "databento" / "GLBX.MDP3" / landing_name(request_id, start, end)
+
+
 def test_a_landed_request_is_listed_under_its_vendor_and_dataset(settings, tmp_path, wire):
     datasets = tmp_path / "datasets"
     with _client_with(settings, datasets) as client:
@@ -122,11 +133,16 @@ def test_a_landed_request_is_listed_under_its_vendor_and_dataset(settings, tmp_p
         "GLBX.MDP3-2026-10-01.dbn.zst",
         "GLBX.MDP3-2026-10-02.dbn.zst",
     ]
+    # The directory is named by its window and a short id, not by the whole
+    # request id: a person browsing the share reads dates.
+    from data_download.layout import landing_name
+
+    name = landing_name(request_id, request["start"], request["end"])
     for entry in request["files"]:
         assert entry["bytes"] == 4079
         assert entry["sha256"]
         assert entry["href"] == (
-            f"/datasets/file/databento/GLBX.MDP3/{request_id}/{entry['name']}"
+            f"/datasets/file/databento/GLBX.MDP3/{name}/{entry['name']}"
         )
 
 
@@ -137,7 +153,7 @@ def test_a_running_request_lists_the_bytes_it_already_has(settings, tmp_path):
         request_id = _file(client)
         _run(_approve_and_claim(settings, request_id))
 
-        landed_dir = datasets / "databento" / "GLBX.MDP3" / request_id / "files"
+        landed_dir = _landing_dir(datasets, request_id) / "files"
         landed_dir.mkdir(parents=True)
         (landed_dir / "GLBX.MDP3-2026-10-01.dbn.zst").write_bytes(b"x" * 1234)
 
@@ -153,6 +169,32 @@ def test_a_running_request_lists_the_bytes_it_already_has(settings, tmp_path):
     assert request["files"][0]["sha256"] is None  # never hashed for a listing
 
 
+def test_a_directory_named_by_the_old_layout_is_still_found(settings, tmp_path):
+    """Bytes landed before the dates-first layout stay on the page.
+
+    A layout change is not a reason for history to disappear: the request id
+    is still tried when the window-named directory is absent.
+    """
+    datasets = tmp_path / "datasets"
+    with _client_with(settings, datasets) as client:
+        request_id = _file(client)
+        _run(_approve_and_claim(settings, request_id))
+
+        legacy = datasets / "databento" / "GLBX.MDP3" / request_id / "files"
+        legacy.mkdir(parents=True)
+        (legacy / "GLBX.MDP3-2026-10-01.dbn.zst").write_bytes(b"x" * 99)
+
+        body = client.get("/ui/datasets.json").json()
+
+    request = body["vendors"][0]["datasets"][0]["requests"][0]
+    assert request["on_disk"] is True
+    assert [f["name"] for f in request["files"]] == ["GLBX.MDP3-2026-10-01.dbn.zst"]
+    # The link names the directory the file is actually in.
+    assert request["files"][0]["href"] == (
+        f"/datasets/file/databento/GLBX.MDP3/{request_id}/GLBX.MDP3-2026-10-01.dbn.zst"
+    )
+
+
 def test_a_settled_row_whose_directory_is_gone_says_so(settings, tmp_path, wire):
     """`succeeded` with no bytes is the one state a browser must not paper over."""
     datasets = tmp_path / "datasets"
@@ -163,7 +205,7 @@ def test_a_settled_row_whose_directory_is_gone_says_so(settings, tmp_path, wire)
         # Somebody cleaned the share.
         import shutil
 
-        shutil.rmtree(datasets / "databento" / "GLBX.MDP3" / request_id)
+        shutil.rmtree(_landing_dir(datasets, request_id))
 
         body = client.get("/ui/datasets.json").json()
 
@@ -200,7 +242,7 @@ def test_a_quarantined_landing_is_not_what_you_have(settings, tmp_path, wire):
         # contradiction, so PLAN_BODY's `quarantine` decides -> `failed`.
         result = _run(_land(settings, datasets, request_id, wire, mode="short"))
         assert result.state == "failed"
-        files = datasets / "databento" / "GLBX.MDP3" / request_id / "files"
+        files = _landing_dir(datasets, request_id) / "files"
         assert sorted(p.name for p in files.iterdir())  # bytes really are there
 
         body = client.get("/ui/datasets.json").json()
@@ -228,7 +270,10 @@ def test_a_landed_file_downloads_as_an_attachment(settings, tmp_path, wire):
         _run(_approve(settings, request_id))
         _run(_land(settings, datasets, request_id, wire))
 
-        url = f"/datasets/file/databento/GLBX.MDP3/{request_id}/GLBX.MDP3-2026-10-01.dbn.zst"
+        from data_download.layout import landing_name
+
+        folder = landing_name(request_id, "2026-10-01", "2026-10-03")
+        url = f"/datasets/file/databento/GLBX.MDP3/{folder}/GLBX.MDP3-2026-10-01.dbn.zst"
         response = client.get(url)
 
     assert response.status_code == 200

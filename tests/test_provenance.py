@@ -107,9 +107,13 @@ def test_the_landing_path_is_the_one_the_runner_writes(db_path, tmp_path):
             f"/ui/request/{filed['request_id']}.json"
         ).json()["prospect"]
     assert prospect["landing"]["dataset"] == "GLBX.MDP3"
-    assert prospect["landing"]["path"].endswith(
-        f"/GLBX.MDP3/{filed['request_id']}/"
-    )
+    # The promise is the path the runner joins: the vendor's folder, the
+    # dataset, and the directory named by the window and a short id.
+    from data_download.layout import landing_name
+
+    name = landing_name(filed["request_id"], "2026-10-01", "2026-10-03")
+    assert prospect["landing"]["path"].endswith(f"/databento/GLBX.MDP3/{name}/")
+    assert name != filed["request_id"]
 
 
 def test_the_checks_are_recorded_facts_not_forecasts(client):

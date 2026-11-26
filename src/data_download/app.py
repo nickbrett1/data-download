@@ -39,6 +39,7 @@ from . import (
     driver_build,
     driver_client,
     errors,
+    layout,
     match,
     mcp_surface,
     profiles,
@@ -973,8 +974,16 @@ def _prospect(
 
     dataset = _dataset_of(row)
     root = str(settings.datasets_dir) if settings.datasets_dir else None
+    # The same three facts the runner joins: the vendor's folder, the dataset,
+    # and the directory name the run will write (`layout.landing_name` -- the
+    # window and a short id). The vendor used to be missing from this promise,
+    # so the path shown was one level shallower than the one the bytes land in.
+    facts = datasets.job_facts(job)
+    name = layout.landing_name(str(row["id"]), facts.get("start"), facts.get("end"))
+    vendor_slug = layout.vendor_slug(_vendor_of(row, registry) if registry else "")
+    parts = [part for part in (vendor_slug, dataset, name) if part]
     landing = (
-        {"path": f"{root.rstrip('/')}/{dataset}/{row['id']}/", "dataset": dataset}
+        {"path": f"{root.rstrip('/')}/{'/'.join(parts)}/", "dataset": dataset}
         if root and dataset
         else None
     )
@@ -1026,10 +1035,14 @@ def _prospect(
         "steps": steps,
         "landing": landing,
         "checks": checks,
+        # Three short facts, not a paragraph: who may approve, what the click
+        # spends, and the two things a person cannot undo. Everything else --
+        # the lease, the verifier, the second approval -- is on the page
+        # already, in the steps above and in the state of a failed row.
         "approval": {
-            "who": "a tailnet login named in DATA_DOWNLOAD_APPROVERS, through `tailscale serve`",
-            "does": "claims the row under a lease, runs this Job once, and lands the bytes only if the verifier agrees",
-            "after": "a run cannot be cancelled once it starts; a failed row can be retried, which files a fresh draft for a second approval",
+            "who": "a tailnet login in DATA_DOWNLOAD_APPROVERS",
+            "does": "runs this Job once, and lands the bytes only if the verifier agrees",
+            "after": "a run cannot be cancelled; a failed row is retried as a fresh draft",
         },
     }
 
