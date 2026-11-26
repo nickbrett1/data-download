@@ -1138,6 +1138,40 @@ test.describe("the shell on a phone", () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test("a request page holds a landing path narrower than itself", async ({
+    page,
+  }) => {
+    // The path is one unbroken token with a 32-hex id in it: it cannot fit a
+    // 390px phone on one line, and it used to widen the whole document rather
+    // than wrap inside its card.
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+
+    const path = page.locator(".prospect .landing code");
+    await expect(path).toHaveText(
+      "/datasets/GLBX.MDP3/req_fc1b83716aa44c18ab3a13ea70e3bb8d/",
+    );
+    await expectNoHorizontalScroll(page);
+
+    // Wrapping is the point, not clipping: the code box fits its paragraph,
+    // and the height says it took more than one line.
+    const box = await path.evaluate((el) => {
+      const own = el.getBoundingClientRect();
+      const parent = el.parentElement.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      const line =
+        style.lineHeight === "normal"
+          ? parseFloat(style.fontSize) * 1.5
+          : parseFloat(style.lineHeight);
+      return {
+        fits: own.right <= parent.right + 1,
+        lines: Math.round(own.height / line),
+      };
+    });
+    expect(box.fits).toBe(true);
+    expect(box.lines).toBeGreaterThan(1);
+  });
+
   test("plan types shows every view and a typed intro", async ({ page }) => {
     await mock(page);
     await page.goto("/plan-types");
@@ -1408,7 +1442,7 @@ test.describe("naming a request, and opening it", () => {
       "check the vendor's manifest against the bytes",
     ]);
     await expect(prospect).toContainText(
-      "/srv/data/datasets/GLBX.MDP3/req_draft01/",
+      "/datasets/GLBX.MDP3/req_fc1b83716aa44c18ab3a13ea70e3bb8d/",
     );
     // Checks are recorded facts, and each carries a verdict rather than a
     // promise, so a reader can tell a guarantee from an expectation.

@@ -539,7 +539,10 @@ export const draftDetail = {
       },
     ],
     landing: {
-      path: "/srv/data/datasets/GLBX.MDP3/req_draft01/",
+      // The real shape: a 32-hex request id inside the path. One unbroken
+      // token, wider than a phone -- the case that used to push the card
+      // sideways.
+      path: "/datasets/GLBX.MDP3/req_fc1b83716aa44c18ab3a13ea70e3bb8d/",
       dataset: "GLBX.MDP3",
     },
     checks: [

@@ -696,6 +696,17 @@
     margin: 10px 0 0;
   }
 
+  /* A landing path is one unbroken token, and a request id is 32 hex characters:
+     `/datasets/GLBX.MDP3/req_fc1b83716aa44c18ab3a13ea70e3bb8d/` is wider than a
+     phone, and a code block that will not break pushes the whole card sideways.
+     Break wherever the line ends rather than at a slash -- the path is copied,
+     not scanned, and a wrapped path is legible while an overflowing one is not.
+     The steps' details carry vendor arguments with the same shape. */
+  .landing code,
+  .steps .detail {
+    overflow-wrap: anywhere;
+  }
+
   /* The checks are the same two columns as the parameters above, because they
      are the same kind of fact: a label and its value. The pill carries the
      verdict, so the text can be a sentence rather than a colour. */
