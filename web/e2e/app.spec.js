@@ -1172,6 +1172,43 @@ test.describe("the shell on a phone", () => {
     expect(box.lines).toBeGreaterThan(1);
   });
 
+  test("a claim id in the events trail does not widen the page", async ({
+    page,
+  }) => {
+    // A runner's lease owner is `host:pid:run` -- one unbroken token -- and the
+    // claim chip used to expand the flex row past the screen instead of
+    // dropping to the next line.
+    await mock(page, {
+      detail: {
+        ...draftDetail,
+        events: [
+          ...draftDetail.events,
+          {
+            id: 2,
+            ts: "2026-11-15T23:43:10Z",
+            actor_kind: "runner",
+            event: "claimed",
+            summary: "claimed by 1cf92b8a0db1",
+            detail: { owner: "1cf92b8a0db1:1:be86b0c7" },
+          },
+        ],
+      },
+    });
+    await page.goto("/requests/req_draft01");
+
+    const chip = page.locator(".events .who", {
+      hasText: "1cf92b8a0db1:1:be86b0c7",
+    });
+    await expect(chip).toHaveText("1cf92b8a0db1:1:be86b0c7");
+    await expectNoHorizontalScroll(page);
+
+    const fits = await chip.evaluate((el) => {
+      const own = el.getBoundingClientRect();
+      return own.right <= window.innerWidth && own.left >= 0;
+    });
+    expect(fits).toBe(true);
+  });
+
   test("plan types shows every view and a typed intro", async ({ page }) => {
     await mock(page);
     await page.goto("/plan-types");

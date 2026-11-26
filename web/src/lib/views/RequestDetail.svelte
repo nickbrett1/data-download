@@ -846,6 +846,11 @@
     align-items: baseline;
     font-size: 12px;
     color: var(--ink-dim);
+    /* A claim chip carries an owner like `1cf92b8a0db1:1:be86b0c7` -- one
+       token with no break in it -- and the sentence beside it is prose. On a
+       phone the chip drops to its own line instead of pushing the page wider
+       than the screen. */
+    flex-wrap: wrap;
   }
 
   .when {
@@ -856,6 +861,11 @@
 
   .what {
     color: var(--ink);
+    /* Shrink before overflowing: `min-width: 0` lets a flex item go narrow,
+       and the break rule covers a word longer than the column. */
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .who {
@@ -864,6 +874,8 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-pill, 999px);
     padding: 0 6px;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 
   .raw {
