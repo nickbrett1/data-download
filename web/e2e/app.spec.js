@@ -1229,9 +1229,12 @@ test.describe("naming a request, and opening it", () => {
       );
     // One cluster now, not a card and then a row of loose buttons: the heading
     // is "actions" whatever the row offers, and every verb lives under it.
-    expect(order.filter(Boolean).slice(0, 3)).toEqual([
+    // `if you approve` sits with the evidence, not with the verbs: it says what
+    // the button will do, which a reader needs *before* they reach the button.
+    expect(order.filter(Boolean).slice(0, 4)).toEqual([
       "what was asked for",
       "why",
+      "if you approve",
       "actions",
     ]);
 
@@ -1280,6 +1283,58 @@ test.describe("naming a request, and opening it", () => {
     }
     await expect(request.locator(".spec")).toContainText("$0.81");
     await expect(request.locator(".spec")).toContainText("$5");
+  });
+
+  test("the page says who filed it, and what approving would run", async ({
+    page,
+  }) => {
+    await mock(page, { detail: draftDetail });
+    await page.goto("/requests/req_draft01");
+
+    // Provenance: the row is a declaration of *what* filed it, and the page
+    // repeats it beside the other facts about the row.
+    const filed = page.locator(".detail-card .meta-cell", {
+      hasText: "filed by",
+    });
+    await expect(filed).toHaveCount(1);
+    await expect(filed.locator("dd")).toHaveText("page");
+
+    // The prospect is read off the sealed Job, so the steps are the runner's
+    // steps in the runner's order -- not a marketing summary of them.
+    const prospect = page.locator(".block.prospect");
+    await expect(prospect.locator(".micro")).toHaveText("if you approve");
+    const steps = await prospect.locator(".steps .verb").allTextContents();
+    expect(steps).toEqual([
+      "ask the vendor what it has, and what this window costs",
+      "price it against the vendor's own metadata",
+      "hand the vendor a batch job and keep its id",
+      "wait for the vendor to finish",
+      "fetch the files",
+      "convert the landing files",
+      "check the vendor's manifest against the bytes",
+    ]);
+    await expect(prospect).toContainText(
+      "/srv/data/datasets/GLBX.MDP3/req_draft01/",
+    );
+    // Checks are recorded facts, and each carries a verdict rather than a
+    // promise, so a reader can tell a guarantee from an expectation.
+    await expect(prospect.locator(".checks dt")).toHaveCount(3);
+    await expect(prospect).toContainText("DATA_DOWNLOAD_APPROVERS");
+  });
+
+  test("a row with no Job says approving it would run nothing", async ({
+    page,
+  }) => {
+    // A blocked intent. "What will happen if I approve" has no honest answer
+    // when there is nothing to run, and guessing one would be worse than
+    // saying so.
+    await mock(page, { detail: requestDetail });
+    await page.goto(`/requests/${requestDetail.id}`);
+
+    const prospect = page.locator(".block.prospect");
+    await expect(prospect).toContainText("no Job");
+    await expect(prospect).toContainText("awaiting_plan");
+    await expect(prospect.locator(".steps li")).toHaveCount(0);
   });
 
   test("a quote under a cent is cheap, not free", async ({ page }) => {

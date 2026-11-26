@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS requests (
   driver_state     TEXT,
   why              TEXT,                   -- the human reason, verbatim (§7.2)
   max_usd          REAL,                   -- the ceiling that travelled with the body
+  -- Who says it filed this. A declaration, not a credential: the token decides
+  -- *whether* a caller may file, and this says *what* filed -- an agent's name,
+  -- `cli`, `api`. Two rows that look identical on the book are not the same
+  -- thing if one came from a validator and one was typed from memory, and only
+  -- the row can say which. Nullable: rows filed before this column exist.
+  filed_by         TEXT,
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
   -- `cancelled` is a person's decision about a row nobody has run yet: a draft

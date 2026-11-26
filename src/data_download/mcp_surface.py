@@ -40,6 +40,13 @@ from .config import Settings
 
 log = logging.getLogger(__name__)
 
+# The header the submit route reads to record who filed a request. Spelled here
+# rather than in `app.py` because `app` imports this module (to mount it) and not
+# the other way round, so this is the copy both can see; a second copy would be
+# a second spelling, and a page showing `None` because two strings differed by a
+# character is exactly the kind of thing nobody notices until it matters.
+FILED_BY_HEADER = "X-Data-Download-Filed-By"
+
 # How many events a `get_request` answer carries. A trail can be hundreds of
 # rows long and the useful part is the end of it; the whole thing is one call
 # away at `/v1/requests/<id>/events` for anything that needs it.
@@ -170,6 +177,7 @@ class Surface:
         self,
         body: dict[str, Any],
         idempotency_key: str | None = None,
+        filed_by: str | None = None,
     ) -> dict[str, Any]:
         """File a download request. It lands in `draft` or `blocked`; it does
         not run, and it does not spend.
@@ -203,11 +211,18 @@ class Surface:
         the row that already exists, instead of filing a second identical
         request. Pass something stable for the attempt -- not a random value.
 
+        `filed_by` is a short name for whatever is filing -- your own name, if
+        you have one (`filed_by="data-sourcing-agent"`). It is stored on the
+        row and shown on its page, so a reader can tell a request that came out
+        of a validation pass from one typed by hand. It is a declaration, not a
+        credential: the token decides whether you may file, and an unset value
+        is recorded as `mcp`.
+
         What happens next is not this tool's business: a human approves on the
         request page (approval is a tailnet identity, not a credential any tool
         holds), and the worker runs it. Poll `get_request` to watch.
         """
-        headers = {}
+        headers = {FILED_BY_HEADER: filed_by or "mcp"}
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
         return await self._call("POST", "/v1/requests", json=body, headers=headers)
@@ -257,6 +272,23 @@ def _explain(response: httpx2.Response) -> str:
         "quote_unavailable": (
             " Nothing can be priced right now: no installed driver answers "
             "`cost` for this vendor and no local key is configured."
+        ),
+        # The three refusals that are a *shape* problem rather than a typing
+        # problem: the need is real, the body is not expressible. Each one names
+        # the agent that exists to turn a fuzzy need into a body worth filing,
+        # because that is the one repair a caller cannot make by editing JSON.
+        "intent_underconstrained": (
+            " Add what the intent is missing, or ask the data-sourcing agent -- "
+            "it turns a fuzzy need into a body this service accepts."
+        ),
+        "plan_type_unknown": (
+            " The data-sourcing agent can be asked for a body in a plan type "
+            "that exists; list_plan_types shows the names."
+        ),
+        "not_in_catalogue": (
+            " The vendor does not publish this dataset, or not for those dates. "
+            "The data-sourcing agent can check the dataset code and the window "
+            "against the vendor before anything is filed."
         ),
         "duplicate_request": (
             " The same Idempotency-Key was already used; read that request "

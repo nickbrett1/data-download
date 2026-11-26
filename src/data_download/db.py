@@ -70,6 +70,9 @@ def job_hash(job_bytes: str) -> str:
 ADDED_COLUMNS = (
     ("requests", "why", "TEXT"),
     ("requests", "max_usd", "REAL"),
+    # Who filed it (§7.2's provenance). Nullable and added in place -- a column
+    # rather than a CHECK, so nothing has to be rebuilt to start recording it.
+    ("requests", "filed_by", "TEXT"),
     # Phase 3: the claimant (§8.2). Nullable, like the rest of this tuple, and
     # for the same reason -- the store may already hold rows.
     ("requests", "owner", "TEXT"),

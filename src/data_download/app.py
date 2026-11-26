@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import string
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -660,6 +661,10 @@ def _request_payload(row: dict[str, Any]) -> dict[str, Any]:
         "escalated_at": row["escalated_at"] if "escalated_at" in row.keys() else None,
         "why": row["why"] if "why" in row.keys() else None,
         "max_usd": row["max_usd"] if "max_usd" in row.keys() else None,
+        # Who says it filed this -- a declaration, not a credential. A reader
+        # deciding how much of the body to trust needs it: `api` and a named
+        # agent are two different claims about how much checking came first.
+        "filed_by": row["filed_by"] if "filed_by" in row.keys() else None,
         "job_hash": row["job_hash"],
         "code_ref": row["code_ref"],
         "landed_sha256": row["landed_sha256"],
@@ -693,6 +698,11 @@ def _summary_payload(row: dict[str, Any], registry: Registry | None = None) -> d
         "window": _window_of(row),
         "why": row["why"] if "why" in row.keys() else None,
         "max_usd": row["max_usd"] if "max_usd" in row.keys() else None,
+        # Who says it filed this (a declaration, not a credential). An agent
+        # deciding how much of a row's body to trust needs it as much as a
+        # reader does: `data-sourcing-agent` and `api` are two different claims
+        # about how much checking the body already had.
+        "filed_by": row["filed_by"] if "filed_by" in row.keys() else None,
         "estimate_usd": row["estimate_usd"],
         "blocked_reason": row["blocked_reason"],
         "plan_origin": row["plan_origin"],
@@ -707,6 +717,31 @@ def _summary_payload(row: dict[str, Any], registry: Registry | None = None) -> d
 
 def _new_id() -> str:
     return "req_" + uuid.uuid4().hex
+
+
+FILED_BY_HEADER = mcp_surface.FILED_BY_HEADER
+FILED_BY_MAX = 64
+FILED_BY_SAFE = set(string.ascii_letters + string.digits + " ._:-/@")
+
+
+def _filed_by(request: Request, *, default: str = "api") -> str:
+    """Who says it is filing, for the record.
+
+    A declaration, not an identity: the bearer token is what decides *whether*
+    a caller may file, and no header can change that. What the header buys is
+    the answer to a question the token cannot -- two rows that look identical
+    on the book are not the same thing if one came from the agent that ran a
+    discovery check first and the other was typed from memory.
+
+    Sanitised because it is stored text that a page will render: bounded, and
+    limited to characters a name is plausibly made of. A caller that sends
+    nothing is `api`, which is honest for both `curl` and the CLI.
+    """
+    raw = (request.headers.get(FILED_BY_HEADER) or "").strip()
+    if not raw:
+        return default
+    clean = "".join(ch for ch in raw if ch in FILED_BY_SAFE).strip()
+    return clean[:FILED_BY_MAX] or default
 
 
 def _params_of(row: dict[str, Any]) -> dict[str, Any]:
@@ -825,10 +860,175 @@ def _gap_of(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+# What each step of a Job does, in the words a reader who is deciding would use.
+#
+# The list is the *sealed Job's* steps, not a description of a plan type: a page
+# that promised a pipeline the bytes never ran would be worse than one that said
+# nothing, and `convert` only appears here because this Job has that step. An
+# unknown kind is printed as itself rather than dropped -- a step this file has
+# not learned about is still a step the runner will run.
+STEP_VERBS = {
+    "resolve": "ask the vendor what it has, and what this window costs",
+    "quote": "price it against the vendor's own metadata",
+    "submit": "hand the vendor a batch job and keep its id",
+    "poll": "wait for the vendor to finish",
+    "download": "fetch the files",
+    "convert": "convert the landing files",
+    "verify": "check the vendor's manifest against the bytes",
+}
+
+# The kwargs worth printing beside a step. Deliberately a short allowlist rather
+# than every kwarg: `max_usd` and `job_id` are decisions already shown above, and
+# a page that paraphrases the whole Job is a second copy of the Job.
+STEP_DETAIL_KEYS = (
+    "dataset",
+    "schema",
+    "symbols",
+    "start",
+    "end",
+    "dest",
+    "from",
+    "to",
+    "on_failure",
+)
+
+
+def _step_detail(step: dict[str, Any]) -> str:
+    kwargs = step.get("kwargs") or {}
+    parts: list[str] = []
+    for key in STEP_DETAIL_KEYS:
+        value = kwargs.get(key)
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, list):
+            parts.append(f"{len(value)} symbols" if key == "symbols" else ", ".join(map(str, value)))
+        elif isinstance(value, dict):
+            start, end = value.get("start"), value.get("end")
+            if start and end:
+                parts.append(f"{start} → {end}")
+        else:
+            parts.append(str(value))
+    return " · ".join(parts)
+
+
+def _prospect(
+    row: dict[str, Any],
+    *,
+    registry: Registry | None,
+    descriptions: dict[tuple[str, str], dict[str, Any]] | None,
+    settings: Settings,
+) -> dict[str, Any]:
+    """What approving this row would *do*, for a reader deciding whether to.
+
+    The book answers "what is this and where is it"; this is the other half of
+    a decision -- the steps that will run, where the bytes will land, and what
+    has already been checked. All of it is read off the row: the steps come from
+    the sealed Job (the same bytes the runner will execute), the landing path
+    from the dataset and the row's id, the checks from the quote, the ceiling
+    and the catalogue answer that were recorded at submit. Nothing here is a
+    forecast of a vendor's behaviour, and that is the point: everything on the
+    page is something the service knows, so a reader can tell the difference
+    between a guarantee and an expectation.
+
+    Returns `{"ready": False, "why": ...}` for a row that has no Job -- a blocked
+    intent, or a draft filed before binding -- because "what will happen" has no
+    honest answer when there is nothing to run.
+    """
+    if not row.get("job_json"):
+        reason = row.get("blocked_reason") or ""
+        why = (
+            "this row has no Job, so approving it would run nothing"
+            if not reason
+            else f"this row has no Job ({reason}), so approving it would run nothing"
+        )
+        return {"ready": False, "why": why, "steps": [], "checks": []}
+
+    try:
+        job = json.loads(row["job_json"])
+    except (json.JSONDecodeError, TypeError):
+        return {
+            "ready": False,
+            "why": "the stored Job cannot be read, so what it would run is unknown",
+            "steps": [],
+            "checks": [],
+        }
+
+    steps = [
+        {
+            "kind": str(step.get("kind") or ""),
+            "verb": STEP_VERBS.get(str(step.get("kind") or ""), "run this step"),
+            "detail": _step_detail(step),
+        }
+        for step in (job.get("steps") or [])
+        if isinstance(step, dict)
+    ]
+
+    dataset = _dataset_of(row)
+    root = str(settings.datasets_dir) if settings.datasets_dir else None
+    landing = (
+        {"path": f"{root.rstrip('/')}/{dataset}/{row['id']}/", "dataset": dataset}
+        if root and dataset
+        else None
+    )
+
+    checks: list[dict[str, str]] = []
+    estimate, ceiling = row.get("estimate_usd"), row.get("max_usd")
+    if estimate is not None and ceiling is not None:
+        within = float(estimate) <= float(ceiling)
+        checks.append(
+            {
+                "label": "ceiling",
+                "verdict": "ok" if within else "block",
+                "detail": (
+                    "the quote is at or under the ceiling this request carries"
+                    if within
+                    else "the quote is over the ceiling -- this row should have been refused"
+                ),
+            }
+        )
+    described = (descriptions or {}).get((_vendor_of(row, registry), dataset))
+    if described is not None:
+        checks.append(
+            {
+                "label": "dataset",
+                "verdict": "ok" if described.get("described") else "warn",
+                "detail": (
+                    "the vendor describes this dataset code"
+                    if described.get("described")
+                    else "the vendor does not describe this code -- it was accepted, not confirmed"
+                ),
+            }
+        )
+    verify = next((s for s in steps if s["kind"] == "verify"), None)
+    checks.append(
+        {
+            "label": "verify",
+            "verdict": "ok" if verify else "warn",
+            "detail": (
+                "the bytes are checked against the vendor's own manifest before they land"
+                if verify
+                else "this Job has no verify step: whatever is downloaded lands unchecked"
+            ),
+        }
+    )
+
+    return {
+        "ready": True,
+        "why": "",
+        "steps": steps,
+        "landing": landing,
+        "checks": checks,
+        "approval": {
+            "who": "a tailnet login named in DATA_DOWNLOAD_APPROVERS, through `tailscale serve`",
+            "does": "claims the row under a lease, runs this Job once, and lands the bytes only if the verifier agrees",
+            "after": "a run cannot be cancelled once it starts; a failed row can be retried, which files a fresh draft for a second approval",
+        },
+    }
+
+
 # A retry is only honest for a row that has finished. `draft`/`approved` have
 # not run yet (approve or run them), and `running` is somebody's work in flight.
 RETRYABLE_STATES = frozenset({"failed", "landed_with_errors"})
-
 # The failures a retry cannot fix. The verifier compares the vendor's bytes
 # against the manifest, and both are immutable -- so the same body, filed again,
 # is checked to the same verdict. Everything else that settles is worth another
@@ -1390,6 +1590,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         kind = body.get("kind")
         now = utcnow()
         digest = payload_hash(body)
+        # Who says it is filing. Read once here so the plan and the intent paths
+        # cannot disagree about it, and carried into the `submitted` event as
+        # well as the column: the trail is where a reader asks "who filed this".
+        filed_by = _filed_by(request)
 
         # What the vendor said this request costs, for the response only. The
         # row carries it as `estimate_usd`, except where the ceiling refused it
@@ -1453,6 +1657,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "errors_json": None,
                 "why": body.get("why"),
                 "max_usd": body.get("max_usd"),
+                "filed_by": filed_by,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -1460,6 +1665,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "body_kind": "plan",
                 "plan_type": plan.name,
                 "job_hash": job_digest,
+                "filed_by": filed_by,
             }
         elif kind == "intent":
             validate_intent(body)
@@ -1534,6 +1740,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "escalated_at": None,
                 "why": body.get("why"),
                 "max_usd": body.get("max_usd"),
+                "filed_by": filed_by,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -1542,6 +1749,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "match_verdict": report["verdict"],
                 "plan_type": plan_type,
                 "blocked_reason": row["blocked_reason"],
+                "filed_by": filed_by,
             }
         else:
             raise errors.invalid_body("kind must be 'plan' or 'intent'")
@@ -2086,6 +2294,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return {
             **_book_row(book, registry, descriptions),
+            # Who says it filed this, on the page where a decision is recorded.
+            # `_book_row` copies the column, but an older row has none -- `None`
+            # says "not recorded", which is different from a name.
+            "filed_by": row["filed_by"] if "filed_by" in row.keys() else None,
+            # What approving would do: the Job's own steps, where the bytes land,
+            # and what has already been checked. Read off the row, so a reader
+            # can tell a recorded fact from an expectation.
+            # The table row, not the view: the view is the book's projection
+            # and drops `job_json`, which is the one column this needs.
+            "prospect": _prospect(
+                row,
+                registry=registry,
+                descriptions=descriptions,
+                settings=settings,
+            ),
             # The page draws the code once, beside what the vendor calls it, so
             # `GLBX.MDP3` never appears alone. `None` = not asked yet; an entry
             # with `described: false` = the vendor answered that it has no name.

@@ -428,6 +428,18 @@ export const requestDetail = {
     },
   },
   failure: null,
+  // Who declared it filed this. A declaration, not a credential -- so the page
+  // shows it as a fact about the row, and shows nothing at all for rows filed
+  // before the column existed.
+  filed_by: "data-sourcing-agent",
+  // A blocked intent has no Job, so "what would approving it do" has no honest
+  // answer -- and saying so is the point.
+  prospect: {
+    ready: false,
+    why: "this row has no Job (awaiting_plan), so approving it would run nothing",
+    steps: [],
+    checks: [],
+  },
   identity: {
     job_hash: null,
     code_ref: null,
@@ -493,6 +505,63 @@ export const draftDetail = {
   },
   match: null,
   failure: null,
+  filed_by: "page",
+  // A bound row: seven steps read off the sealed Job, the landing directory the
+  // runner will write, and the checks that were recorded at submit.
+  prospect: {
+    ready: true,
+    why: "",
+    steps: [
+      {
+        kind: "resolve",
+        verb: "ask the vendor what it has, and what this window costs",
+        detail: "GLBX.MDP3 trades ES.c.0 2026-11-04..2026-11-06",
+      },
+      {
+        kind: "quote",
+        verb: "price it against the vendor's own metadata",
+        detail: null,
+      },
+      {
+        kind: "submit",
+        verb: "hand the vendor a batch job and keep its id",
+        detail: null,
+      },
+      { kind: "poll", verb: "wait for the vendor to finish", detail: null },
+      { kind: "download", verb: "fetch the files", detail: null },
+      { kind: "convert", verb: "convert the landing files", detail: null },
+      {
+        kind: "verify",
+        verb: "check the vendor's manifest against the bytes",
+        detail: "on failure: quarantine",
+      },
+    ],
+    landing: { path: "/srv/data/datasets/GLBX.MDP3/req_draft01/", dataset: "GLBX.MDP3" },
+    checks: [
+      {
+        label: "ceiling",
+        verdict: "ok",
+        detail: "the quote is at or under the ceiling this request carries",
+      },
+      {
+        label: "dataset",
+        verdict: "ok",
+        detail: "the vendor describes this dataset code",
+      },
+      {
+        label: "verify",
+        verdict: "ok",
+        detail:
+          "the bytes are checked against the vendor's own manifest before they land",
+      },
+    ],
+    approval: {
+      who: "a tailnet login named in DATA_DOWNLOAD_APPROVERS, through `tailscale serve`",
+      does: "claims the row under a lease, runs this Job once, and lands the bytes only if the verifier agrees",
+      after:
+        "a run cannot be cancelled once it starts; a failed row can be retried, which files a fresh draft for a second approval",
+    },
+  },
   identity: {
     job_hash:
       "a3d57f9bf1dc2af76782b6b0fecd8cf701d1575742aa9cd5ce84814b8763df1e",

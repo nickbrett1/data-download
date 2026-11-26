@@ -140,6 +140,12 @@
     if (data.vendor) {
       rows.push({ label: "vendor", value: data.vendor });
     }
+    // Who says it filed this. A declaration, so it is stated plainly and
+    // never dressed up as proof: two rows can look identical and not be the
+    // same thing, and this is the only place that difference is written down.
+    if (data.filed_by) {
+      rows.push({ label: "filed by", value: data.filed_by });
+    }
     // The ceiling and the estimate are not here: they are about the request
     // itself, not about the row's bookkeeping, so they sit with the request at
     // the top of the page where somebody deciding has them in view.
@@ -412,6 +418,58 @@
         {/if}
       </section>
 
+      <!-- What approving would do, before the verbs that do it. The steps are
+           the sealed Job's own -- the same bytes the runner will execute -- so
+           this is the pipeline as it will run, not a description of what a plan
+           type usually does. Everything here was recorded at submit; nothing is
+           a forecast of the vendor. -->
+      {#if data.prospect}
+        <section class="block prospect">
+          <p class="micro">if you approve</p>
+          {#if !data.prospect.ready}
+            <p class="quiet">{data.prospect.why}</p>
+          {:else}
+            <ol class="steps">
+              {#each data.prospect.steps as step, index (index)}
+                <li>
+                  <span class="n">{index + 1}</span>
+                  <span class="verb">{step.verb}</span>
+                  {#if step.detail}
+                    <code class="detail">{step.detail}</code>
+                  {/if}
+                </li>
+              {/each}
+            </ol>
+            {#if data.prospect.landing}
+              <p class="quiet landing">
+                lands at <code>{data.prospect.landing.path}</code>
+              </p>
+            {/if}
+            {#if data.prospect.checks.length}
+              <dl class="kv checks">
+                {#each data.prospect.checks as check (check.label)}
+                  <dt>{check.label}</dt>
+                  <dd>
+                    <span
+                      class="pill {check.verdict === 'block'
+                        ? 'bad'
+                        : check.verdict}">{check.verdict}</span
+                    >
+                    {check.detail}
+                  </dd>
+                {/each}
+              </dl>
+            {/if}
+            {#if data.prospect.approval}
+              <p class="quiet note">
+                Approving needs {data.prospect.approval.who}. It
+                {data.prospect.approval.does}. {data.prospect.approval.after}.
+              </p>
+            {/if}
+          {/if}
+        </section>
+      {/if}
+
       <!-- The verbs follow the evidence. They used to lead the page, on the
            argument that a reader opens it to *do* something -- and that put
            Approve above the parameters and the sentence saying why the request
@@ -599,6 +657,61 @@
     font-size: 14px;
     line-height: 1.55;
     color: var(--ink);
+  }
+
+  /* The pipeline, numbered because the order is the information: `download`
+     before `verify` is a different guarantee from the reverse. One column, the
+     step's verb first, its arguments in mono and quiet beneath the number. */
+  .steps {
+    margin: 10px 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 6px;
+  }
+
+  .steps li {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    column-gap: 8px;
+    align-items: baseline;
+    font-size: 13.5px;
+    line-height: 1.45;
+  }
+
+  .steps .n {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--ink-faint);
+    text-align: right;
+  }
+
+  .steps .detail {
+    grid-column: 2;
+    font-size: 11.5px;
+    color: var(--ink-muted);
+  }
+
+  .landing {
+    margin: 10px 0 0;
+  }
+
+  /* The checks are the same two columns as the parameters above, because they
+     are the same kind of fact: a label and its value. The pill carries the
+     verdict, so the text can be a sentence rather than a colour. */
+  .checks {
+    margin-top: 12px;
+  }
+
+  .checks dd {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+
+  .checks .pill {
+    font-size: 10px;
   }
 
   /* A failure is the loudest thing on the page and still not a siren: sunken

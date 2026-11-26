@@ -334,3 +334,47 @@ def test_the_tools_never_offer_a_way_to_approve_or_run(surface):
     # header a client can set will do.
     assert "not_attested" in str(refused.value)
     assert "Tailscale-User-Login" in str(refused.value)
+
+
+def test_a_tool_call_can_say_who_is_filing(surface):
+    """`filed_by` travels from the tool to the row a reader looks at.
+
+    The point of the field is that a row says where it came from, and the MCP
+    path is the one that needs it most: an agent filing through the hub is not
+    distinguishable from any other caller by token.
+    """
+    import asyncio
+
+    filed = asyncio.run(
+        surface.submit_request(
+            dict(PLAN_BODY), filed_by="data-sourcing-agent"
+        )
+    )
+    detail = asyncio.run(surface.get_request(filed["request_id"]))
+    assert detail["request"]["filed_by"] == "data-sourcing-agent"
+
+
+def test_an_unfiled_body_is_told_to_ask_the_sourcing_agent(surface):
+    """The refusals a caller cannot repair by editing JSON name who can.
+
+    A body the vocabulary cannot express is a *shape* problem, and the repair is
+    a conversation with the agent that knows the vendor's vocabulary -- not a
+    second guess typed into `params`.
+    """
+    import asyncio
+
+    import pytest as _pytest
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    with _pytest.raises(ToolError) as refused:
+        asyncio.run(
+            surface.submit_request(
+                {
+                    "kind": "intent",
+                    "intent": {"dataset": "GLBX.MDP3"},
+                    "max_usd": 5,
+                    "why": "under-specified on purpose",
+                }
+            )
+        )
+    assert "data-sourcing agent" in str(refused.value)

@@ -47,7 +47,13 @@ export async function getView(path, { signal } = {}) {
 export async function postJson(path, body) {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      // Every call from here is a person's click on a page, and the retry route
+      // files a new row -- so the row it creates should say so. The other verbs
+      // ignore it; the submit path is the only reader.
+      "X-Data-Download-Filed-By": "page",
+    },
     body: JSON.stringify(body ?? {}),
   });
   if (!res.ok) {
