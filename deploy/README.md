@@ -354,10 +354,50 @@ approve: approval stays the page's two clicks and the tailnet identity behind
 them.
 
 Register it **once** in the MCP hub and assign that one registration to every
-consumer (the data group for status, the sourcing agent for filing). Two
-registrations of the same URL drift: one gets the token rotated and the other
-stops working months later. The tool list is in the main README, "The MCP
-surface".
+consumer. Two registrations of the same URL drift: one gets the token rotated
+and the other stops working months later. The tool list is in the main README,
+"The MCP surface".
+
+The one registration is then *assigned* per group, and the group is where
+filing is allowed or not:
+
+| group | data-download member | who is in it |
+| --- | --- | --- |
+| `data` | `list_requests`, `get_request`, `whats_landed`, `list_plan_types`, `quote` — **no `submit_request`** | anyone reading the book |
+| `data-sourcing` | all six, including `submit_request` | the sourcing agent, which validates before it files |
+
+The split is the hub's tool allowlist, not the service's: the token still
+permits filing, and the group is what makes filing a capability of the agent
+that can check. A caller in `data` that tries to file gets "no such tool", which
+is the honest answer — it is not in that caller's vocabulary.
+
+### Rotating the MCP token
+
+1. Add the new value to `DATA_DOWNLOAD_API_TOKENS` (both can be live at once;
+   nothing breaks while both are valid).
+2. Set `DATA_DOWNLOAD_MCP_TOKEN` to the new value, `docker compose up -d app`.
+3. Update the **one** hub registration's `Authorization: Bearer …` header (the
+   `servers` row in the hub's database, not this compose file).
+4. Remove the old value from `DATA_DOWNLOAD_API_TOKENS` at leisure.
+
+Between steps 2 and 3 the hub's calls 401 — a minute of "every tool is broken"
+if you do it in the wrong order, so do step 3 immediately after step 2. If the
+hub row is wrong in the other direction (old token, new service), the tools
+401 and the app logs `401` with no other hint: the failure is a header, not a
+setting.
+
+### Deploying the sourcing agent next to it
+
+The sourcing agent's compose file reads `LITELLM_BASE_URL` from its `.env`, and
+**compose prefers the shell's environment over `.env`**. On ryzen the shell
+exports `LITELLM_BASE_URL=http://127.0.0.1:4000`, so a plain
+`docker compose up -d` recreates the container pointed at a loopback gateway
+inside its own namespace, and registration fails with a connection error that
+says nothing about the shell. Recreate it with the shell variable unset:
+
+```
+cd /srv/docker/data-sourcing-agent && env -u LITELLM_BASE_URL docker compose up -d app
+```
 
 ## 10. The driver queue (a missing driver gets built)
 
