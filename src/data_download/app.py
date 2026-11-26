@@ -1185,9 +1185,24 @@ def _event_summary(event: str, detail: dict[str, Any] | None) -> str:
     if event == "rematched":
         return f"verdict {d.get('from_verdict') or '—'} → {d.get('to_verdict') or '—'}"
     if event == "claimed":
-        return f"claimed by {str(d.get('owner') or '').split('@')[0] or 'a runner'}"
+        # The owner is `host:pid:uuid`, a machine's name for itself. It told a
+        # reader nothing except that something had happened -- and something
+        # happening is the whole of what this event says. The id stays in the
+        # detail (grep it if you need it); the sentence is for the person
+        # deciding whether to wait.
+        return "a worker picked it up"
     if event == "released":
         return f"released — {d.get('reason') or 'no reason recorded'}"
+    if event == "step":
+        kind = str(d.get("kind") or "")
+        index = d.get("index")
+        total = d.get("total")
+        where = (
+            f"step {int(index) + 1} of {int(total)}"
+            if isinstance(index, int) and isinstance(total, int)
+            else "a step"
+        )
+        return f"{where} — {STEP_VERBS.get(kind, kind or 'running')}"
     if event in ("landed", "failed"):
         sha = str(d.get("landed_sha256") or "")
         size = f" {sha[:12]}" if sha else ""

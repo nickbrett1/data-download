@@ -210,6 +210,35 @@ def test_the_landed_event_names_the_owner_and_the_digest(
     assert detail["dest"] == f"{_dir(datasets, request_id)}/files"
 
 
+def test_a_run_says_which_step_it_is_on(client, settings, tmp_path, wire):
+    """A claim followed by silence is what a long run looked like from outside.
+
+    The trail said `claimed`, then nothing until `landed` -- twenty minutes
+    unaccounted for. One event per step fixes that without turning the trail
+    into a log, and the step names are the Job's own.
+    """
+    request_id, _, _ = _land(client, settings, tmp_path, wire)
+    events = _events(settings.db_path, request_id)
+    names = [e["event"] for e in events]
+    steps = [json.loads(e["detail_json"]) for e in events if e["event"] == "step"]
+
+    assert [s["kind"] for s in steps] == [
+        "resolve",
+        "quote",
+        "submit",
+        "poll",
+        "download",
+        "convert",
+        "verify",
+    ]
+    assert [s["index"] for s in steps] == list(range(7))
+    assert all(s["total"] == 7 for s in steps)
+    # Before the settle, never after: an event that lands a finished request
+    # back in "step 6" would be the trail telling a story out of order.
+    assert names.index("step") < names.index("landed")
+    assert names[-1] == "landed"
+
+
 # -- the verdict decides the state ----------------------------------------
 
 

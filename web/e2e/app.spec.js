@@ -102,7 +102,7 @@ test.describe("the request book", () => {
       "window",
       "state",
       "quote",
-      "filed",
+      "updated",
     ]);
 
     // The columns of a grid share one template, which is what makes the
@@ -116,10 +116,45 @@ test.describe("the request book", () => {
     const first = page.locator(".tbl-row").first();
     // Phase 4: the quote is on the row, at the precision a purchase needs.
     await expect(first.locator(".quote")).toHaveText("$0.04");
-    // When it was filed, in a form a person reads. Not "1h 4m": an age answers
-    // a question nobody asked and has to be converted back into a clock.
-    await expect(first.locator(".filed")).toHaveText("14 Nov 23:10");
+    // When it last moved, in a form a person reads. Not "1h 4m": an age
+    // answers a question nobody asked and has to be converted back into a
+    // clock. A row that has never moved carries the moment it was filed.
+    await expect(first.locator(".updated")).toHaveText("14 Nov 23:10");
     await expect(first.locator(".pill")).toHaveText("Succeeded");
+  });
+
+  test("can be read in the order things last moved", async ({ page }) => {
+    await mock(page);
+    await page.goto("/");
+
+    // The default is the book's own order: what was filed, newest first. The
+    // last column is `updated`, so the question "what changed while I was
+    // away?" needs an order, not just a figure to compare by eye.
+    const order = page.locator(".order");
+    await expect(order).toHaveText("by date filed");
+    const top = page.locator(".tbl-row").first().locator(".updated");
+    await expect(top).toHaveText("14 Nov 23:10");
+
+    await order.click();
+    await expect(order).toHaveText("by last change");
+    // req_4c81be07 was filed a moment *after* the row above and claimed a
+    // moment after that, so the two orders disagree about which row is first.
+    await expect(top).toHaveText("14 Nov 23:58");
+    await expect(page.locator(".tbl-row")).toHaveCount(5);
+
+    // The order is a URL parameter, so a reload keeps it and a link carries it.
+    await expect(page).toHaveURL(/order=updated/);
+    await page.reload();
+    await expect(page.locator(".order")).toHaveText("by last change");
+    await expect(
+      page.locator(".tbl-row").first().locator(".updated"),
+    ).toHaveText("14 Nov 23:58");
+
+    await page.locator(".order").click();
+    await expect(page).not.toHaveURL(/order=updated/);
+    await expect(
+      page.locator(".tbl-row").first().locator(".updated"),
+    ).toHaveText("14 Nov 23:10");
   });
 
   test("says which days each request covers", async ({ page }) => {
@@ -521,7 +556,7 @@ test.describe("the request book", () => {
     // it happens to be -- two rows of one shape looked different because one
     // quote read `$1.94` and another `<$0.01`. The page lays its rows out on a
     // two-column grid instead: the subject, then window | state, then
-    // quote | filed.
+    // quote | updated.
     const shapes = await page.locator(".tbl-row").evaluateAll((rows) =>
       rows.map((row) => {
         const top = row.getBoundingClientRect().top;
@@ -534,7 +569,7 @@ test.describe("the request book", () => {
           window: line(".window"),
           state: line(".state"),
           quote: line(".quote"),
-          filed: line(".filed"),
+          updated: line(".updated"),
         };
       }),
     );
@@ -547,7 +582,7 @@ test.describe("the request book", () => {
     // ...and within a row, the pairs share a line, under the subject.
     for (const shape of shapes) {
       expect(Math.abs(shape.window - shape.state)).toBeLessThanOrEqual(3);
-      expect(Math.abs(shape.quote - shape.filed)).toBeLessThanOrEqual(2);
+      expect(Math.abs(shape.quote - shape.updated)).toBeLessThanOrEqual(2);
       expect(shape.window - shape.subject).toBeGreaterThan(10);
       expect(shape.quote - shape.window).toBeGreaterThan(10);
     }
@@ -1134,7 +1169,9 @@ test.describe("the shell on a phone", () => {
     await page.goto("/");
     await expect(page.locator(".tbl-row")).toHaveCount(5);
     await expectTabs(page, "Requests");
-    await expectLede(page, "The request book");
+    await expect(page.locator(".lede")).toHaveText(
+      /^The request book\s*·\s*by date filed$/,
+    );
     await expectNoHorizontalScroll(page);
   });
 
@@ -1181,12 +1218,14 @@ test.describe("the shell on a phone", () => {
     expect(box.lines).toBeGreaterThan(1);
   });
 
-  test("a claim id in the events trail does not widen the page", async ({
+  test("a claim is a sentence, not a machine naming itself", async ({
     page,
   }) => {
-    // A runner's lease owner is `host:pid:run` -- one unbroken token -- and the
-    // claim chip used to expand the flex row past the screen instead of
-    // dropping to the next line.
+    // A runner's lease owner is `host:pid:uuid`. It rode in a chip beside the
+    // sentence, where it told a reader nothing -- it is the same string on every
+    // row -- and on a phone it was the one token wide enough to push the page
+    // sideways. The id is still in the event's payload; the trail says what
+    // happened.
     await mock(page, {
       detail: {
         ...draftDetail,
@@ -1197,7 +1236,7 @@ test.describe("the shell on a phone", () => {
             ts: "2026-11-15T23:43:10Z",
             actor_kind: "runner",
             event: "claimed",
-            summary: "claimed by 1cf92b8a0db1",
+            summary: "a worker picked it up",
             detail: { owner: "1cf92b8a0db1:1:be86b0c7" },
           },
         ],
@@ -1205,17 +1244,49 @@ test.describe("the shell on a phone", () => {
     });
     await page.goto("/requests/req_draft01");
 
-    const chip = page.locator(".events .who", {
-      hasText: "1cf92b8a0db1:1:be86b0c7",
+    const claimed = page.locator(".events li", {
+      hasText: "a worker picked it up",
     });
-    await expect(chip).toHaveText("1cf92b8a0db1:1:be86b0c7");
+    await expect(claimed).toHaveCount(1);
+    await expect(claimed.locator(".who")).toHaveCount(0);
+    await expect(page.locator(".events")).not.toContainText("1cf92b8a0db1");
     await expectNoHorizontalScroll(page);
+  });
 
-    const fits = await chip.evaluate((el) => {
-      const own = el.getBoundingClientRect();
-      return own.right <= window.innerWidth && own.left >= 0;
+  test("a run in flight says which step it is on", async ({ page }) => {
+    // Before this, the trail for a long run was `claimed`, then silence, then
+    // `landed` -- twenty unaccounted minutes from the outside.
+    await mock(page, {
+      detail: {
+        ...draftDetail,
+        state: "running",
+        approved_unclaimed: false,
+        events: [
+          ...draftDetail.events,
+          {
+            id: 2,
+            ts: "2026-11-15T23:43:10Z",
+            actor_kind: "runner",
+            event: "claimed",
+            summary: "a worker picked it up",
+            detail: { owner: "1cf92b8a0db1:1:be86b0c7" },
+          },
+          {
+            id: 3,
+            ts: "2026-11-15T23:43:40Z",
+            actor_kind: "runner",
+            event: "step",
+            summary: "step 4 of 7 — wait for the vendor to finish",
+            detail: { index: 3, kind: "poll", total: 7 },
+          },
+        ],
+      },
     });
-    expect(fits).toBe(true);
+    await page.goto("/requests/req_draft01");
+
+    await expect(page.locator(".events")).toContainText(
+      "step 4 of 7 — wait for the vendor to finish",
+    );
   });
 
   test("plan types shows every view and a typed intro", async ({ page }) => {

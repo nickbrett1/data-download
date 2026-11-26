@@ -16,13 +16,15 @@ Four rules, in the order they bite:
    reclaimed cannot write `succeeded` over the new claimant's attempt. Losing
    that CAS is the reclaim working, not an error.
 3. **`dest` is relative and the root is not.** The Job stages into `files/`;
-   the absolute directory is `datasets/<vendor>/<dataset>/<request_id>/`, built
-   here and nowhere earlier (§5.7 -- a `job_hash` must never be a path segment).
-   The vendor is the top level because a dataset code is vendor vocabulary
-   (`XNAS.ITCH` means nothing without knowing who sells it) and because the
-   datasets root already holds data from more than one vendor; the request id
-   underneath keeps two requests for one dataset apart. The vendor comes from
-   the plan type in the registry, not from the Job, which is a flow and knows no
+   the absolute directory is `datasets/<vendor>/<dataset>/<name>/`, built here
+   and nowhere earlier (§5.7 -- a `job_hash` must never be a path segment).
+   `<name>` is the window's dates with the request id's tail for uniqueness
+   (`layout.landing_name`), so an operator can find a landing by looking for the
+   dates they asked for. The vendor is the top level because a dataset code is
+   vendor vocabulary (`XNAS.ITCH` means nothing without knowing who sells it)
+   and because the datasets root already holds data from more than one vendor;
+   the tail keeps two requests for one window apart. The vendor comes from the
+   plan type in the registry, not from the Job, which is a flow and knows no
    seller.
 4. **The verdict decides the state, not the runner.** `pass` -> `succeeded`,
    `commit_marked` -> `landed_with_errors`, `quarantine` -> `failed`. The
@@ -47,6 +49,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
@@ -61,6 +64,8 @@ from .claim import default_owner
 from .config import find_plan_types_dir, load_settings
 from .db import LEASE_SECONDS, ClaimRefused, Store, utcnow
 from .registry import Registry, load_registry
+
+log = logging.getLogger(__name__)
 
 # Bumped when this module's behaviour changes, and recorded in `landing.json` and
 # the `landed` event. `interpreter_version` is separate: which flow ran and which
@@ -218,6 +223,28 @@ def split_of(job: Any) -> str | None:
         if kwargs.get("split_duration"):
             return str(kwargs["split_duration"])
     return None
+
+
+async def _note_step(
+    store: Store,
+    request_id: str,
+    owner: str,
+    index: int,
+    kind: str,
+    total: int,
+) -> None:
+    """Record one step starting; never let the note matter more than the run."""
+    try:
+        await store.step_started(
+            request_id, owner, index=index, kind=kind, total=total
+        )
+    except Exception:  # noqa: BLE001 - the run is the point, the note is not
+        log.warning(
+            "request %s: could not record step %s of the run",
+            request_id,
+            index + 1,
+            exc_info=True,
+        )
 
 
 def destination(
@@ -711,8 +738,31 @@ async def run_one(
             ),
             name=f"lease:{request_id}",
         )
+        # Progress, from inside the thread. The interpreter knows which step it
+        # is on and the loop owns the store, so the note is scheduled onto the
+        # loop and awaited below, before the settle -- otherwise `landed` could
+        # be written ahead of the step that produced it, and the trail would
+        # say the run finished before it started its last step.
+        loop = asyncio.get_running_loop()
+        notes: list[asyncio.Task[Any]] = []
+
+        def on_step(index: int, kind: str, total: int) -> None:
+            def schedule() -> None:
+                notes.append(
+                    loop.create_task(
+                        _note_step(store, request_id, owner, index, kind, total)
+                    )
+                )
+
+            try:
+                loop.call_soon_threadsafe(schedule)
+            except RuntimeError:  # the loop is gone; nobody left to tell
+                pass
+
         try:
-            verdict = await asyncio.to_thread(interpreter.run, job, driver)
+            verdict = await asyncio.to_thread(
+                interpreter.run, job, driver, on_step
+            )
         except interpreter.InterpreterError as exc:
             return await _settle_refusal(
                 store, request_id, owner, "failed",
@@ -720,6 +770,10 @@ async def run_one(
                 dest=root, dataset=dataset, mode=mode, now=now,
             )
         finally:
+            # Before the lease stops being ours: a `step` event written after
+            # the settle would land on a request that has already finished.
+            if notes:
+                await asyncio.gather(*notes, return_exceptions=True)
             stop.set()
             # Not cancelled: the heartbeat may be mid-statement, and a cancelled
             # task would leave the write lock to be released by the unwinder.

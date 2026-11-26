@@ -22,7 +22,7 @@
   import { getView } from "$lib/api";
   import {
     datasetLabel,
-    filed,
+    when,
     stateDetail,
     stateLabel,
     stateTone,
@@ -81,20 +81,63 @@
     window.history.replaceState({}, "", url);
   }
 
+  async function refresh(signal) {
+    try {
+      const body = await getView("/ui/dashboard.json", { signal });
+      data = body;
+      // A filter from a stale link may no longer select anything.
+      const known = ["all", ...body.facet_order, "other"];
+      if (!known.includes(show)) setShow("all");
+      failure = "";
+    } catch (error) {
+      if (error.name !== "AbortError") failure = error.message;
+    }
+  }
+
   $effect(() => {
     const controller = new AbortController();
-    getView("/ui/dashboard.json", { signal: controller.signal })
-      .then((body) => {
-        data = body;
-        // A filter from a stale link may no longer select anything.
-        const known = ["all", ...body.facet_order, "other"];
-        if (!known.includes(show)) setShow("all");
-      })
-      .catch((error) => {
-        if (error.name !== "AbortError") failure = error.message;
-      });
+    refresh(controller.signal);
     return () => controller.abort();
   });
+
+  // Live rows, live book. A request that is claimed or running moves on its
+  // own -- driver build, vendor poll, landing -- and the book used to show
+  // whatever it said when the page loaded. Only while something is actually
+  // moving: a settled book is a record, and a record need not reload itself.
+  const watching = $derived(
+    Boolean(data) &&
+      (data.rows ?? []).some(
+        (row) => row.state === "running" || row.state === "approved",
+      ),
+  );
+
+  $effect(() => {
+    if (!watching) return;
+    const timer = setInterval(() => refresh(), 5000);
+    return () => clearInterval(timer);
+  });
+
+  // The order, as a URL parameter for the same reason `show` is one: a link to
+  // "the ones that moved most recently" is worth pasting into a chat. Newest
+  // filed stays the default -- it is the book's own order, and a reader who
+  // wants the queue sorted by attention asks for it.
+  let order = $state(currentOrder());
+
+  function currentOrder() {
+    if (typeof window === "undefined") return "filed";
+    return new URLSearchParams(window.location.search).get("order") ===
+      "updated"
+      ? "updated"
+      : "filed";
+  }
+
+  function setOrder(next) {
+    order = next;
+    const url = new URL(window.location.href);
+    if (next === "updated") url.searchParams.set("order", "updated");
+    else url.searchParams.delete("order");
+    window.history.replaceState({}, "", url);
+  }
 
   const facets = $derived.by(() => {
     if (!data) return [];
@@ -133,8 +176,13 @@
     // cancelled request is settled and needs nothing, so it is not in it). A
     // selected facet therefore reads from `facets`, or the one bucket the
     // server filters out could never be shown at all.
-    if (show === "all") return data.rows;
-    return data.facets[show] ?? [];
+    const list = show === "all" ? data.rows : (data.facets[show] ?? []);
+    if (order !== "updated") return list;
+    // Most recently moved first. A copy, because `rows` may be the server's own
+    // array and sorting it in place would reorder the next render's input.
+    return [...list].sort((a, b) =>
+      String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")),
+    );
   });
 
   // Five columns: what it is, what window it covers, where it is, what it
@@ -158,7 +206,13 @@
     { label: "window", width: "minmax(9rem, 0.85fr)" },
     { label: "state", width: "minmax(9rem, 0.9fr)" },
     { label: "quote", align: "end", width: "minmax(5rem, 0.5fr)" },
-    { label: "filed", align: "end" },
+    // When it last *moved*, not when it was filed. Filing is one moment in a
+    // row's life; a request claimed ten minutes ago and one filed last week
+    // look identical under a filing date, which is what this column used to
+    // be. The filing time is still there, in the tooltip, because "how long
+    // has this been sitting here" is a real question too -- it is just the
+    // second one.
+    { label: "updated", align: "end" },
   ];
 </script>
 
@@ -181,7 +235,21 @@
     <AppMark />
   {/snippet}
 
-  <p class="lede">The request book</p>
+  <p class="lede">
+    The request book
+    {#if data?.total}
+      <!-- The order, said in the same voice as the filter strip: the words
+           describe what you are looking at now, and the click changes it. -->
+      <span class="sep" aria-hidden="true">·</span>
+      <button
+        class="order"
+        type="button"
+        title="switch the order"
+        onclick={() => setOrder(order === "updated" ? "filed" : "updated")}
+        >{order === "updated" ? "by last change" : "by date filed"}</button
+      >
+    {/if}
+  </p>
 
   {#if failure}
     <EmptyState cause="error" customMessage={failure} />
@@ -271,7 +339,9 @@
                compared against. A row with nothing to quote says so with a
                dash, not a zero: `$0.00` would read as a free download. -->
           <span class="num quote">{usd(request.estimate_usd)}</span>
-          <span class="num filed">{filed(request.created_at)}</span>
+          <span class="num updated" title={`filed ${when(request.created_at)}`}
+            >{when(request.updated_at || request.created_at)}</span
+          >
         {/snippet}
       </DataTable>
     {:else if show === "all"}
@@ -368,9 +438,38 @@
     text-overflow: ellipsis;
   }
 
-  .filed {
+  .updated {
     color: var(--ink-dim);
     white-space: nowrap;
+  }
+
+  /* The order toggle rides in the lede: it is a property of the whole list, not
+     a filter, so it belongs beside the page's own name rather than in the strip
+     that narrows rows. Underlined, because a control that looks like a label is
+     a control nobody clicks. */
+  .sep {
+    margin: 0 8px;
+    color: var(--ink-dim);
+    font-weight: 400;
+  }
+
+  .order {
+    margin-left: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+
+  .order:hover {
+    color: var(--ink);
   }
 
   /* Tabular, because the column exists to be compared down the page: the two
@@ -383,7 +482,7 @@
 
   /* The badge and its detail share a cell, so they stack rather than fight for
      the same line. `min-width: 0` is what lets the detail clip instead of
-     pushing the `filed` column off the grid. */
+     pushing the `updated` column off the grid. */
   .state {
     display: flex;
     flex-direction: column;
@@ -423,7 +522,7 @@
      window sat on the second line while #12's and #14's sat top right, because
      one quote is `$1.94` and the others are `<$0.01`. A two-column grid gives
      every row the same three lines: what it is, then window | state, then
-     quote | filed. The padding and gap stay the block's own.
+     quote | updated. The padding and gap stay the block's own.
 
      The override is here, in the consumer, because the block is a vendored copy
      and an edit to it is drift CI has to fail on (scripts/check-nb-blocks.mjs).

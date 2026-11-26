@@ -23,7 +23,7 @@ skip, and not a `None` the next step tolerates.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -251,9 +251,21 @@ def _poll_until_done(driver: Driver, vendor_job_id: str, kwargs: Mapping[str, An
     )
 
 
-def run(job: Mapping[str, Any], driver: Driver) -> Verdict:
+def run(
+    job: Mapping[str, Any],
+    driver: Driver,
+    on_step: Callable[[int, str, int], None] | None = None,
+) -> Verdict:
     """Interpret one Job. Never raises for a *verdict*; raises InterpreterError
-    when the run cannot get as far as having one."""
+    when the run cannot get as far as having one.
+
+    `on_step(index, kind, total)` is called as each step *starts*, so a caller
+    can say where a long run has got to. It is a notification, not a contract:
+    a callback that raises is swallowed, because a progress note that costs the
+    download would be the tail wagging the dog. `poll` is the step that makes
+    this worth having -- it is the one that sits on a vendor for minutes while
+    the request page says nothing but "running".
+    """
     state: dict[str, Any] = {
         "vendor_job_id": None,
         "dest": None,
@@ -268,6 +280,12 @@ def run(job: Mapping[str, Any], driver: Driver) -> Verdict:
         kind = step["kind"]
         kwargs = dict(step.get("kwargs") or {})
         executed.append(kind)
+
+        if on_step is not None:
+            try:
+                on_step(index, str(kind), len(steps))
+            except Exception:  # noqa: BLE001 - a progress note may not cost the run
+                pass
 
         if kind == "resolve":
             state["resolved"] = driver.resolve(**kwargs)

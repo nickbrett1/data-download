@@ -83,6 +83,43 @@ def test_the_whole_job_runs_and_calls_one_operation_per_kind():
     assert result.interpreter_version == interpreter.INTERPRETER_VERSION
 
 
+def test_the_steps_are_announced_as_they_start():
+    """Progress is a notification, in order, before the work rather than after.
+
+    A caller that prints "step 6 of 7" only once step 6 has finished is telling
+    the reader where the run has *been*, which is the thing a live page already
+    knows.
+    """
+    driver = StubDriver(
+        manifest=[_entry()], staged={"a.dbn.zst": {"sha256": "s", "rows": 2}}
+    )
+    seen: list[tuple[int, str, int]] = []
+    interpreter.run(_job(), driver, lambda index, kind, total: seen.append((index, kind, total)))
+    assert seen == [
+        (0, "resolve", 7),
+        (1, "quote", 7),
+        (2, "submit", 7),
+        (3, "poll", 7),
+        (4, "download", 7),
+        (5, "convert", 7),
+        (6, "verify", 7),
+    ]
+
+
+def test_a_progress_note_that_throws_does_not_cost_the_run():
+    """The run is the point. A caller's bookkeeping is not allowed to stop it."""
+    driver = StubDriver(
+        manifest=[_entry()], staged={"a.dbn.zst": {"sha256": "s", "rows": 2}}
+    )
+
+    def angry(index, kind, total):
+        raise RuntimeError(f"no note for {kind}")
+
+    result = interpreter.run(_job(), driver, angry)
+    assert result.verdict == interpreter.PASS
+    assert driver.calls[0] == "resolve"
+
+
 def test_every_kind_gets_its_own_operation():
     """One function per kind, shared by every Plan: the interpreter owns the flow."""
     for kind, operation in [

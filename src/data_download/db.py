@@ -1521,6 +1521,58 @@ class Store:
                 raise
         return True
 
+    async def step_started(
+        self,
+        request_id: str,
+        owner: str,
+        *,
+        index: int,
+        kind: str,
+        total: int,
+        now: str | None = None,
+    ) -> bool:
+        """Record that the leaseholder has begun step `index` of the Job.
+
+        A claim followed by twenty minutes of silence is what a run looks like
+        from the outside, and the trail said exactly that: `claimed`, then
+        nothing until `landed`. One event per step fixes the silence without
+        turning the trail into a log -- the Job has seven steps, and `poll` is
+        the only one that usually takes any time.
+
+        The write is best effort and says nothing when it cannot be made: the
+        lease may have moved on, or the row settled while this step was already
+        under way. A progress note is not worth an exception, and a note on a
+        lease that is no longer ours would be a false claim in an audit trail.
+        """
+        ts = now or utcnow()
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = await self._select(request_id)
+                if (
+                    row is None
+                    or row["state"] != "running"
+                    or row["owner"] != owner
+                ):
+                    await self.conn.execute("ROLLBACK")
+                    return False
+                await self.conn.execute(
+                    "UPDATE requests SET updated_at = ? WHERE id = ?",
+                    (ts, request_id),
+                )
+                await self._event(
+                    request_id,
+                    ts,
+                    "runner",
+                    "step",
+                    {"index": index, "kind": kind, "total": total},
+                )
+                await self.conn.execute("COMMIT")
+                return True
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+
     async def settle(
         self,
         request_id: str,

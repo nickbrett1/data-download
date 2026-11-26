@@ -81,6 +81,46 @@ def test_the_prospect_is_the_sealed_jobs_own_steps(client):
     assert prospect["landing"] is None
 
 
+def test_the_trail_says_where_the_run_has_got_to(client, db_path, settings):
+    """`claimed` then silence was the record of a twenty-minute run.
+
+    Two sentences, and neither is machine vocabulary: a claim says a worker has
+    it (the `host:pid:uuid` is in the payload, not the prose), and each step
+    says which of the Job's seven it is on and what that step does.
+    """
+    import asyncio
+
+    from data_download.db import Store
+
+    filed = _file(client)
+    request_id = filed["request_id"]
+
+    async def drive():
+        store = Store(str(db_path))
+        await store.connect()
+        try:
+            await store.approve(request_id, "nick")
+            await store.claim(request_id, "ceda1db46ab2:1:c43ef31b")
+            await store.step_started(
+                request_id,
+                "ceda1db46ab2:1:c43ef31b",
+                index=3,
+                kind="poll",
+                total=7,
+            )
+        finally:
+            await store.close()
+
+    asyncio.run(drive())
+
+    events = client.get(f"/ui/request/{request_id}.json").json()["events"]
+    summaries = [event["summary"] for event in events]
+    assert "approved by nick" in summaries
+    assert "a worker picked it up" in summaries
+    assert "step 4 of 7 — wait for the vendor to finish" in summaries
+    assert not any("ceda1db46ab2" in summary for summary in summaries)
+
+
 def test_the_prospect_does_not_restate_approving_in_prose(client):
     """The steps are what a click spends; the button is who may spend it.
 

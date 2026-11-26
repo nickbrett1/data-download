@@ -33,7 +33,7 @@
   import DataTable from "$lib/components/nb/DataTable.svelte";
   import EmptyState from "$lib/components/nb/EmptyState.svelte";
   import { getView, postJson } from "$lib/api";
-  import { filed } from "$lib/format";
+  import { when } from "$lib/format";
 
   let data = $state(null);
   let failure = $state("");
@@ -125,7 +125,7 @@
   // nothing rather than "unknown".
   function builtWhen(impl) {
     const stamp = impl.build?.updated_at || impl.build?.created_at;
-    return impl.driver && stamp ? filed(stamp) : "";
+    return impl.driver && stamp ? when(stamp) : "";
   }
 
   // The micro on a row that has a driver: how much it claims to answer, and

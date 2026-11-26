@@ -147,18 +147,21 @@ export function bound(value) {
   return `$${amount.toFixed(2).replace(/\.00$/, "")}`;
 }
 
-/** When a request was filed, as a person reads a clock: `14 Nov 23:41`.
- * Local time on purpose -- the reader is the one who filed it, and the service
- * stores UTC (`Z`), so a raw timestamp would be an hour or two out in the very
- * column they use to remember when they asked. */
-export function filed(iso) {
+/** A moment, as a person reads a clock: `14 Nov 23:41`.
+ *
+ * Local time on purpose -- the reader filed the request, or is watching it move,
+ * and the service stores UTC (`Z`), so a raw timestamp would be an hour or two
+ * out in the very column they use to remember when it happened. One function
+ * for `created_at`, `updated_at` and every event, because they are the same
+ * kind of fact and three spellings of it would be three chances to disagree. */
+export function when(iso) {
   if (!iso) return "—";
-  const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) return "—";
-  const day = when.getDate();
-  const month = when.toLocaleString("en-GB", { month: "short" });
-  const hh = String(when.getHours()).padStart(2, "0");
-  const mm = String(when.getMinutes()).padStart(2, "0");
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "—";
+  const day = at.getDate();
+  const month = at.toLocaleString("en-GB", { month: "short" });
+  const hh = String(at.getHours()).padStart(2, "0");
+  const mm = String(at.getMinutes()).padStart(2, "0");
   return `${day} ${month} ${hh}:${mm}`;
 }
 
@@ -202,7 +205,7 @@ function blockedMove(row) {
   return {
     text: "new plan requested",
     tone: "info",
-    title: row.escalated_at ? `asked for on ${filed(row.escalated_at)}` : "",
+    title: row.escalated_at ? `asked for on ${when(row.escalated_at)}` : "",
   };
 }
 

@@ -51,7 +51,12 @@
   import { getView, postJson } from "$lib/api";
   import { bound, isArchivable, isRetryable, usd } from "$lib/format";
 
-  let { request, onchanged, onarchived } = $props();
+  // `onapproved` and `onarchived` both end the visit: the row has changed
+  // hands (a worker has it now, or it is off the book), so the thing worth
+  // watching is the list, not the page that asked the question. `onchanged`
+  // stays for the verbs whose answer is *on* this page -- a cancel that leaves
+  // a badge to read, a restore that puts the row back.
+  let { request, onchanged, onapproved, onarchived } = $props();
 
   const id = $derived(request.id);
   const draft = $derived(request.state === "draft");
@@ -143,7 +148,7 @@
     const result = await run("approve", `${base}/approve`, {
       note: note.trim() || null,
     });
-    if (result) onchanged?.();
+    if (result) (onapproved ?? onchanged)?.();
   }
 
   async function cancel() {

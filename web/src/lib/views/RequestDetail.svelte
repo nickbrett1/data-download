@@ -23,7 +23,7 @@
   import {
     bound,
     datasetLabel,
-    filed,
+    when,
     isArchivable,
     isRetryable,
     stateLabel,
@@ -67,6 +67,29 @@
     const controller = new AbortController();
     load(controller.signal);
     return () => controller.abort();
+  });
+
+  // A row with work in flight is worth watching, and watching means the page
+  // keeps asking: a claim, then seven steps, then a landing all used to need a
+  // refresh to be seen. Five seconds because the paces here are a vendor poll
+  // (minutes) and a driver build (minutes) -- not a chat.
+  //
+  // A settled row is not polled. The page is a record, and a record that
+  // reloads itself every five seconds forever is a page left doing arithmetic
+  // for nobody.
+  const LIVE_STATES = new Set(["approved", "running"]);
+
+  const live = $derived(
+    Boolean(data) &&
+      (LIVE_STATES.has(data.state) ||
+        data.driver_state === "building" ||
+        data.approved_unclaimed === true),
+  );
+
+  $effect(() => {
+    if (!live) return;
+    const timer = setInterval(() => load(), 5000);
+    return () => clearInterval(timer);
   });
 
   /** Archiving takes the row off the book, so this page -- a decision record --
@@ -153,7 +176,7 @@
     // Nor is the age. A clock a reader has to subtract from is the `filed` date
     // said twice, and the book already answers this: it prints the date and
     // calls the age what it is -- a question nobody asked.
-    rows.push({ label: "filed", value: filed(data.created_at) });
+    rows.push({ label: "filed", value: when(data.created_at) });
     return rows;
   });
 
@@ -248,7 +271,13 @@
   );
 
   // Which field of an event's detail is the actor, when the trail recorded one.
-  const ACTOR_OF = { approved: "actor", claimed: "owner", released: "owner" };
+  //
+  // Only approvals have one worth printing. A claim's detail carries the runner
+  // as `host:pid:uuid`, which is a machine naming itself -- it said nothing a
+  // reader could use, and it is the same string on every row. It stays in the
+  // event's payload for anyone grepping the trail; the page does not pretend it
+  // is a person.
+  const ACTOR_OF = { approved: "actor" };
 
   /** The doer, when the event does not already say who.
 
@@ -479,6 +508,7 @@
         <Actions
           request={data}
           onchanged={() => load()}
+          onapproved={leaveToList}
           onarchived={leaveToList}
         />
       {/if}
@@ -517,7 +547,7 @@
               </dd>
               {#if data.escalated_at}
                 <dt>new plan asked for</dt>
-                <dd>{filed(data.escalated_at)}</dd>
+                <dd>{when(data.escalated_at)}</dd>
               {/if}
             </dl>
 
@@ -595,7 +625,7 @@
         <ol class="events">
           {#each trail as item (item.key)}
             <li title={item.name}>
-              <span class="when">{filed(item.ts)}</span>
+              <span class="when">{when(item.ts)}</span>
               <span class="what">{item.summary}</span>
               {#if item.count > 1}
                 <span class="who" title="last at {item.last}"

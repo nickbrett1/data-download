@@ -30,7 +30,7 @@
   import {
     availableWindow,
     datasetLabel,
-    filed,
+    when,
     stateLabel,
     stateTone,
     windowOf,
@@ -207,9 +207,9 @@
               <div class="card-foot">
                 <span class="meta">
                   {#if request.settled_at}
-                    landed {filed(request.settled_at)}
+                    landed {when(request.settled_at)}
                   {:else}
-                    filed {filed(request.created_at)}
+                    filed {when(request.created_at)}
                   {/if}
                   {#if request.landed_sha256}
                     · <code>sha {request.landed_sha256.slice(0, 12)}</code>

@@ -80,6 +80,69 @@ def test_the_claim_takes_the_row_and_writes_one_runner_event(client, settings):
     assert json.loads(claimed[0]["detail_json"])["owner"] == "host:1:abc"
 
 
+def test_a_step_is_only_recorded_by_the_leaseholder(client, settings):
+    """Progress is a claim about a run in flight; a stranger's claim would be false.
+
+    The trail is an audit record, so a `step` event from a runner whose lease has
+    moved on -- or from a row that already settled -- is a note nobody may write,
+    and the store says so by refusing rather than by writing a lie.
+    """
+    request_id = _approved(client, settings)
+    _run(_call(settings.db_path, "claim", request_id, "host:1:abc"))
+
+    written = _run(
+        _call(
+            settings.db_path,
+            "step_started",
+            request_id,
+            "host:1:abc",
+            index=0,
+            kind="resolve",
+            total=7,
+        )
+    )
+    assert written is True
+    steps = [e for e in _events(settings.db_path, request_id) if e["event"] == "step"]
+    assert len(steps) == 1
+    assert json.loads(steps[0]["detail_json"]) == {
+        "index": 0,
+        "kind": "resolve",
+        "total": 7,
+    }
+
+    # Someone else's session, and a row that is no longer running.
+    assert (
+        _run(
+            _call(
+                settings.db_path,
+                "step_started",
+                request_id,
+                "host:2:def",
+                index=1,
+                kind="quote",
+                total=7,
+            )
+        )
+        is False
+    )
+    _run(_call(settings.db_path, "settle", request_id, "host:1:abc", "failed"))
+    assert (
+        _run(
+            _call(
+                settings.db_path,
+                "step_started",
+                request_id,
+                "host:1:abc",
+                index=2,
+                kind="submit",
+                total=7,
+            )
+        )
+        is False
+    )
+    assert len([e for e in _events(settings.db_path, request_id) if e["event"] == "step"]) == 1
+
+
 def test_two_concurrent_claims_leave_exactly_one_winner(client, settings):
     """The reason the claim is a CAS and not a read followed by a write."""
     request_id = _approved(client, settings)
