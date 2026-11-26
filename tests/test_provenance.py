@@ -81,6 +81,33 @@ def test_the_prospect_is_the_sealed_jobs_own_steps(client):
     assert prospect["landing"] is None
 
 
+def test_a_step_prints_only_what_it_decides(client):
+    """The pipeline says what each step *does*, not what the request asked for.
+
+    Dataset, schema, symbols and window are the same on every step and are in
+    the parameters table above; printing them beside each one made the list read
+    as jargon and said nothing twice over.
+    """
+    filed = _file(client)
+    steps = client.get(f"/ui/request/{filed['request_id']}.json").json()["prospect"][
+        "steps"
+    ]
+    details = {step["kind"]: step["detail"] for step in steps}
+    assert details == {
+        "resolve": "",
+        "quote": "",
+        "submit": "",
+        "poll": "",
+        "download": "files/",
+        "convert": "dbn · parquet",
+        "verify": "quarantine",
+    }
+    for step in steps:
+        assert "GLBX.MDP3" not in step["detail"]
+        assert "trades" not in step["detail"]
+        assert "2026-10-01" not in step["detail"]
+
+
 def test_the_landing_path_is_the_one_the_runner_writes(db_path, tmp_path):
     """With a root configured, the promise is the runner's own path."""
     from fastapi.testclient import TestClient

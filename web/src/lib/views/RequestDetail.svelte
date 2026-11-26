@@ -661,7 +661,9 @@
 
   /* The pipeline, numbered because the order is the information: `download`
      before `verify` is a different guarantee from the reverse. One column, the
-     step's verb first, its arguments in mono and quiet beneath the number. */
+     step's verb first, and -- only where the step decides something the request
+     itself does not -- that decision in mono and quiet beneath it. A step that
+     repeats the request's dataset, symbols and window says nothing new. */
   .steps {
     margin: 10px 0 0;
     padding: 0;

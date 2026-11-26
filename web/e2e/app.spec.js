@@ -1487,6 +1487,12 @@ test.describe("naming a request, and opening it", () => {
       "convert the landing files",
       "check the vendor's manifest against the bytes",
     ]);
+    // A step prints an argument only when it decides one: where the bytes go,
+    // what they are converted between, and what a disagreement means. The
+    // request's dataset, schema, symbols and window are the parameters table's.
+    const details = await prospect.locator(".steps .detail").allTextContents();
+    expect(details).toEqual(["files/", "dbn · parquet", "quarantine"]);
+    await expect(prospect).not.toContainText("1 symbols");
     await expect(prospect).toContainText(
       "/datasets/databento/GLBX.MDP3/2026-11-04_2026-11-06-1a2b3c/",
     );

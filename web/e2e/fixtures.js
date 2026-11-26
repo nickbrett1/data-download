@@ -514,10 +514,13 @@ export const draftDetail = {
     ready: true,
     why: "",
     steps: [
+      // A step carries a detail only when it decides something the page has not
+      // already said. The request's dataset, schema, symbols and window are the
+      // parameters table's, not each step's.
       {
         kind: "resolve",
         verb: "ask the vendor what it has, and what this window costs",
-        detail: "GLBX.MDP3 trades ES.c.0 2026-11-04..2026-11-06",
+        detail: null,
       },
       {
         kind: "quote",
@@ -530,12 +533,16 @@ export const draftDetail = {
         detail: null,
       },
       { kind: "poll", verb: "wait for the vendor to finish", detail: null },
-      { kind: "download", verb: "fetch the files", detail: null },
-      { kind: "convert", verb: "convert the landing files", detail: null },
+      { kind: "download", verb: "fetch the files", detail: "files/" },
+      {
+        kind: "convert",
+        verb: "convert the landing files",
+        detail: "dbn · parquet",
+      },
       {
         kind: "verify",
         verb: "check the vendor's manifest against the bytes",
-        detail: "on failure: quarantine",
+        detail: "quarantine",
       },
     ],
     landing: {

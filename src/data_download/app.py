@@ -886,20 +886,17 @@ STEP_VERBS = {
     "verify": "check the vendor's manifest against the bytes",
 }
 
-# The kwargs worth printing beside a step. Deliberately a short allowlist rather
-# than every kwarg: `max_usd` and `job_id` are decisions already shown above, and
-# a page that paraphrases the whole Job is a second copy of the Job.
-STEP_DETAIL_KEYS = (
-    "dataset",
-    "schema",
-    "symbols",
-    "start",
-    "end",
-    "dest",
-    "from",
-    "to",
-    "on_failure",
-)
+# What a step adds that the page has not already said.
+#
+# The allowlist used to carry the request's own facts -- dataset, schema,
+# symbols, window -- so `GLBX.MDP3 · trades · 1 symbols · 2026-11-19 · 2026-11-20`
+# was printed under three consecutive steps, none of which decides any of it.
+# Those facts are the parameters table's, stated once at the top of the same
+# page, so repeating them beside a step only made the pipeline look like a wall
+# of jargon. What remains is the handful of things a step *does* decide: where
+# the bytes go, what they are converted from and to, and what happens when the
+# vendor's manifest disagrees.
+STEP_DETAIL_KEYS = ("dest", "from", "to", "on_failure")
 
 
 def _step_detail(step: dict[str, Any]) -> str:
@@ -910,7 +907,7 @@ def _step_detail(step: dict[str, Any]) -> str:
         if value in (None, "", [], {}):
             continue
         if isinstance(value, list):
-            parts.append(f"{len(value)} symbols" if key == "symbols" else ", ".join(map(str, value)))
+            parts.append(", ".join(map(str, value)))
         elif isinstance(value, dict):
             start, end = value.get("start"), value.get("end")
             if start and end:
