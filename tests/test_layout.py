@@ -15,14 +15,29 @@ def test_the_window_leads_and_a_short_id_follows():
     assert name == "2026-11-04_2026-11-06-fc1b83"
 
 
-def test_a_timestamp_names_the_day_it_covers():
-    """An intraday request carries a time; the folder is about the day."""
+def test_a_day_split_names_the_day_an_intraday_request_covers():
+    """An intraday request carries a time; a per-day job's folder is the day."""
+    name = landing_name(
+        "req_abc123",
+        "2026-11-04T09:30:00Z",
+        "2026-11-04T16:00:00Z",
+        split="day",
+    )
+    assert name == "2026-11-04_2026-11-04-abc123"
+
+
+def test_a_plan_that_declares_no_split_does_not_get_a_day_name():
+    """Silence is not a declaration: an unnamed cut must not be guessed coarsely.
+
+    A date-only window degrades to the same name either way, so the only case
+    this changes is the one where a day-only name would read as an empty span.
+    """
     name = landing_name(
         "req_abc123",
         "2026-11-04T09:30:00Z",
         "2026-11-04T16:00:00Z",
     )
-    assert name == "2026-11-04_2026-11-04-abc123"
+    assert name == "2026-11-04T0930_2026-11-04T1600-abc123"
 
 
 def test_the_plans_split_decides_how_finely_the_window_is_written():

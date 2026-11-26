@@ -451,21 +451,39 @@ def test_an_hourly_job_lands_under_its_instants_not_its_day(tmp_path):
     assert landed.name == "2026-11-04T0930_2026-11-04T1600-fc1b83"
 
 
-def test_a_job_that_never_declared_a_split_names_days(tmp_path):
-    """No declaration is not a licence to guess finely: day is the convention."""
+def test_a_job_that_never_declared_a_split_names_what_it_can(tmp_path):
+    """No declaration is not a licence to guess coarsely.
+
+    A date-only window comes out the same either way, so silence costs nothing
+    there; an intraday one is named by its instants, because a day-only name
+    would state a span that (being half-open) is empty.
+    """
     from data_download.runner import split_of
 
-    assert split_of({"steps": [{"kind": "download", "kwargs": {"dest": "files/"}}]}) is None
-    landed = destination(
+    job = {"steps": [{"kind": "download", "kwargs": {"dest": "files/"}}]}
+    assert split_of(job) is None
+
+    dated = destination(
         tmp_path,
         "Databento",
         "GLBX.MDP3",
         "req_fc1b83716aa44c18ab3a13ea70e3bb8d",
         start="2026-11-04",
         end="2026-11-06",
-        split=split_of({}),
+        split=split_of(job),
     )
-    assert landed.name == "2026-11-04_2026-11-06-fc1b83"
+    assert dated.name == "2026-11-04_2026-11-06-fc1b83"
+
+    intraday = destination(
+        tmp_path,
+        "Databento",
+        "GLBX.MDP3",
+        "req_fc1b83716aa44c18ab3a13ea70e3bb8d",
+        start="2026-11-04T09:30:00Z",
+        end="2026-11-04T16:00:00Z",
+        split=split_of(job),
+    )
+    assert intraday.name == "2026-11-04T0930_2026-11-04T1600-fc1b83"
 
 
 def _dir(datasets, request_id: str, start="2026-10-01", end="2026-10-03"):

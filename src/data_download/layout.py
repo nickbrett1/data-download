@@ -71,8 +71,15 @@ def _coarse(split: object) -> bool:
     Anything else -- `hour`, an unsplit window, a unit invented later -- either
     cuts inside a day or fits in one file, and a day-only name would hide where
     the cuts are (or name a zero-length span, since the window is half-open).
+
+    Only a Job that *says* `day` gets a day name. Silence is not a declaration:
+    a plan type that never mentions a split tells this module nothing about how
+    it cuts, and naming an intraday window by its day would then state an empty
+    span. Such a window names its instants, which for a date-only window is the
+    same name anyway -- so the assumption only ever cost precision where the
+    result was false.
     """
-    return str(split or "day").strip().lower() == "day"
+    return str(split or "").strip().lower() == "day"
 
 
 def _tail(request_id: str) -> str:
@@ -98,16 +105,16 @@ def landing_name(
     start: object = None,
     end: object = None,
     *,
-    split: object = "day",
+    split: object = None,
 ) -> str:
     """The directory name for `request_id`'s bytes: the window, then a short id.
 
     `split` is the Job's own `split_duration` -- the plan's declaration of how
     it cuts the data up -- and it decides the precision of the window's ends.
-    A per-day split names days (`2026-11-04_2026-11-06-fc1b83`); anything finer
-    or unsplit names instants (`2026-11-04T0930_2026-11-04T1600-fc1b83`), which
-    is the only name that stays true when one folder holds hours, or one file
-    spans a part of a day.
+    A per-day split names days (`2026-11-04_2026-11-06-fc1b83`); anything else,
+    including a plan type that declares nothing, names instants
+    (`2026-11-04T0930_2026-11-04T1600-fc1b83`), which is the only name that
+    stays true when one folder holds hours, or one file spans a part of a day.
 
     Falls back to the request id -- the whole, unreadable thing -- when the
     request carries no usable window, because a name that says nothing is still
