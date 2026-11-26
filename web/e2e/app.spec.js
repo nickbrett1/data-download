@@ -1499,14 +1499,10 @@ test.describe("naming a request, and opening it", () => {
     // Checks are recorded facts, and each carries a verdict rather than a
     // promise, so a reader can tell a guarantee from an expectation.
     await expect(prospect.locator(".checks dt")).toHaveCount(3);
-    // Three facts, not a paragraph: who may approve, what the click spends,
-    // and what cannot be undone. The lease and the verifier are the steps.
-    const note = prospect.locator(".note");
-    await expect(note).toContainText(
-      "a tailnet login in DATA_DOWNLOAD_APPROVERS",
-    );
-    await expect(note).toContainText("runs this Job once");
-    await expect(note).not.toContainText("under a lease");
+    // Nothing restates the approval mechanics: the steps are what a click
+    // spends, and who may approve is the credential the button already asks
+    // for. A paragraph under them was the same facts in prose.
+    await expect(prospect.locator(".note")).toHaveCount(0);
   });
 
   test("a row with no Job says approving it would run nothing", async ({

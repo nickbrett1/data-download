@@ -1037,15 +1037,12 @@ def _prospect(
         "steps": steps,
         "landing": landing,
         "checks": checks,
-        # Three short facts, not a paragraph: who may approve, what the click
-        # spends, and the two things a person cannot undo. Everything else --
-        # the lease, the verifier, the second approval -- is on the page
-        # already, in the steps above and in the state of a failed row.
-        "approval": {
-            "who": "a tailnet login in DATA_DOWNLOAD_APPROVERS",
-            "does": "runs this Job once, and lands the bytes only if the verifier agrees",
-            "after": "a run cannot be cancelled; a failed row is retried as a fresh draft",
-        },
+        # No note about approving. It said who may approve, that a run cannot
+        # be cancelled, and that a retry files a fresh draft -- three facts the
+        # page already carries: the button asks for the credential and the
+        # server refuses without it, the steps above are what the click spends,
+        # and a failed row offers `retry` in so many words. Prose restating a
+        # page is the one thing a decision record cannot afford.
     }
 
 

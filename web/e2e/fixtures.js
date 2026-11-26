@@ -569,12 +569,6 @@ export const draftDetail = {
           "the bytes are checked against the vendor's own manifest before they land",
       },
     ],
-    approval: {
-      who: "a tailnet login in DATA_DOWNLOAD_APPROVERS",
-      does: "runs this Job once, and lands the bytes only if the verifier agrees",
-      after:
-        "a run cannot be cancelled; a failed row is retried as a fresh draft",
-    },
   },
   identity: {
     job_hash:

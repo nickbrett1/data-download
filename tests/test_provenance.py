@@ -81,6 +81,19 @@ def test_the_prospect_is_the_sealed_jobs_own_steps(client):
     assert prospect["landing"] is None
 
 
+def test_the_prospect_does_not_restate_approving_in_prose(client):
+    """The steps are what a click spends; the button is who may spend it.
+
+    A note under them said both again ("approving needs a tailnet login…",
+    "a run cannot be cancelled…") in the one place a paragraph has to be read
+    rather than glanced at.
+    """
+    filed = _file(client)
+    prospect = client.get(f"/ui/request/{filed['request_id']}.json").json()["prospect"]
+    assert "approval" not in prospect
+    assert "note" not in prospect
+
+
 def test_a_step_prints_only_what_it_decides(client):
     """The pipeline says what each step *does*, not what the request asked for.
 

@@ -460,12 +460,11 @@
                 {/each}
               </dl>
             {/if}
-            {#if data.prospect.approval}
-              <p class="quiet note">
-                Approving needs {data.prospect.approval.who}. It
-                {data.prospect.approval.does}. {data.prospect.approval.after}.
-              </p>
-            {/if}
+            <!-- No paragraph about approving: who may approve is the
+                 credential the button asks for, and "a run cannot be
+                 cancelled" / "a failed row is retried" are the verbs the page
+                 already offers. Prose under a list of steps is the list said
+                 again. -->
           {/if}
         </section>
       {/if}
