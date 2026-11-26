@@ -139,6 +139,17 @@ class Settings:
     author_timeout: float = 3600.0
     author_budget: float = 2.0
     author_iterations: int = 200
+    #: The token the MCP surface calls its own `/v1` with. It must be one of
+    #: the tokens in `tokens`, so the scopes the tools hold are the scopes the
+    #: operator wrote down, enforced by the same `auth` module every other
+    #: caller goes through. `None` means `/mcp` is not mounted at all: a tool
+    #: that cannot authenticate is a tool that answers 401 to every question,
+    #: which reads as a broken deployment rather than a missing setting.
+    mcp_token: str | None = None
+    #: The name the MCP server announces. Deliberately the deployment's name
+    #: rather than this process's: an agent sees one tool that speaks for one
+    #: store, and "data-download" is what the pages call it too.
+    mcp_name: str = "data-download"
 
     @property
     def driver_ready(self) -> bool:
@@ -444,6 +455,22 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
             "approved requests will wait: there is nowhere to land bytes."
         )
 
+    # The MCP surface (`/mcp`): the token its tools authenticate with. It must
+    # already be one of `DATA_DOWNLOAD_API_TOKENS`, so an operator cannot
+    # conjure a credential out of thin air -- the scopes are written down in the
+    # same list every other caller's are.
+    mcp_token = (env.get("DATA_DOWNLOAD_MCP_TOKEN") or "").strip() or None
+    if mcp_token is not None and mcp_token not in tokens:
+        # Loud, and refused rather than half-started: every tool would answer
+        # 401 and read as "the tools are broken", which is the least useful
+        # failure shape there is.
+        log.error(
+            "DATA_DOWNLOAD_MCP_TOKEN does not match any token in "
+            "DATA_DOWNLOAD_API_TOKENS - /mcp will not be mounted. Add the same "
+            "value to both, with the scopes the tools should hold."
+        )
+        mcp_token = None
+
     port_raw = (env.get("PORT") or "8820").strip()
     try:
         port = int(port_raw)
@@ -488,6 +515,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         author_timeout=_number(env.get("DATA_DOWNLOAD_AUTHOR_TIMEOUT"), 3600.0),
         author_budget=_number(env.get("DATA_DOWNLOAD_AUTHOR_BUDGET"), 2.0),
         author_iterations=int(_number(env.get("DATA_DOWNLOAD_AUTHOR_ITERATIONS"), 200)),
+        mcp_token=mcp_token,
     )
 
 

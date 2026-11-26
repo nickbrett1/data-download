@@ -694,6 +694,9 @@ class Store:
         state: str | None = None,
         states: list[str] | tuple[str, ...] | None = None,
         plan_type: str | None = None,
+        dataset: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
@@ -711,6 +714,23 @@ class Store:
         if plan_type:
             where.append("plan_type = ?")
             args.append(plan_type)
+        if dataset:
+            # The dataset code is one field of a write-once params blob rather
+            # than a column -- a copy would be a second place for it to be
+            # wrong -- so the filter asks the blob. `json_extract` on a NULL or
+            # malformed value answers NULL, which matches nothing: a row with no
+            # dataset is not "the one you asked for".
+            where.append("json_extract(params_json, '$.dataset') = ?")
+            args.append(dataset)
+        if since:
+            # `created_at` is stored as `YYYY-MM-DDTHH:MM:SSZ`, so a string
+            # comparison is a chronological one. `since` is inclusive and
+            # `until` exclusive: "the 18th to the 19th" means the 18th.
+            where.append("created_at >= ?")
+            args.append(since)
+        if until:
+            where.append("created_at < ?")
+            args.append(until)
         clause = f"WHERE {' AND '.join(where)}" if where else ""
 
         async with self.conn.execute(

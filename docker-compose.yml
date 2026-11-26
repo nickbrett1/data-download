@@ -28,6 +28,14 @@ services:
       # (genproj never commits secrets). See .env.example.
       DATA_DOWNLOAD_DB: ${DATA_DOWNLOAD_DB}
       DATA_DOWNLOAD_API_TOKENS: ${DATA_DOWNLOAD_API_TOKENS}
+      # The MCP surface (`/mcp`): the token its tools send, and the scopes they
+      # are therefore allowed. It must be one of the tokens above -- the surface
+      # authenticates through `/v1` like any other caller, so a token that is not
+      # listed there grants nothing and is refused at boot. Unset means no `/mcp`
+      # at all: an agent then has no tools here, and every page still works.
+      # Give it `submit+read` to file and to read the book, or `read` alone for a
+      # status-only surface. No value here can approve anything.
+      DATA_DOWNLOAD_MCP_TOKEN: ${DATA_DOWNLOAD_MCP_TOKEN:-}
       # The tailnet logins allowed to approve. Unset means nobody can: approval
       # is authorised by the identity `tailscale serve` asserts, not by a token.
       DATA_DOWNLOAD_APPROVERS: ${DATA_DOWNLOAD_APPROVERS:-}

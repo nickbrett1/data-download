@@ -332,6 +332,33 @@ generated Dockerfile, compose file and Homepage widget stay consistent:
 Regenerate with `overwrite: true` to apply these to an existing repo — existing
 app code is preserved; only generated infra files are updated.
 
+### The MCP endpoint (`/mcp`)
+
+Same container, no extra service: the app mounts an MCP server at `/mcp`, so
+the URL a client is given is `https://<node>.<tailnet>.ts.net/mcp/` (streamable
+HTTP). It is reachable wherever the app is — the tailnet, via `tailscale serve`.
+
+One setting, on the **app** service:
+
+```
+DATA_DOWNLOAD_MCP_TOKEN=<one of the tokens already in DATA_DOWNLOAD_API_TOKENS>
+```
+
+The value must be a token from `DATA_DOWNLOAD_API_TOKENS`: the tools
+authenticate through `/v1` like any other caller, so the scopes that token has
+are what the surface can do. `submit+read` lets an agent file requests and read
+the book; `read` alone is a status surface. Unset (or a value that is not in the
+list) means `/mcp` is not mounted — `404`, with one log line at boot naming the
+setting — and everything else is unaffected. No value of this setting can
+approve: approval stays the page's two clicks and the tailnet identity behind
+them.
+
+Register it **once** in the MCP hub and assign that one registration to every
+consumer (the data group for status, the sourcing agent for filing). Two
+registrations of the same URL drift: one gets the token rotated and the other
+stops working months later. The tool list is in the main README, "The MCP
+surface".
+
 ## 10. The driver queue (a missing driver gets built)
 
 Phase 5.5. When an approved request's vendor has no installed driver, the runner
