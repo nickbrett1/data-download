@@ -48,6 +48,15 @@ RUNTIME_MODULE = "runtime_http.py"
 EGRESS_IMPORTS = ("urllib.request", "urllib.error")
 EGRESS_MODULES = ("github_api.py", "openhands_agent.py")
 
+# The MCP surface is the one place that imports an HTTP *client* without a way
+# out: `mcp_surface.py` builds it with `ASGITransport(app=app)`, so a tool call
+# goes to this process's own routes and never opens a socket. The import is
+# named here rather than waved through, and the test below holds it to the
+# in-process transport -- an `AsyncHTTPTransport` or a real `base_url` added
+# later fails that test.
+IN_PROCESS_CLIENTS = ("httpx2",)
+IN_PROCESS_MODULE = "mcp_surface.py"
+
 
 def test_unusable_store_is_up_but_broken(tmp_path):
     settings = Settings(
@@ -197,6 +206,12 @@ def test_no_vendor_client_or_network_import(path: Path):
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
     for module in imported:
+        if module.startswith(IN_PROCESS_CLIENTS):
+            assert path.name == IN_PROCESS_MODULE, (
+                f"{path.name} imports {module}; only {IN_PROCESS_MODULE} may, and "
+                "only over the in-process ASGI transport"
+            )
+            continue
         assert not module.startswith(FORBIDDEN_IMPORTS), f"{path.name} imports {module}"
         if module.startswith(VENDOR_IMPORTS):
             assert path.name == VENDOR_MODULE, (
@@ -214,6 +229,33 @@ def test_no_vendor_client_or_network_import(path: Path):
                 "may leave this process, so the loop's egress and credentials "
                 "live in named files"
             )
+
+
+def test_the_mcp_client_cannot_leave_this_process():
+    """The MCP surface's one import of an HTTP client buys no socket.
+
+    `mcp_surface.py` is exempt from the egress gate because it names itself a
+    client only to speak to this app, in-process. That excuse is worth exactly
+    as much as the transport it builds, so the transport is what is checked:
+    the module may touch `AsyncClient`, `ASGITransport` and `Response` from
+    `httpx2` and nothing else. A `AsyncHTTPTransport`, an `HTTPTransport`, or a
+    client built without a transport fails here, which is the difference between
+    "a client whose address is a name for an app object" and a way out.
+    """
+    tree = ast.parse((SRC / IN_PROCESS_MODULE).read_text(encoding="utf-8"))
+    used = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "httpx2"
+    }
+    assert used <= {"AsyncClient", "ASGITransport", "Response"}, used
+
+    source = (SRC / IN_PROCESS_MODULE).read_text(encoding="utf-8")
+    assert "httpx2.ASGITransport(app=app)" in source, (
+        "the MCP client must be built over the app object, not an address"
+    )
 
 
 def test_an_older_store_gains_the_new_columns_on_start(tmp_path):

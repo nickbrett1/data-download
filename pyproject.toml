@@ -16,7 +16,11 @@ dependencies = [
     # `metadata.get_cost` is a free read -- but it is still a credential-bearing
     # dependency, which is why the budget question (D1) was answered "one check"
     # rather than "one check and an aggregate".
-    "databento>=0.40"
+    "databento>=0.40",
+    # The MCP surface (`mcp_surface.py`): the tools that let an agent file and
+    # read requests. It is the SDK, not a server of its own -- the same process
+    # serves /mcp beside /v1 and the pages.
+    "mcp>=2.3"
 ]
 
 [project.optional-dependencies]

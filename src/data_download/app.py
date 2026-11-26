@@ -18,6 +18,7 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -38,6 +39,7 @@ from . import (
     driver_client,
     errors,
     match,
+    mcp_surface,
     profiles,
     rematch,
     vendor,
@@ -670,12 +672,27 @@ def _request_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _summary_payload(row: dict[str, Any]) -> dict[str, Any]:
+def _summary_payload(row: dict[str, Any], registry: Registry | None = None) -> dict[str, Any]:
+    """One row, in the shape a list needs -- the book's line, as data.
+
+    `label`, `vendor`, `dataset` and `window` are here because a caller asking
+    "what have I got?" cannot answer it from a state and a price: an agent
+    reading a list of `market_data_window · succeeded` rows has been told
+    nothing about which days of which dataset it owns. They are derived from
+    the same helpers the pages use, so the API and the book cannot disagree
+    about what a row is about.
+    """
     return {
         "request_id": row["id"],
         "state": row["state"],
         "body_kind": row["body_kind"],
         "plan_type": row["plan_type"],
+        "label": _label(row),
+        "vendor": _vendor_of(row, registry) if registry is not None else "",
+        "dataset": _dataset_of(row),
+        "window": _window_of(row),
+        "why": row["why"] if "why" in row.keys() else None,
+        "max_usd": row["max_usd"] if "max_usd" in row.keys() else None,
         "estimate_usd": row["estimate_usd"],
         "blocked_reason": row["blocked_reason"],
         "plan_origin": row["plan_origin"],
@@ -1135,6 +1152,45 @@ def _start_driver_worker(
     return worker
 
 
+def _mount_mcp(app: FastAPI, settings: Settings) -> None:
+    """Attach `/mcp`, or say why there is none.
+
+    Mounted at `/mcp` with the transport's own path set to `/`, so the URL a
+    client is given is exactly `https://<host>/mcp/` rather than `/mcp/mcp`.
+    """
+    server = mcp_surface.build(settings=settings, app=app)
+    if server is None:
+        log.info(
+            "DATA_DOWNLOAD_MCP_TOKEN is unset - no /mcp surface: agents have no "
+            "tools here, and every page still works."
+        )
+        return
+    inner = server.streamable_http_app(
+        streamable_http_path="/",
+        transport_security=mcp_surface.transport_security(),
+    )
+    app.mount("/mcp", inner)
+    app.state.mcp_app = inner
+
+
+@asynccontextmanager
+async def _mcp_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Run the mounted MCP app's own lifespan around ours.
+
+    Starlette mounts a sub-application but does not enter its lifespan, and the
+    streamable-HTTP session manager refuses to serve until its task group is
+    running -- the first tool call would answer a 500 with "Task group is not
+    initialized" instead of a tool. Entering it here is what makes `/mcp` live
+    for exactly as long as the app is.
+    """
+    inner = getattr(app.state, "mcp_app", None)
+    if inner is None:
+        yield
+        return
+    async with inner.router.lifespan_context(inner):
+        yield
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     _configure_logging(os.environ.get("LOG_LEVEL", "info"))
     settings = settings or load_settings()
@@ -1191,19 +1247,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # container, and API routes answer `store_unavailable`.
             app.state.store_error = f"cannot open the request store: {exc}"
             log.error("%s", app.state.store_error)
-        try:
-            yield
-        finally:
-            # Before the store closes: a pass inside a vendor call is cancelled
-            # and its lease left to expire, which is the recovery path a crash
-            # already takes. Stopping it afterwards would let it use a closed
-            # connection on the way out.
-            if app.state.driver_worker is not None:
-                await app.state.driver_worker.stop()
-            if app.state.worker is not None:
-                await app.state.worker.stop()
-            if app.state.store is not None:
-                await app.state.store.close()
+        # The MCP surface is a mounted Starlette app, and Starlette does not
+        # enter a mounted app's lifespan -- the streamable-HTTP session manager
+        # then raises "Task group is not initialized" on the first request. So
+        # it is entered here, around the serve.
+        async with _mcp_lifespan(app):
+            try:
+                yield
+            finally:
+                # Before the store closes: a pass inside a vendor call is
+                # cancelled and its lease left to expire, which is the recovery
+                # path a crash already takes. Stopping it afterwards would let
+                # it use a closed connection on the way out.
+                if app.state.driver_worker is not None:
+                    await app.state.driver_worker.stop()
+                if app.state.worker is not None:
+                    await app.state.worker.stop()
+                if app.state.store is not None:
+                    await app.state.store.close()
 
     app = FastAPI(
         title="data-download",
@@ -1867,16 +1928,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         state: str | None = Query(default=None),
         plan_type: str | None = Query(default=None),
+        dataset: str | None = Query(default=None),
+        since: str | None = Query(default=None),
+        until: str | None = Query(default=None),
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
         auth.require_scope(request, "read")
         store = await _store(request)
+        # `dataset`, `since` and `until` are here for the reader that has no
+        # page: "what did we pull for GLBX.MDP3 last week?" was unanswerable
+        # from this route, which knew only the state and the plan type.
         rows, total = await store.list_requests(
-            state=state, plan_type=plan_type, limit=limit, offset=offset
+            state=state,
+            plan_type=plan_type,
+            dataset=dataset,
+            since=since,
+            until=until,
+            limit=limit,
+            offset=offset,
         )
         return {
-            "items": [_summary_payload(r) for r in rows],
+            "items": [_summary_payload(r, registry) for r in rows],
             "total": total,
             "limit": limit,
             "offset": offset,
@@ -1909,16 +1982,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         events = await store.events_for(request_id)
         return {
             "items": [
-                {
-                    "id": e["id"],
-                    "request_id": e["request_id"],
-                    "ts": e["ts"],
-                    "actor_kind": e["actor_kind"],
-                    "event": e["event"],
-                    "detail": json.loads(e["detail_json"])
-                    if e["detail_json"]
-                    else None,
-                }
+                # The prose beside the machine name, exactly as the request page
+                # reads it: a trail of `driver_state` rows answers nothing, and
+                # a caller that has to interpret the event vocabulary for
+                # itself will interpret it differently every time.
+                {"request_id": e["request_id"], **_event_for_page(e)}
                 for e in events
             ]
         }
@@ -2048,16 +2116,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "events": [_event_for_page(e) for e in events],
         }
 
-    @app.get("/ui/datasets.json")
-    async def datasets_json(request: Request) -> dict[str, Any]:
-        """What landed, and what is landing (§7.8).
+    async def _datasets_body(request: Request, store: Any) -> dict[str, Any]:
+        """What landed, and what is landing -- one body for two readers.
 
-        Two sources joined read-only: the store names the vendor, the dataset and
-        the state; the datasets root holds the bytes and the `landing.json` that
-        says which driver wrote them. The tree mirrors `runner.destination`, so
-        the page cannot show a path the runner would not have written.
+        The page draws it; `/v1/datasets` answers a question. Same code, because
+        two implementations of "where are my bytes" would eventually disagree
+        about a directory, and the one that disagreed with the disk would be
+        the one somebody trusted.
         """
-        store = await _store(request)
         rows, _ = await store.list_requests(
             states=sorted(datasets.VISIBLE_STATES), limit=500
         )
@@ -2085,6 +2151,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     (bucket["vendor"], group["dataset"])
                 )
         return body
+
+    @app.get("/v1/datasets")
+    async def list_datasets(request: Request) -> dict[str, Any]:
+        """Vendor -> dataset -> request -> files, for a caller with no page.
+
+        `read` scope. Read-only by construction: the tree is built from the
+        store's rows and `stat`ed files, and `datasets.tree` never writes.
+        """
+        auth.require_scope(request, "read")
+        store = await _store(request)
+        return await _datasets_body(request, store)
+
+    @app.get("/ui/datasets.json")
+    async def datasets_json(request: Request) -> dict[str, Any]:
+        """The datasets page's view-model (§7.8)."""
+        store = await _store(request)
+        return await _datasets_body(request, store)
+
 
     @app.get("/datasets/file/{vendor}/{dataset}/{request_id}/{name}")
     async def dataset_file(
@@ -2233,6 +2317,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             STATIC_DIR / "site.webmanifest",
             media_type="application/manifest+json",
         )
+
+    # Last, so nothing above is ever shadowed by a mount, and only when a token
+    # was named: an MCP surface nobody configured is a surface that answers 401
+    # to every question and reads as a broken deployment.
+    _mount_mcp(app, settings)
 
     return app
 

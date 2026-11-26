@@ -95,6 +95,7 @@ matter:
 | `POST /v1/requests/{id}/retry` | either a `submit` token or that same tailnet login — it files a `draft`, which spends nothing until somebody approves it |
 | `POST /v1/requests/{id}/cancel` | the same pair — it cancels a `draft` nobody has approved, which spends nothing and deletes nothing |
 | `POST /v1/requests/{id}/archive` | the same pair — it hides a *finished* row from the book, and `{"archived": false}` brings it back |
+| `GET/POST /mcp/` | the tools send `DATA_DOWNLOAD_MCP_TOKEN`, which is one of the tokens above — so a tool can do exactly what that token's scopes allow and no more |
 | `python -m data_download.approve` | a shell on the host: no route, no credential, no identity |
 
 Approval started as a shell command with no route at all, on the argument that a
@@ -138,6 +139,46 @@ query-string path: one way in, so one thing to audit. `DATA_DOWNLOAD_API_TOKENS`
 is a list of `<token>:<scopes>` pairs, and `python -c` is not how you read it —
 it comes from Doppler on the NAS, or the service's own `.env` beside its compose
 file.
+
+### The MCP surface, for agents with no browser
+
+The book has a page. An agent asking the same question has none, and the
+alternative — teaching it `curl` with a bearer token someone pasted into a
+prompt — is a credential in a transcript. So `/mcp` serves the same doors as
+tools, at `https://<node>.<tailnet>.ts.net/mcp/` (streamable HTTP).
+
+| tool | what it does | scope |
+| --- | --- | --- |
+| `list_requests` | the book, filtered by `state`, `plan_type`, `dataset`, `since`, `until` | `read` |
+| `get_request` | one row plus its trail, in sentences | `read` |
+| `whats_landed` | what is on disk: per vendor, dataset, request, file, byte | `read` |
+| `list_plan_types` | the vocabulary a request can be written in | `read` |
+| `quote` | price a filed row's Job; writes nothing | `read` |
+| `submit_request` | file a plan or an intent, with an optional `Idempotency-Key` | `submit` |
+
+Three properties are the design, not an implementation detail:
+
+* **Every tool is an HTTP call to this same process's `/v1`**, over an
+  in-process ASGI transport — no port, no second listener, no store handle. A
+  tool therefore cannot become a second writer of pricing, the ceiling,
+  idempotency or the event trail, and cannot drift from what `curl` sees. The
+  gate that keeps egress in named files (`tests/test_store_and_egress.py`)
+  allows this one client and checks that it is built over the app object.
+* **The scopes are the enforcement.** The token in `DATA_DOWNLOAD_MCP_TOKEN`
+  must already be listed in `DATA_DOWNLOAD_API_TOKENS`, and a deployment that
+  gives it `read` only has a read-only surface, whatever the tools are willing
+  to call. Unset means `/mcp` is not mounted at all (404) rather than a surface
+  that answers `401` to everything and reads as broken tools.
+* **There is no tool that approves, runs, cancels or archives.** Approval is a
+  tailnet identity no header can produce, so a tool that could approve would
+  make `DATA_DOWNLOAD_APPROVERS` decorative. Filing costs nothing: a filed
+  request lands `draft` or `blocked` and waits for a human on the page.
+
+The transport's DNS-rebinding check is off (`transport_security()` in
+`mcp_surface.py`), because it refuses honest callers and stops no one here:
+there is no cookie to ride, every call carries a token, and the Host `tailscale
+serve` presents is whatever node name the caller used — including `testserver`
+under `pytest`. That decision and its argument are written down beside the code.
 
 ### The price, and the one check
 
