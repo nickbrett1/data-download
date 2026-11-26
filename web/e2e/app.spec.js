@@ -102,7 +102,7 @@ test.describe("the request book", () => {
       "window",
       "state",
       "quote",
-      "updated",
+      "last updated",
     ]);
 
     // The columns of a grid share one template, which is what makes the
@@ -548,6 +548,16 @@ test.describe("the request book", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
     await expect(page.locator(".tbl-head")).toBeHidden();
+
+    // A phone has no heading row, so the date under the quote says what it is
+    // in the cell itself -- generated content, because a label in the DOM would
+    // be read out twice on a desktop that has the heading right there.
+    const stamp = await page
+      .locator(".tbl-row")
+      .first()
+      .locator(".updated")
+      .evaluate((el) => getComputedStyle(el, "::before").content);
+    expect(stamp).toBe('"updated "');
 
     // Six columns on a phone is a scrollbar or a truncated id; the record wraps
     // instead, and stays a record. What it must also do is wrap the *same way*

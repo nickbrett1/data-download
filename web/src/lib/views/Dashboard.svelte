@@ -211,8 +211,10 @@
     // look identical under a filing date, which is what this column used to
     // be. The filing time is still there, in the tooltip, because "how long
     // has this been sitting here" is a real question too -- it is just the
-    // second one.
-    { label: "updated", align: "end" },
+    // second one. The heading says "last updated" rather than "updated": on a
+    // book of dates it is the one word that says *which* date is in the column,
+    // and a reader should not have to hover to find out.
+    { label: "last updated", align: "end" },
   ];
 </script>
 
@@ -538,6 +540,18 @@
     /* The subject is a line of its own; the other four pair up underneath it. */
     :global(.tbl-row:has(.req) > :first-child) {
       grid-column: 1 / -1;
+    }
+
+    /* A phone has no column headings, so the date under the quote has nothing
+       saying what it is. Generated content rather than a span, because a label
+       in the DOM would be read out on a desktop that already has the heading
+       above it -- and every assertion about a timestamp here reads text. */
+    :global(.tbl-row:has(.req) .updated)::before {
+      content: "updated ";
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
     }
   }
 </style>
