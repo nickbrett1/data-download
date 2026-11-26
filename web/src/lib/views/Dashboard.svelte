@@ -207,7 +207,11 @@
     // week?"). Narrow, and next to the subject rather than after the state: the
     // first two columns are what was asked for, the rest is what became of it.
     { label: "window", width: "minmax(9rem, 0.85fr)" },
-    { label: "state", width: "minmax(9rem, 0.9fr)" },
+    // Wide enough for the half-line under the badge now that a running row
+    // says which step it is on (`step 4 of 7 — waiting for the vendor`) rather
+    // than just repeating the badge. The cell still clips; the sentence is in
+    // the tooltip.
+    { label: "state", width: "minmax(12rem, 1.1fr)" },
     { label: "quote", align: "end", width: "minmax(5rem, 0.5fr)" },
     // When it last *moved*, not when it was filed. Filing is one moment in a
     // row's life; a request claimed ten minutes ago and one filed last week

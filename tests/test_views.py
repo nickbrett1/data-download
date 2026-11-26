@@ -1274,3 +1274,146 @@ def test_a_summary_that_throws_costs_the_sentence_not_the_page(client, db_path, 
     assert events[-1]["event"] == "explosive"
     assert events[-1]["summary"] == "explosive"
     assert any("no summary" in record.message for record in caplog.records)
+
+
+# -- what a running row is doing, not just that it is running -----------------
+
+
+def _running_row(db_path: Path, request_id: str = "req_live", **over):
+    """One running row with a live lease, so it is `working` and not `broken`."""
+    row = {
+        "id": request_id,
+        "state": "running",
+        "lease_until": iso(timedelta(minutes=5)),
+        "updated_at": iso(-timedelta(minutes=1)),
+        "created_at": iso(-timedelta(minutes=10)),
+        **over,
+    }
+    seed(db_path, [row])
+
+
+def test_a_running_row_says_which_step_it_is_on(client, db_path):
+    """`running` is one word for seven steps; the trail knows which one.
+
+    The runner records a `step` event as each step starts. Nothing read it for
+    the book, so a row pricing a window and a row polling the vendor said the
+    same thing: `Running`. The half-line under the badge is that mark, in the
+    same words the trail uses.
+    """
+    started = iso(-timedelta(minutes=1))
+    _running_row(db_path)
+    _add_event(db_path, "req_live", "claimed", {}, ts=iso(-timedelta(minutes=4)))
+    _add_event(
+        db_path,
+        "req_live",
+        "step",
+        {"index": 2, "kind": "submit", "total": 7},
+        ts=iso(-timedelta(minutes=3)),
+    )
+    _add_event(
+        db_path,
+        "req_live",
+        "step",
+        {"index": 3, "kind": "poll", "total": 7},
+        ts=started,
+    )
+
+    row = next(r for r in _book(client)["rows"] if r["id"] == "req_live")
+    progress = row["progress"]
+    assert progress["summary"] == "step 4 of 7 — waiting for the vendor"
+    # The trail's own sentence, for the tooltip: the cell clips, this does not.
+    assert progress["sentence"] == "step 4 of 7 — wait for the vendor to finish"
+    assert (progress["index"], progress["total"]) == (3, 7)
+    assert progress["kind"] == "poll"
+    assert progress["since"] == started
+
+
+def test_a_claimed_row_says_it_has_started_rather_than_naming_a_step(client, db_path):
+    """No step yet is not the first step. Borrowing its verb would be a claim
+    about a step the runner has not reached."""
+    _running_row(db_path)
+    _add_event(db_path, "req_live", "claimed", {}, ts=iso(-timedelta(seconds=20)))
+
+    progress = next(r for r in _book(client)["rows"] if r["id"] == "req_live")[
+        "progress"
+    ]
+    assert progress["summary"] == "picked up — starting"
+    assert "step" not in progress["summary"]
+
+
+def test_a_row_with_no_trail_carries_no_progress(client, db_path):
+    """Nothing is not the same as step one: the page draws the badge alone, as
+    it did before, rather than inventing a step."""
+    _running_row(db_path)
+    row = next(r for r in _book(client)["rows"] if r["id"] == "req_live")
+    assert row["progress"] is None
+
+
+def test_a_settled_row_does_not_still_look_like_it_is_verifying(client, db_path):
+    """A finished row's last mark is `verify`, and it is a fact about a run that
+    is over. Reading it as progress would put "verifying the bytes" under a
+    `Succeeded` badge."""
+    seed(
+        db_path,
+        [
+            {
+                "id": "req_done",
+                "state": "succeeded",
+                "created_at": iso(-timedelta(hours=2)),
+                "updated_at": iso(-timedelta(hours=1)),
+            }
+        ],
+    )
+    _add_event(
+        db_path,
+        "req_done",
+        "step",
+        {"index": 6, "kind": "verify", "total": 7},
+        ts=iso(-timedelta(hours=1)),
+    )
+
+    row = next(r for r in _book(client)["rows"] if r["id"] == "req_done")
+    assert row["progress"] is None
+
+
+def test_a_step_kind_this_file_has_not_learned_is_named_not_dropped(client, db_path):
+    """A step the runner will run is still a step, even if the words for it are
+    not here yet: the half-line carries the kind rather than going blank."""
+    _running_row(db_path)
+    _add_event(
+        db_path,
+        "req_live",
+        "step",
+        {"index": 0, "kind": "recompress", "total": 2},
+        ts=iso(-timedelta(minutes=2)),
+    )
+
+    progress = next(r for r in _book(client)["rows"] if r["id"] == "req_live")[
+        "progress"
+    ]
+    assert progress["summary"] == "step 1 of 2 — recompress"
+    assert progress["sentence"] == "step 1 of 2 — recompress"
+
+
+def test_progress_is_read_for_the_running_rows_only(client, db_path):
+    """The book is mostly settled rows, and a settled row has a trail too. The
+    store is asked for the ids that are moving and no others -- otherwise every
+    page load reads an append-only table's history to say nothing."""
+    _running_row(db_path)
+    seed(
+        db_path,
+        [
+            {
+                "id": "req_settled",
+                "state": "failed",
+                "errors_json": json.dumps([{"code": "vendor_error"}]),
+            }
+        ],
+    )
+    _add_event(db_path, "req_settled", "step", {"index": 1, "kind": "poll", "total": 7})
+
+    rows = {r["id"]: r for r in _book(client)["rows"]}
+    assert rows["req_settled"]["progress"] is None
+    # The settled row still says why it failed -- progress is an addition, not
+    # a replacement for the half-line a settled row already had.
+    assert rows["req_settled"]["failure"]["code"] == "vendor_error"

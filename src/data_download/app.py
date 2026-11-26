@@ -887,6 +887,75 @@ STEP_VERBS = {
     "verify": "check the vendor's manifest against the bytes",
 }
 
+# The same seven steps, short enough for the book's half-line.
+#
+# The trail has a whole line for a step and the book has one cell under a badge,
+# so the same fact gets two lengths of the same sentence: "step 4 of 7 -- wait
+# for the vendor to finish" in the trail, "step 4 of 7 -- waiting for the
+# vendor" on the row. Both come from this file so the two spellings cannot drift
+# into two vocabularies; an unknown kind falls through to the trail's own word
+# rather than being dropped.
+STEP_LABELS = {
+    "resolve": "asking the vendor what it has",
+    "quote": "pricing it",
+    "submit": "submitting the batch job",
+    "poll": "waiting for the vendor",
+    "download": "downloading",
+    "convert": "converting",
+    "verify": "verifying the bytes",
+}
+
+
+def _progress_of(
+    row: dict[str, Any], mark: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Which step a running row is on, for the half-line under its badge.
+
+    `running` is one word for seven steps and for the minutes-long gap between
+    them, so the book said the same thing about a row pricing a window and a row
+    polling the vendor. The runner already records a `step` event as each step
+    starts (`step_started`), and a `claimed` one when a worker takes the row:
+    this is that mark, read for the one row that is moving.
+
+    Only a running row gets progress. A settled row's last mark is `verify` --
+    true, and it reads as if the row were still verifying; the state is the
+    answer for a row that is over. A row claimed but not yet at a step says it
+    has started rather than borrowing the first step's verb, which would be
+    claiming a step the runner has not reached.
+
+    Returns None when there is nothing to add, so the page draws the badge
+    alone, exactly as it did before.
+    """
+    if row.get("state") != "running" or not mark:
+        return None
+    raw = mark.get("detail_json")
+    try:
+        detail = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, TypeError):
+        detail = {}
+    if not isinstance(detail, dict):
+        detail = {}
+    if mark.get("event") == "claimed":
+        return {"summary": "picked up — starting", "since": mark.get("ts")}
+    index = detail.get("index")
+    total = detail.get("total")
+    if not isinstance(index, int) or not isinstance(total, int):
+        return None
+    kind = str(detail.get("kind") or "")
+    where = f"step {index + 1} of {total}"
+    return {
+        "summary": f"{where} — {STEP_LABELS.get(kind, kind or 'running')}",
+        # The trail's own sentence, so the tooltip can say the whole thing the
+        # cell clips. Not a second description: the same function that words
+        # the trail words this.
+        "sentence": f"{where} — {STEP_VERBS.get(kind, kind or 'running')}",
+        "since": mark.get("ts"),
+        "index": index,
+        "total": total,
+        "kind": kind or None,
+    }
+
+
 def _prospect(
     row: dict[str, Any],
     *,
@@ -2320,6 +2389,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         descriptions = await _catalogue_for(store, pairs, settings)
         rows = [_book_row(row, registry, descriptions) for row in raw]
+        # The book's word for a live row is `running`, and it is the same word
+        # for every step of the Job. The trail knows which one it is on; this
+        # reads it for the rows that are moving and for nothing else, so a
+        # settled book costs no query.
+        marks = await store.latest_progress(
+            [row["id"] for row in raw if row.get("state") == "running"]
+        )
+        for row in rows:
+            row["progress"] = _progress_of(row, marks.get(row["id"]))
         keys = (*FACET_ORDER, "cancelled", "archived", "other")
         # `total` is what the book is *showing*, and the list it shows is the one
         # minus the requests nobody needs to look at. Claiming 5 while listing 4

@@ -286,6 +286,76 @@ test.describe("the request book", () => {
     await expect(running.locator(".state .detail")).toHaveClass(/\bbad\b/);
   });
 
+  test("a running row says which step it is on, and since when", async ({
+    page,
+  }) => {
+    // One live row, and the mark its own trail last made. The words are the
+    // server's (`progress.summary` / `progress.sentence`) -- this page never
+    // spells a step for itself, which is why the fixture carries both.
+    const live = {
+      ...dashboard.rows[0],
+      state: "running",
+      facet: "working",
+      facet_label: "Running",
+      estimate_usd: 0.88,
+      progress: {
+        summary: "step 4 of 7 — waiting for the vendor",
+        sentence: "step 4 of 7 — wait for the vendor to finish",
+        since: "2026-11-14T23:52:00Z",
+        index: 3,
+        total: 7,
+        kind: "poll",
+      },
+    };
+    const facets = Object.fromEntries(
+      dashboard.facet_order.map((k) => [k, []]),
+    );
+    facets.working = [live];
+    await mock(page, {
+      requests: { ...dashboard, rows: [live], total: 1, facets },
+    });
+    await page.goto("/");
+
+    const row = page.locator(".tbl-row").first();
+    await expect(row.locator(".pill")).toHaveText("Running");
+    // The badge is one word for seven steps; this is the step.
+    await expect(row.locator(".state .detail")).toHaveText(
+      "step 4 of 7 — waiting for the vendor",
+    );
+    // Live, not wrong: the same accent an approved-but-unclaimed row uses.
+    await expect(row.locator(".state .detail")).toHaveClass(/\binfo\b/);
+    // The cell clips; the tooltip keeps the trail's whole sentence and says
+    // when this step started.
+    await expect(row.locator(".state .detail")).toHaveAttribute(
+      "title",
+      "step 4 of 7 — wait for the vendor to finish · started 14 Nov 23:52",
+    );
+  });
+
+  test("a running row with no step yet shows the badge and no invented step", async ({
+    page,
+  }) => {
+    const live = {
+      ...dashboard.rows[0],
+      state: "running",
+      facet: "working",
+      facet_label: "Running",
+      progress: null,
+    };
+    const facets = Object.fromEntries(
+      dashboard.facet_order.map((k) => [k, []]),
+    );
+    facets.working = [live];
+    await mock(page, {
+      requests: { ...dashboard, rows: [live], total: 1, facets },
+    });
+    await page.goto("/");
+
+    const row = page.locator(".tbl-row").first();
+    await expect(row.locator(".pill")).toHaveText("Running");
+    await expect(row.locator(".state .detail")).toHaveCount(0);
+  });
+
   test("the facet is one choice from N, drawn as a histogram", async ({
     page,
   }) => {

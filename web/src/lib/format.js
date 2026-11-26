@@ -262,6 +262,25 @@ export function stateDetail(row) {
     };
   }
 
+  // A running row is one word for seven steps, and the same word covers
+  // "asking the vendor what it has" and "verifying the bytes". The server sends
+  // the mark the run's own trail last made (`progress`), so the half-line says
+  // which step it is on and since when. The words are the server's, not this
+  // file's: they are the same words the trail uses, and a second spelling here
+  // would be two vocabularies for one pipeline.
+  if (row.state === "running" && row.progress?.summary) {
+    const since = row.progress.since
+      ? `started ${when(row.progress.since)}`
+      : "";
+    return {
+      text: row.progress.summary,
+      tone: "info",
+      // The cell clips and the tooltip does not: the sentence the trail uses is
+      // the whole of it, and this is the one place a reader can read it.
+      title: [row.progress.sentence, since].filter(Boolean).join(" · "),
+    };
+  }
+
   if (row.facet === "todo") {
     // An approved row nobody picked up is an anomaly, not a restatement of
     // `approved`, so it is said. A draft says what approval would authorise,

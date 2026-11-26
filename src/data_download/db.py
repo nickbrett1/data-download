@@ -12,7 +12,7 @@ import json
 import logging
 import sqlite3
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar
@@ -791,6 +791,45 @@ class Store:
             (limit,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+    async def latest_progress(
+        self, request_ids: Iterable[str]
+    ) -> dict[str, dict[str, Any]]:
+        """The newest `claimed`/`step` mark for each of these requests.
+
+        A running row is one word on the book, and the same word covers seven
+        different steps -- "asking the vendor what it has" and "verifying the
+        bytes" are both `running`. The trail has known which step it is on since
+        `step_started` started writing one event per step; nothing read it for
+        the list, so a live row said only that it was live.
+
+        Read from `events` rather than added to `v_requests` because the run
+        history lives in exactly one place and a view column would be a second
+        copy of it that could disagree. Only the ids asked for are read, so a
+        settled book costs no query at all; ids are chunked because SQLite's
+        bound-variable limit is not the caller's problem.
+        """
+        wanted = list(request_ids)
+        if not wanted:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start : start + 500]
+            marks = ",".join("?" * len(chunk))
+            async with self.conn.execute(
+                "SELECT request_id, ts, event, detail_json FROM ("
+                "  SELECT request_id, ts, event, detail_json,"
+                "         ROW_NUMBER() OVER ("
+                "           PARTITION BY request_id ORDER BY id DESC) AS n"
+                "    FROM events"
+                f"   WHERE request_id IN ({marks})"
+                "     AND event IN ('claimed', 'step')"
+                ") WHERE n = 1",
+                chunk,
+            ) as cur:
+                for row in await cur.fetchall():
+                    out[row["request_id"]] = dict(row)
+        return out
 
     async def overview_one(self, request_id: str) -> dict[str, Any] | None:
         """One row of the same view the list is built from.
